@@ -1,35 +1,56 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
-// Where each package comes from is checked by lockfile-lint, in `npm run lint:lockfile`.
+// Where each package comes from is checked by scripts/check-lockfile.ts, in
+// `npm run lint:lockfile`.
+
+// Every runtime dependency sees all the secrets, and a lookalike name is a known
+// attack, so adding one should be a visible decision in review.
+const RUNTIME = [
+  "@supabase/postgrest-js",
+  "@vercel/functions",
+  "discord-api-types",
+];
 
 const EXACT_VERSION = /^[0-9]+\.[0-9]+\.[0-9]+$/;
 
-function versionsIn(file: object, section: string): string[] {
+function readPackageFile(): object {
+  const file: unknown = JSON.parse(
+    readFileSync(new URL("../package.json", import.meta.url), "utf8"),
+  );
+  if (typeof file !== "object" || file === null) {
+    throw new Error("package.json does not hold an object");
+  }
+  return file;
+}
+
+function entriesIn(file: object, section: string): [string, string][] {
   const entries: unknown = Reflect.get(file, section);
   if (typeof entries !== "object" || entries === null) {
     throw new Error(`package.json has no ${section} object`);
   }
-  return Object.values(entries).map((version: unknown) => {
+  return Object.entries(entries).map(([name, version]: [string, unknown]) => {
     if (typeof version !== "string") {
       throw new Error(`package.json has a ${section} version that is not text`);
     }
-    return version;
+    return [name, version];
   });
 }
 
 describe("direct dependencies", () => {
+  const file = readPackageFile();
+
+  it("has only the allowed runtime packages", () => {
+    const names = entriesIn(file, "dependencies").map(([name]) => name);
+
+    expect(names.sort()).toEqual(RUNTIME);
+  });
+
   it("pins every package to an exact version", () => {
-    const file: unknown = JSON.parse(
-      readFileSync(new URL("../package.json", import.meta.url), "utf8"),
-    );
-    if (typeof file !== "object" || file === null) {
-      throw new Error("package.json does not hold an object");
-    }
     const versions = [
-      ...versionsIn(file, "dependencies"),
-      ...versionsIn(file, "devDependencies"),
-    ];
+      ...entriesIn(file, "dependencies"),
+      ...entriesIn(file, "devDependencies"),
+    ].map(([, version]) => version);
 
     expect(versions.filter((version) => !EXACT_VERSION.test(version))).toEqual(
       [],
