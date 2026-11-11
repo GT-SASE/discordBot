@@ -118,35 +118,32 @@ export function plainTextValue(text: PlainText): string {
 
 const WHITESPACE = /[\s\u0085]+/gu;
 
-// Cc, Cf, lone surrogates and private use, plus code points with no visible form
-// such as the Hangul fillers and the blank Braille pattern. ZWJ and VS16 are
-// handled by the alternatives before them, and survive only inside emoji.
-const INVISIBLE = new RegExp(
-  [
-    String.raw`(?<!\p{Extended_Pictographic}(?:\u{FE0F}|[\u{1F3FB}-\u{1F3FF}])?)\u{200D}`,
-    String.raw`\u{200D}(?!\p{Extended_Pictographic})`,
-    String.raw`(?<!\p{Emoji})\u{FE0F}`,
-    String.raw`[[\p{Cc}\p{Cf}\p{Cs}\p{Co}\p{Cn}\p{Default_Ignorable_Code_Point}\u{2800}\u{1D159}\u{FFFC}]--[\u{200D}]--[\u{FE0F}]]`,
-  ].join("|"),
-  "gv",
-);
+// Control, format (zero-width, bidi, tags), lone surrogate, private use and
+// unassigned characters, and the blank letters used for invisible names. The
+// zero-width joiner is a format character too, but emoji need it.
+const INVISIBLE =
+  /[[\p{Cc}\p{Cf}\p{Cs}\p{Co}\p{Cn}\u{115F}\u{1160}\u{3164}\u{FFA0}\u{2800}]--[\u{200D}]]/gv;
+
+// The joiner and VS16 are kept only inside an emoji sequence.
+const STRAY_JOINER =
+  /(?<!\p{Extended_Pictographic}(?:\u{FE0F}|[\u{1F3FB}-\u{1F3FF}])?)\u{200D}|\u{200D}(?!\p{Extended_Pictographic})|(?<!\p{Emoji})\u{FE0F}/gu;
 
 // Stacks of combining marks draw over other lines. Eight is more than real text uses.
 const EXCESS_MARKS = /(\p{M}{8})\p{M}+/gu;
 
 const VISIBLE = /[\p{L}\p{N}\p{P}\p{S}]/u;
 
-/** NFC, one line, and nothing invisible. Empty if nothing visible remains. */
+/** One line with nothing invisible. Empty if nothing visible remains. */
 function clean(raw: string): string {
-  const stripped = raw
-    .normalize("NFC")
+  const text = raw
     .replace(WHITESPACE, " ")
     .replace(INVISIBLE, "")
-    .normalize("NFC")
+    .replace(STRAY_JOINER, "")
+    .normalize("NFC") // Unicode normalization: one form for each accented letter.
     .replace(EXCESS_MARKS, "$1")
     .replace(/ {2,}/g, " ")
     .trim();
-  return VISIBLE.test(stripped) ? stripped : "";
+  return VISIBLE.test(text) ? text : "";
 }
 
 // Every character with a meaning in Discord's markdown or mention syntax. Masked
