@@ -52,7 +52,7 @@ export async function insertGuild(
   };
   await queryAs(
     db,
-    "service_role",
+    "bot_app",
     `SELECT public.apply_role_bindings($1, 0, $2, $3, $4, $5, $6, $7, $8)`,
     [
       fixture.guildId,
@@ -67,7 +67,7 @@ export async function insertGuild(
   );
   await queryAs(
     db,
-    "service_role",
+    "bot_app",
     `SELECT public.apply_config_change($1, 1, $2, NULL, ARRAY[$3]::text[])`,
     [fixture.guildId, fakeId(), fixture.channelId],
   );
@@ -80,7 +80,7 @@ export async function insertEvent(
 ): Promise<string> {
   const rows = await queryAs<{ id: string }>(
     db,
-    "service_role",
+    "bot_app",
     `INSERT INTO public.events (guild_id, channel_id, name, event_date, created_by)
      VALUES ($1, $2, 'General meeting', '2030-01-15', $3)
      RETURNING id`,
@@ -97,7 +97,7 @@ export async function insertTask(
 ): Promise<string> {
   const rows = await queryAs<{ id: string }>(
     db,
-    "service_role",
+    "bot_app",
     `INSERT INTO public.tasks (event_id, guild_id, assignee_id, description, due_date, created_by)
      VALUES ($1, $2, $3, 'Book the room', '${FIXTURE_DUE_DATE}', $4)
      RETURNING id`,

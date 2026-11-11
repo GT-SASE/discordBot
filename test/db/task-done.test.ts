@@ -254,7 +254,7 @@ describe("marking tasks done and reading them, on the real schema", () => {
       const assignee = testSnowflake();
       const rows = await queryAs<{ id: string }>(
         world.backend.connection,
-        "service_role",
+        "bot_app",
         `INSERT INTO public.tasks (event_id, guild_id, assignee_id, description, due_date, created_by)
          VALUES ($1, $2, $3, 'Foreign', '2040-01-01', $3) RETURNING id`,
         [world.foreignEventId, world.foreign.guildId, assignee],
@@ -400,7 +400,7 @@ describe("marking tasks done and reading them, on the real schema", () => {
       await newTask(removed.eventId, me, "On a deleted event");
       await queryAs(
         world.backend.connection,
-        "service_role",
+        "bot_app",
         `INSERT INTO public.tasks (event_id, guild_id, assignee_id, description, due_date, created_by)
          VALUES ($1, $2, $3, 'In another guild', '2040-01-01', $3)`,
         [world.foreignEventId, world.foreign.guildId, me],
@@ -684,7 +684,7 @@ describe("marking tasks done and reading them, on the real schema", () => {
       await newTask(closed.eventId, me, "Scopetest closed");
       await queryAs(
         world.backend.connection,
-        "service_role",
+        "bot_app",
         `INSERT INTO public.tasks (event_id, guild_id, assignee_id, description, due_date, created_by)
          VALUES ($1, $2, $3, 'Scopetest foreign', '2040-01-01', $3)`,
         [world.foreignEventId, world.foreign.guildId, me],

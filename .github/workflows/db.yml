@@ -105,7 +105,6 @@ jobs:
           docker run -d --name postgrest --network host \
             -e PGRST_DB_URI=postgres://authenticator@localhost:5432/postgres \
             -e PGRST_DB_SCHEMAS=public \
-            -e PGRST_DB_ANON_ROLE=anon \
             -e PGRST_DB_MAX_ROWS=1000 \
             -e PGRST_JWT_SECRET \
             -e PGRST_ADMIN_SERVER_PORT=3001 \

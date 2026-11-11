@@ -269,7 +269,7 @@ describe("what an officer is told after a task change", () => {
       const version = async () => {
         const rows = await queryAs<{ version: number }>(
           world.backend.connection,
-          "service_role",
+          "bot_app",
           `SELECT version FROM public.guild_config WHERE guild_id = $1`,
           [GUILD_ID],
         );
@@ -277,7 +277,7 @@ describe("what an officer is told after a task change", () => {
       };
       await queryAs(
         world.backend.connection,
-        "service_role",
+        "bot_app",
         `SELECT public.apply_config_change($1, $2, $3, NULL, ARRAY[$4]::text[])`,
         [GUILD_ID, await version(), testSnowflake(), removedForum],
       );
@@ -294,7 +294,7 @@ describe("what an officer is told after a task change", () => {
       );
       await queryAs(
         world.backend.connection,
-        "service_role",
+        "bot_app",
         `SELECT public.apply_config_change($1, $2, $3, NULL, NULL, ARRAY[$4]::text[])`,
         [GUILD_ID, await version(), testSnowflake(), removedForum],
       );
@@ -779,7 +779,7 @@ describe("what an officer is told after a task change", () => {
     async function namedEvent(name: string, date: string) {
       const rows = await queryAs<{ id: string }>(
         world.backend.connection,
-        "service_role",
+        "bot_app",
         `INSERT INTO public.events (guild_id, channel_id, name, event_date, created_by)
          VALUES ($1, $2, $3, $4, $5) RETURNING id`,
         [GUILD_ID, world.fixture.channelId, name, date, testSnowflake()],

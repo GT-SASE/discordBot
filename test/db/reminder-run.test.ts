@@ -195,7 +195,7 @@ async function eventWithThread(
   });
   const rows = await queryAs<{ id: string }>(
     database,
-    "service_role",
+    "bot_app",
     `INSERT INTO public.events
        (guild_id, channel_id, name, event_date, created_by, thread_id, thread_status)
      VALUES ($1, $2, $3, '2030-01-15', $4, $5, 'active')
@@ -217,7 +217,7 @@ async function task(
 ): Promise<string> {
   const rows = await queryAs<{ id: string }>(
     database,
-    "service_role",
+    "bot_app",
     `INSERT INTO public.tasks (event_id, guild_id, assignee_id, description, due_date, created_by)
      VALUES ($1, $2, $3, $4, $5, $6)
      RETURNING id`,
@@ -583,7 +583,7 @@ describe("reminders turned off during a run", () => {
         off = true;
         await queryAs(
           database,
-          "service_role",
+          "bot_app",
           `SELECT public.apply_config_change($1, 2, $1, false)`,
           [guild.guildId],
         );
@@ -606,7 +606,7 @@ describe("reminders turned off during a run", () => {
     await task(guild, eventId, dateOffset(3));
     await queryAs(
       database,
-      "service_role",
+      "bot_app",
       `SELECT public.apply_config_change($1, 2, $1, false)`,
       [guild.guildId],
     );
@@ -1511,7 +1511,7 @@ describe("a rerun soon after a failed run", () => {
     const taskId = await task(guild, eventId, dateOffset(0));
     await queryAs(
       database,
-      "service_role",
+      "bot_app",
       `SELECT public.claim_reminder($1, 'one_day', $2)`,
       [taskId, dateOffset(0)],
     );
@@ -1611,7 +1611,7 @@ describe("what counts as a send that may have landed", () => {
     const { taskId } = await overdueFor(guild, person);
     await queryAs(
       database,
-      "service_role",
+      "bot_app",
       `SELECT public.claim_reminder($1, 'overdue', $2)`,
       [taskId, dateOffset(-5)],
     );
@@ -2235,7 +2235,7 @@ describe("a task changed after the run read it", () => {
     const { guild, taskId } = await twoEvents(before);
     await queryAs(
       database,
-      "service_role",
+      "bot_app",
       `SELECT public.claim_reminder($1, 'three_days', $2)`,
       [taskId, dateOffset(3)],
     );
@@ -2356,7 +2356,7 @@ describe("guilds that fail, and guilds that are busy", () => {
     await task(guild, fresh.eventId, dateOffset(3));
     await queryAs(
       database,
-      "service_role",
+      "bot_app",
       `SELECT public.claim_reminder($1, 'overdue', $2)`,
       [staleTask, dateOffset(-3)],
     );
@@ -2429,7 +2429,7 @@ describe("repeated attempts", () => {
     const taskId = await task(guild, eventId, dateOffset(3), "Book", person);
     await queryAs(
       database,
-      "service_role",
+      "bot_app",
       `SELECT public.claim_reminder($1, 'three_days', $2)`,
       [taskId, dateOffset(3)],
     );
@@ -2455,7 +2455,7 @@ describe("repeated attempts", () => {
     const taskId = await task(guild, eventId, dateOffset(3), "Book", person);
     await queryAs(
       database,
-      "service_role",
+      "bot_app",
       `SELECT public.claim_reminder($1, 'three_days', $2)`,
       [taskId, dateOffset(3)],
     );
@@ -2471,7 +2471,7 @@ describe("stale claims on tasks the plan left out", () => {
   const staleClaimOn = async (taskId: string, dueDate: string) => {
     await queryAs(
       database,
-      "service_role",
+      "bot_app",
       `SELECT public.claim_reminder($1, 'three_days', $2)`,
       [taskId, dueDate],
     );
@@ -2693,7 +2693,7 @@ describe("planning per guild", () => {
     const taskId = await task(guild, eventId, todayUtc());
     await queryAs(
       database,
-      "service_role",
+      "bot_app",
       `SELECT public.claim_reminder($1, 'one_day', $2)`,
       [taskId, todayUtc()],
     );

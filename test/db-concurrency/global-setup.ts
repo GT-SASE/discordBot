@@ -1,11 +1,11 @@
 import { randomBytes } from "node:crypto";
 import pg from "pg";
 import type { TestProject } from "vitest/node";
-import { PLATFORM_BOOTSTRAP, migrationScripts } from "../db/harness.ts";
+import { SERVER_SETUP, migrateAsOwner, pgConnection } from "../db/harness.ts";
 
 /**
  * Runs once before every concurrency test file. Roles belong to the whole cluster, and
- * the bootstrap and the backup role's migration write them, so two files doing that at
+ * the server setup and the baseline migration write them, so two files doing that at
  * once fail with "tuple concurrently updated". This does it one time, in a template
  * database with every migration applied. Each file then copies the template into a
  * database of its own, which writes nothing cluster-wide, so the files can run in
@@ -85,10 +85,8 @@ export default async function setup(
     // The template must have no open connection when a file copies it, so this one
     // closes before any file starts.
     await withClient(urlForDatabase(adminUrl, template), async (client) => {
-      await client.query(PLATFORM_BOOTSTRAP);
-      for (const script of migrationScripts()) {
-        await client.query(script);
-      }
+      await client.query(SERVER_SETUP);
+      await migrateAsOwner(pgConnection(client));
     });
   } catch (error) {
     console.error(

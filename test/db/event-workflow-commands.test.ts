@@ -49,13 +49,13 @@ async function bindRoles(
 ): Promise<void> {
   const rows = await queryAs<{ version: number }>(
     world.pg,
-    "service_role",
+    "bot_app",
     `SELECT version FROM public.guild_config WHERE guild_id = $1`,
     [GUILD_ID],
   );
   await queryAs(
     world.pg,
-    "service_role",
+    "bot_app",
     `SELECT public.apply_role_bindings($1, $2, $3, $4, $5, $6, NULL, $7, $8)`,
     [
       GUILD_ID,
@@ -366,15 +366,13 @@ describe("/event assign and unassign", () => {
     );
   });
 
-  it("refuses Food pickup before the budget is approved", async () => {
+  it("puts someone on Food pickup before the budget is approved", async () => {
     const event = await seed();
+    const person = testSnowflake();
 
-    await assign(event, "food_pickup", testSnowflake());
+    await assign(event, "food_pickup", person);
 
-    expect(world.discord.lastReply()).toContain(
-      "Food pickup can only be set up once the budget is approved.",
-    );
-    expect(await owners(event.id, "food_pickup")).toEqual([]);
+    expect(await owners(event.id, "food_pickup")).toEqual([person]);
   });
 
   it("refuses a closed event", async () => {
@@ -431,15 +429,12 @@ describe("/event pickup", () => {
   const pickup = (event: Seeded, time: string, who = officer()) =>
     world.send(command("pickup", { event: event.id, time }, {}, who));
 
-  it("refuses before the budget is approved", async () => {
+  it("sets the time before the budget is approved", async () => {
     const event = await seed();
 
     await pickup(event, "5:30 PM");
 
-    expect(world.discord.lastReply()).toContain(
-      "Food pickup can only be set up once the budget is approved.",
-    );
-    expect(await pickupTime(event.id)).toBeNull();
+    expect(await pickupTime(event.id)).toBe("17:30");
   });
 
   it("sets the time once approved, and finishes the step with people on it", async () => {

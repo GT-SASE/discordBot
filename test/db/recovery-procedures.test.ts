@@ -91,7 +91,7 @@ describe("undoing a change", () => {
   function closeEvent(): Promise<unknown> {
     return queryAs(
       db,
-      "service_role",
+      "bot_app",
       `UPDATE public.events SET status = 'closed' WHERE id = $1`,
       [eventId],
     );
@@ -100,25 +100,23 @@ describe("undoing a change", () => {
   function markDone(id: string): Promise<unknown> {
     return queryAs(
       db,
-      "service_role",
+      "bot_app",
       `UPDATE public.tasks SET status = 'done', completed_at = now() WHERE id = $1`,
       [id],
     );
   }
 
   function softDeleteEvent(id: string): Promise<unknown> {
-    return queryAs(
-      db,
-      "service_role",
-      `SELECT public.soft_delete_event($1, $2)`,
-      [id, guild.guildId],
-    );
+    return queryAs(db, "bot_app", `SELECT public.soft_delete_event($1, $2)`, [
+      id,
+      guild.guildId,
+    ]);
   }
 
   function linkPost(id: string, threadId: string): Promise<unknown> {
     return queryAs(
       db,
-      "service_role",
+      "bot_app",
       `UPDATE public.events SET thread_id = $1, thread_status = 'active', overview_message_id = $2
        WHERE id = $3`,
       [threadId, fakeId(), id],
@@ -161,7 +159,7 @@ describe("undoing a change", () => {
     const deletedEarlier = await insertTask(db, guild, eventId);
     await queryAs(
       db,
-      "service_role",
+      "bot_app",
       `UPDATE public.tasks SET deleted_at = now() - interval '1 minute' WHERE id = $1`,
       [deletedEarlier],
     );
@@ -213,7 +211,7 @@ describe("undoing a change", () => {
   it("undeletes one task", async () => {
     await queryAs(
       db,
-      "service_role",
+      "bot_app",
       `UPDATE public.tasks SET deleted_at = now() WHERE id = $1`,
       [taskId],
     );
@@ -225,7 +223,7 @@ describe("undoing a change", () => {
     const before = await taskRow(taskId);
     await queryAs(
       db,
-      "service_role",
+      "bot_app",
       `UPDATE public.tasks SET assignee_id = $1, description = 'Overwritten' WHERE id = $2`,
       [fakeId(), taskId],
     );

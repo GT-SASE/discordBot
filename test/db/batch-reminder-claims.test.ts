@@ -149,7 +149,7 @@ describe("claim_reminders", () => {
     const ids = Array.from({ length: tasks }, () => taskIds[0]);
     const error = await queryAs(
       backend.connection,
-      "service_role",
+      "bot_app",
       `SELECT public.claim_reminders($1::uuid[],
          (SELECT array_agg('due_day'::public.reminder_kind) FROM generate_series(1, $2)),
          (SELECT array_agg($3::date) FROM generate_series(1, $2)),
@@ -168,7 +168,7 @@ describe("claim_reminders", () => {
   it("answers an empty list with an empty array", async () => {
     const rows = await queryAs<{ value: unknown }>(
       backend.connection,
-      "service_role",
+      "bot_app",
       `SELECT public.claim_reminders('{}', '{}', '{}', '{}', '{}') AS value`,
     );
     expect(rows[0]?.value).toEqual([]);

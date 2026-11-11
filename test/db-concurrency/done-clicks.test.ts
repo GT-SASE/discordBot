@@ -49,7 +49,7 @@ describe("a double click on Done", () => {
     const eventId = await insertEvent(db.connection, guild);
     await queryAs(
       db.connection,
-      "service_role",
+      "bot_app",
       "SELECT public.complete_event_step($1, $2, 'budget_sheet', $3)",
       [eventId, guild.guildId, fakeId()],
     );

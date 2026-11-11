@@ -10,22 +10,20 @@ describe("findDuplicatePrefixes", () => {
   it("flags a version used twice, once", () => {
     expect(
       findDuplicatePrefixes([
-        "20261104000007_a.sql",
-        "20261104000007_b.sql",
-        "20261104000007_c.sql",
-        "20261104000008_d.sql",
+        "0007_a.sql",
+        "0007_b.sql",
+        "0007_c.sql",
+        "0008_d.sql",
       ]),
-    ).toEqual(["20261104000007"]);
+    ).toEqual(["0007"]);
   });
 
   it("allows different versions", () => {
-    expect(
-      findDuplicatePrefixes(["20261104000007_a.sql", "20261104000008_a.sql"]),
-    ).toEqual([]);
+    expect(findDuplicatePrefixes(["0007_a.sql", "0008_a.sql"])).toEqual([]);
   });
 
   it("finds none in this repo's migrations", () => {
-    const dir = join(import.meta.dirname, "..", "supabase", "migrations");
+    const dir = join(import.meta.dirname, "..", "db", "migrations");
     expect(findDuplicatePrefixes(readdirSync(dir))).toEqual([]);
   });
 });
@@ -110,7 +108,7 @@ describe("findDynamicExecutes", () => {
   });
 
   it.each([
-    ["a grant", "GRANT EXECUTE ON FUNCTION public.f() TO service_role;"],
+    ["a grant", "GRANT EXECUTE ON FUNCTION public.f() TO bot_app;"],
     ["a revoke", "REVOKE EXECUTE ON FUNCTION public.f() FROM PUBLIC;"],
     [
       "a default privilege",
@@ -232,7 +230,7 @@ describe("findDynamicExecutes", () => {
   });
 
   it("finds none in this repo's migrations", () => {
-    const dir = join(import.meta.dirname, "..", "supabase", "migrations");
+    const dir = join(import.meta.dirname, "..", "db", "migrations");
     const found = readdirSync(dir).flatMap((file) =>
       findDynamicExecutes(readFileSync(join(dir, file), "utf8")),
     );

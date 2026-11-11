@@ -121,13 +121,13 @@ export function eventWorld(): World {
     shim = postgrestShim(pg);
     await queryAs(
       pg,
-      "service_role",
+      "bot_app",
       `SELECT public.apply_role_bindings($1, 0, $2, $3, $4, NULL, NULL, NULL, NULL)`,
       [GUILD_ID, fakeId(), OFFICER_ROLE, ADMIN_ROLE],
     );
     await queryAs(
       pg,
-      "service_role",
+      "bot_app",
       `SELECT public.apply_role_bindings($1, 0, $2, $3, $4, NULL, NULL, NULL, NULL)`,
       [OTHER_GUILD, fakeId(), fakeId(), fakeId()],
     );
@@ -232,7 +232,7 @@ export function eventWorld(): World {
     ) {
       const rows = await queryAs<{ id: string }>(
         pg,
-        "service_role",
+        "bot_app",
         `INSERT INTO public.tasks
            (event_id, guild_id, assignee_id, description, due_date, created_by)
          VALUES ($1, $2, $3, $4, '2099-01-10', $5) RETURNING id`,

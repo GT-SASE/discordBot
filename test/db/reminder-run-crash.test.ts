@@ -114,7 +114,7 @@ beforeEach(async () => {
   const dueDate = new Date(Date.now() + 86_400_000).toISOString().slice(0, 10);
   await queryAs(
     database,
-    "service_role",
+    "bot_app",
     `INSERT INTO public.tasks (event_id, guild_id, assignee_id, description, due_date, created_by)
      VALUES ($1, $2, $3, 'Book the room', $4, $5)`,
     [eventId, guild.guildId, fakeId(), dueDate, fakeId()],

@@ -25,12 +25,7 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
-const MIGRATIONS_DIR = join(
-  import.meta.dirname,
-  "..",
-  "supabase",
-  "migrations",
-);
+const MIGRATIONS_DIR = join(import.meta.dirname, "..", "db", "migrations");
 
 // Postgres takes any non-ASCII character as part of a name or a dollar tag, including
 // a no-break space or an emoji.
@@ -46,9 +41,9 @@ interface Token {
 }
 
 /**
- * Each version number used by more than one migration. Supabase records a migration by
- * that number, so a second file with the same one can be skipped without any error, and
- * the order of the two is left to their names.
+ * Each version number used by more than one migration. scripts/migrate.ts records a
+ * migration by that number, so a second file with the same one would be refused there,
+ * after the first had run. This finds it before anything runs.
  */
 export function findDuplicatePrefixes(files: readonly string[]): string[] {
   const seen = new Set<string>();

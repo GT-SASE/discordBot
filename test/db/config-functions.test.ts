@@ -2,6 +2,7 @@ import type { PGlite } from "@electric-sql/pglite";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   INSUFFICIENT_PRIVILEGE,
+  OTHER_ROLE,
   createMigratedDb,
   errorCodeOf,
   fakeId,
@@ -48,7 +49,7 @@ describe("config functions", () => {
   ): Promise<number> {
     const rows = await queryAs<{ version: number }>(
       db,
-      "service_role",
+      "bot_app",
       `SELECT public.apply_role_bindings($1, $2, $3, $4, $5, $6, $7, $8, $9) AS version`,
       [
         guildId,
@@ -80,7 +81,7 @@ describe("config functions", () => {
   ): Promise<number> {
     const rows = await queryAs<{ version: number }>(
       db,
-      "service_role",
+      "bot_app",
       `SELECT public.apply_config_change($1, $2, $3, $4, $5, $6, $7) AS version`,
       [
         guildId,
@@ -297,7 +298,7 @@ describe("config functions", () => {
       const code = await errorCodeOf(
         queryAs(
           db,
-          "service_role",
+          "bot_app",
           `SELECT public.apply_role_bindings($1, NULL, $2, $3, $4, NULL, NULL, NULL, NULL)`,
           [guildId, fakeId(), fakeId(), fakeId()],
         ),
@@ -544,7 +545,7 @@ describe("config functions", () => {
       await applyChange(guildId, 1, { add: [channel] });
       await queryAs(
         db,
-        "service_role",
+        "bot_app",
         `SELECT public.mark_channel_unavailable($1, $2)`,
         [guildId, channel],
       );
@@ -675,7 +676,7 @@ describe("config functions", () => {
     const mark = async (guildId: string, channelId: string) => {
       const rows = await queryAs<{ marked: boolean }>(
         db,
-        "service_role",
+        "bot_app",
         `SELECT public.mark_channel_unavailable($1, $2) AS marked`,
         [guildId, channelId],
       );
@@ -760,21 +761,18 @@ describe("config functions", () => {
   });
 
   describe("execution rights", () => {
-    it.each(["anon", "authenticated"] as const)(
-      "%s cannot call either function",
-      async (role) => {
-        const guildId = await setUpGuild();
-        for (const sql of [
-          `SELECT public.apply_role_bindings('${guildId}', 1, '${fakeId()}', '${fakeId()}', '${fakeId()}', NULL, NULL, NULL, NULL)`,
-          `SELECT public.apply_config_change('${guildId}', 1, '${fakeId()}', false)`,
-          `SELECT public.mark_channel_unavailable('${guildId}', '${fakeId()}')`,
-        ]) {
-          expect(await errorCodeOf(queryAs(db, role, sql))).toBe(
-            INSUFFICIENT_PRIVILEGE,
-          );
-        }
-      },
-    );
+    it.each([OTHER_ROLE])("%s cannot call either function", async (role) => {
+      const guildId = await setUpGuild();
+      for (const sql of [
+        `SELECT public.apply_role_bindings('${guildId}', 1, '${fakeId()}', '${fakeId()}', '${fakeId()}', NULL, NULL, NULL, NULL)`,
+        `SELECT public.apply_config_change('${guildId}', 1, '${fakeId()}', false)`,
+        `SELECT public.mark_channel_unavailable('${guildId}', '${fakeId()}')`,
+      ]) {
+        expect(await errorCodeOf(queryAs(db, role, sql))).toBe(
+          INSUFFICIENT_PRIVILEGE,
+        );
+      }
+    });
 
     it("all three are SECURITY DEFINER with an empty search_path", async () => {
       const { rows } = await db.query(

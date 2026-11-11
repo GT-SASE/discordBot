@@ -46,9 +46,9 @@ import {
 } from "./validate.ts";
 
 const MAX_TASKS = 100;
-/** Enforced by a trigger on tasks: see the task quotas migration. */
+/** Enforced by a trigger on tasks: see db/migrations/0001_baseline.sql. */
 export const MAX_TASKS_PER_EVENT = 100;
-/** New tasks and reassignments together. Enforced by triggers: see the same migration. */
+/** New tasks and reassignments together. Enforced by triggers in the same file. */
 export const MAX_TASK_ACTIONS_PER_OFFICER_PER_DAY = 50;
 /** Discord's limit for autocomplete choices. */
 const MAX_CHOICES = 25;

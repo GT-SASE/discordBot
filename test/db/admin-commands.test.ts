@@ -392,7 +392,7 @@ describe("admin commands on the real functions", () => {
       );
       await queryAs(
         backend.connection,
-        "service_role",
+        "bot_app",
         `SELECT public.mark_channel_unavailable($1, $2)`,
         [GUILD_ID, GONE_FORUM],
       );

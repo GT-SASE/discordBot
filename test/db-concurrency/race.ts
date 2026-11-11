@@ -57,7 +57,7 @@ async function pidOf(client: pg.Client): Promise<number> {
 
 /**
  * Gives the calling file a database of its own, copied from the migrated template that
- * global-setup.ts made, and two fresh service_role connections for each test.
+ * global-setup.ts made, and two fresh bot_app connections for each test.
  */
 export function raceDatabase(): RaceDatabase {
   const adminUrl = inject("concurrencyAdminUrl");
@@ -105,8 +105,8 @@ export function raceDatabase(): RaceDatabase {
     t2 = new pg.Client({ connectionString: databaseUrl });
     await t1.connect();
     await t2.connect();
-    await t1.query("SET ROLE service_role");
-    await t2.query("SET ROLE service_role");
+    await t1.query("SET ROLE bot_app");
+    await t2.query("SET ROLE bot_app");
     // Read here, while both are idle. A query on a client that is already blocked would
     // queue behind the blocked statement and not return until the wait was over.
     t1Pid = await pidOf(t1);

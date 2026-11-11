@@ -285,13 +285,13 @@ export function useTaskWorld(): TaskWorld {
     const forum = testSnowflake();
     await queryAs(
       world.backend.connection,
-      "service_role",
+      "bot_app",
       `SELECT public.apply_role_bindings($1, 0, $2, $3, $4, NULL, NULL, NULL, NULL)`,
       [GUILD_ID, testSnowflake(), OFFICER_ROLE, ADMIN_ROLE],
     );
     await queryAs(
       world.backend.connection,
-      "service_role",
+      "bot_app",
       `SELECT public.apply_config_change($1, 1, $2, NULL, ARRAY[$3]::text[])`,
       [GUILD_ID, testSnowflake(), forum],
     );

@@ -157,7 +157,7 @@ async function event(
   });
   const rows = await queryAs<{ id: string }>(
     database,
-    "service_role",
+    "bot_app",
     `INSERT INTO public.events
        (guild_id, channel_id, name, event_date, created_by, thread_id, thread_status)
      VALUES ($1, $2, $3, $4, $5, $6, 'active')
@@ -514,7 +514,7 @@ describe("Food pickup reminders", () => {
     await readyForPickup(guild, made);
     const rows = await queryAs<{ token: string | null }>(
       database,
-      "service_role",
+      "bot_app",
       `SELECT public.claim_event_reminder($1, 'pickup_two_days', $2) AS token`,
       [made.eventId, dateOffset(0)],
     );
@@ -707,7 +707,7 @@ describe("what stops event reminders", () => {
     await readyForPickup(guild, made);
     await queryAs(
       database,
-      "service_role",
+      "bot_app",
       `SELECT public.apply_config_change($1, 2, $1, false)`,
       [guild.guildId],
     );
@@ -724,7 +724,7 @@ describe("what stops event reminders", () => {
     const made = await event(guild, 4);
     await queryAs(
       database,
-      "service_role",
+      "bot_app",
       `SELECT public.apply_config_change($1, 2, $1, NULL, '{}'::text[], ARRAY[$2]::text[])`,
       [guild.guildId, guild.channelId],
     );
@@ -821,7 +821,7 @@ describe("a thread that refuses the bot", () => {
     const made = await event(guild, 4);
     await queryAs(
       database,
-      "service_role",
+      "bot_app",
       `INSERT INTO public.tasks (event_id, guild_id, assignee_id, description, due_date, created_by)
        VALUES ($1, $2, $3, 'Book the room', $4, $5)`,
       [made.eventId, guild.guildId, fakeId(), dateOffset(1), fakeId()],

@@ -1,12 +1,13 @@
 /**
- * The event workflow migration at the SQL level: what the access layer cannot reach, such
- * as the backfill, the history rows, the functions the bot's role may not call, and the
+ * The event workflow at the SQL level: what the access layer cannot reach, such as the
+ * history rows, the functions the bot's role may not call, and the
  * refusals a well-behaved caller never triggers. test/db/access-layer.test.ts covers the
  * ordinary paths through src/db/event-steps.ts.
  */
 
 import type { PGlite } from "@electric-sql/pglite";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { todayInZone } from "../../src/lib/dates.ts";
 import {
   insertEvent,
   insertGuild,
@@ -15,84 +16,16 @@ import {
 import {
   INSUFFICIENT_PRIVILEGE,
   MIGRATION_OWNER,
-  createBootstrappedDb,
+  OTHER_ROLE,
   createMigratedDb,
   errorCodeOf,
   fakeId,
-  migrationFiles,
-  migrationScripts,
   queryAs,
 } from "./harness.ts";
 
 const INVALID_PARAMETER = "22023";
 const CHECK_VIOLATION = "23514";
 const KINDS = ["budget_sheet", "engage_post", "budget_approved", "food_pickup"];
-
-describe("the event workflow migration", () => {
-  it("gives every event that existed before it its four steps", async () => {
-    const db = await createBootstrappedDb();
-    try {
-      const scripts = migrationScripts();
-      const index = migrationFiles().indexOf(
-        "20261111000018_event_workflow.sql",
-      );
-      expect(index).toBeGreaterThan(0);
-      for (const script of scripts.slice(0, index)) {
-        await db.exec(script);
-      }
-      const guildId = fakeId();
-      const channelId = fakeId();
-      await queryAs(
-        db,
-        "service_role",
-        `SELECT public.apply_role_bindings($1, 0, $2, $3, $4)`,
-        [guildId, fakeId(), fakeId(), fakeId()],
-      );
-      await queryAs(
-        db,
-        "service_role",
-        `SELECT public.apply_config_change($1, 1, $2, NULL, ARRAY[$3]::text[])`,
-        [guildId, fakeId(), channelId],
-      );
-      const events = await queryAs<{ id: string }>(
-        db,
-        "service_role",
-        `INSERT INTO public.events (guild_id, channel_id, name, event_date, created_by)
-         VALUES ($1, $2, 'Old', '2030-01-15', $3), ($1, $2, 'Gone', '2030-01-16', $3)
-         RETURNING id`,
-        [guildId, channelId, fakeId()],
-      );
-      await queryAs(
-        db,
-        "service_role",
-        `SELECT public.soft_delete_event($1, $2)`,
-        [events[1]?.id, guildId],
-      );
-
-      for (const script of scripts.slice(index)) {
-        await db.exec(script);
-      }
-
-      const { rows } = await db.query<{ event_id: string; kinds: string[] }>(
-        `SELECT event_id, array_agg(kind::text ORDER BY kind) AS kinds
-         FROM public.event_steps GROUP BY event_id ORDER BY event_id`,
-      );
-      expect(rows).toEqual(
-        events
-          .map((event) => ({ event_id: event.id, kinds: KINDS }))
-          .sort((a, b) => a.event_id.localeCompare(b.event_id)),
-      );
-      const config = await db.query(
-        `SELECT eboard_role_id, treasury_role_id FROM public.guild_config`,
-      );
-      expect(config.rows).toEqual([
-        { eboard_role_id: null, treasury_role_id: null },
-      ]);
-    } finally {
-      await db.close();
-    }
-  });
-});
 
 describe("the event workflow functions", () => {
   let db: PGlite;
@@ -110,7 +43,7 @@ describe("the event workflow functions", () => {
   const call = <Row = Record<string, unknown>>(
     sql: string,
     params: unknown[],
-  ) => queryAs<Row>(db, "service_role", sql, params);
+  ) => queryAs<Row>(db, "bot_app", sql, params);
   const value = async (sql: string, params: unknown[]): Promise<unknown> => {
     const rows = await call<{ value: unknown }>(
       `SELECT ${sql} AS value`,
@@ -257,13 +190,13 @@ describe("the event workflow functions", () => {
     "public.create_event_steps()",
     `public.sync_food_pickup_step('${"0".repeat(8)}-0000-0000-0000-${"0".repeat(12)}', '1')`,
     `public.event_reminder_allowed('${"0".repeat(8)}-0000-0000-0000-${"0".repeat(12)}', 'daily_steps', '2030-01-01')`,
-  ])("does not let service_role call %s", async (sql) => {
-    expect(
-      await errorCodeOf(queryAs(db, "service_role", `SELECT ${sql}`)),
-    ).toBe(INSUFFICIENT_PRIVILEGE);
+  ])("does not let bot_app call %s", async (sql) => {
+    expect(await errorCodeOf(queryAs(db, "bot_app", `SELECT ${sql}`))).toBe(
+      INSUFFICIENT_PRIVILEGE,
+    );
   });
 
-  it.each(["anon", "authenticated"] as const)(
+  it.each([OTHER_ROLE])(
     "does not let %s call any of the writers",
     async (role) => {
       const eventId = await insertEvent(db, guild);
@@ -386,14 +319,16 @@ describe("the event workflow functions", () => {
       `UPDATE public.guild_config SET reminders_enabled = false WHERE guild_id = $1`,
       [guild.guildId],
     );
+    // A step reminder can be claimed only for today or yesterday in the guild's zone.
+    const today = todayInZone(new Date(), "America/New_York");
     try {
-      expect(await claim("daily_steps", "2030-01-14")).toBeNull();
+      expect(await claim("daily_steps", today)).toBeNull();
     } finally {
       await db.query(
         `UPDATE public.guild_config SET reminders_enabled = true WHERE guild_id = $1`,
         [guild.guildId],
       );
     }
-    expect(await claim("daily_steps", "2030-01-14")).not.toBeNull();
+    expect(await claim("daily_steps", today)).not.toBeNull();
   });
 });

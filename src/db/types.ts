@@ -1,7 +1,7 @@
 /**
  * The schema as the bot's role sees it, and the checks every row passes when read.
  *
- * `Database` follows supabase/migrations. Insert and Update list only what the role
+ * `Database` follows db/migrations. Insert and Update list only what the role
  * is granted, so writing any other column fails to compile, and `deleted_at` cannot
  * be set back to null. Rows from the API are treated as unknown and go through a
  * parser here: a row that fails is left out and reported, never cast.

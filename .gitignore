@@ -26,8 +26,6 @@ logs/
 
 # Deployment and local service state
 .vercel/
-supabase/.branches/
-supabase/.temp/
 
 # Keys, certificates and age identities
 *.pem
@@ -64,7 +62,7 @@ pgpass.conf
 # All SQL is ignored by default so a dump cannot be committed by accident.
 # Migrations are the one exception.
 *.sql
-!supabase/migrations/*.sql
+!db/migrations/*.sql
 *.sql.*
 *.psql
 *.pgsql

@@ -12,6 +12,7 @@ import { listActiveManagedChannels } from "../../src/db/managed-channels.ts";
 import { TEST_ORIGIN, TEST_SECRET_KEY } from "../support/mock-postgrest.ts";
 import { insertGuild } from "./fixtures.ts";
 import {
+  OTHER_ROLE,
   createMigratedDb,
   errorCodeOf,
   fakeId,
@@ -177,7 +178,11 @@ describe("begin_job_run", () => {
 
   it("is closed to the anon role", async () => {
     await expect(
-      queryAs(database, "anon", `SELECT public.begin_job_run('reminders', 1)`),
+      queryAs(
+        database,
+        OTHER_ROLE,
+        `SELECT public.begin_job_run('reminders', 1)`,
+      ),
     ).rejects.toMatchObject({ code: "42501" });
   });
 
@@ -301,7 +306,7 @@ describe("begin_job_run", () => {
       try {
         await queryAs(
           database,
-          "service_role",
+          "bot_app",
           `SELECT public.finish_job_run($1, now(), '{}', NULL)`,
           [id],
         );
@@ -323,7 +328,7 @@ describe("begin_job_run", () => {
       await expect(
         queryAs(
           database,
-          "anon",
+          OTHER_ROLE,
           `SELECT public.finish_job_run(gen_random_uuid(), now(), '{}', NULL)`,
         ),
       ).rejects.toMatchObject({ code: "42501" });
@@ -416,7 +421,7 @@ describe("begin_job_run", () => {
     try {
       await queryAs(
         database,
-        "service_role",
+        "bot_app",
         `SELECT public.begin_job_run('reminders', 120)`,
       );
       const { rows } = await database.query(`SHOW lock_timeout`);
@@ -474,7 +479,7 @@ describe("listActiveManagedChannels", () => {
     const gone = await insertGuild(database);
     await queryAs(
       database,
-      "service_role",
+      "bot_app",
       `SELECT public.mark_channel_unavailable($1, $2)`,
       [gone.guildId, gone.channelId],
     );

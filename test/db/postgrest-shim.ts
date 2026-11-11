@@ -6,7 +6,7 @@
  * new to `src/db/` needs a case in that file, or real PostgREST never sees it.
  *
  * It reads the requests the database layer sends and runs them on PGlite as
- * service_role, so tests still exercise the real schema, grants, triggers and
+ * bot_app, so tests still exercise the real schema, grants, triggers and
  * functions. It handles only what `src/db/` uses and throws on anything else. PGlite
  * has one connection, so requests run one at a time here and never truly race.
  */
@@ -320,7 +320,7 @@ async function runRead(
     ${integerClause("OFFSET", params.get("offset"))}`;
   const rows = await queryAs<{ row: unknown }>(
     db,
-    "service_role",
+    "bot_app",
     sql,
     query.params,
   );
@@ -361,7 +361,7 @@ async function runUpdate(
     RETURNING ${object} AS row`;
   const rows = await queryAs<{ row: unknown }>(
     db,
-    "service_role",
+    "bot_app",
     sql,
     query.params,
   );
@@ -389,7 +389,7 @@ async function runInsert(
     VALUES (${values.join(", ")}) RETURNING ${object} AS row`;
   const rows = await queryAs<{ row: unknown }>(
     db,
-    "service_role",
+    "bot_app",
     sql,
     query.params,
   );
@@ -440,7 +440,7 @@ async function runFunction(
     .join(", ");
   const result = await queryAs<{ value: unknown }>(
     db,
-    "service_role",
+    "bot_app",
     `SELECT public.${name}(${list}) AS value`,
     query.params,
   );

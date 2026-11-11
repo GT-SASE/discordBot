@@ -1,20 +1,24 @@
 /**
- * Prepares an empty Postgres database for a real PostgREST server: the platform's
+ * Prepares an empty Postgres database for a real PostgREST server: the server's
  * starting state, every migration, and the role PostgREST logs in as.
  *
  * Usage: POSTGREST_DATABASE_URL=<superuser URL> node scripts/prepare-postgrest-db.ts
  */
 
 import pg from "pg";
-import { PLATFORM_BOOTSTRAP, migrationScripts } from "../test/db/harness.ts";
+import {
+  SERVER_SETUP,
+  migrateAsOwner,
+  pgConnection,
+} from "../test/db/harness.ts";
 
 /**
  * NOINHERIT, so the login itself has no rights: PostgREST must switch to the role
- * named in a request's token, as it does on hosted Supabase.
+ * named in a request's token, which the tests set to bot_app.
  */
 const AUTHENTICATOR = `
   CREATE ROLE authenticator LOGIN NOINHERIT;
-  GRANT anon, authenticated, service_role TO authenticator;
+  GRANT bot_app TO authenticator;
 `;
 
 async function main(): Promise<void> {
@@ -25,10 +29,8 @@ async function main(): Promise<void> {
   const client = new pg.Client({ connectionString });
   await client.connect();
   try {
-    await client.query(PLATFORM_BOOTSTRAP);
-    for (const script of migrationScripts()) {
-      await client.query(script);
-    }
+    await client.query(SERVER_SETUP);
+    await migrateAsOwner(pgConnection(client));
     await client.query(AUTHENTICATOR);
   } finally {
     await client.end();

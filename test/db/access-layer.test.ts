@@ -98,7 +98,11 @@ import {
   softDeleteTask,
 } from "../../src/db/tasks.ts";
 import type { Actor } from "../../src/lib/actor.ts";
-import { parseIsoDate, type DateOnly } from "../../src/lib/dates.ts";
+import {
+  parseIsoDate,
+  todayInZone,
+  type DateOnly,
+} from "../../src/lib/dates.ts";
 import { authorize } from "../../src/lib/permissions.ts";
 import { openBackend, type Backend } from "./backend.ts";
 import {
@@ -579,7 +583,7 @@ describe("database layer against the real schema", () => {
         await expect(
           queryAs(
             pg,
-            "service_role",
+            "bot_app",
             `UPDATE public.events SET post_attempt_at = NULL WHERE id = $1`,
             [event.id],
           ),
@@ -1793,7 +1797,7 @@ describe("database layer against the real schema", () => {
     const expectedIds = async (lastDueDate: string) => {
       const rows = await queryAs<{ id: string }>(
         pg,
-        "service_role",
+        "bot_app",
         `SELECT t.id
          FROM public.tasks t
          JOIN public.events e ON e.id = t.event_id AND e.guild_id = t.guild_id
@@ -2286,7 +2290,7 @@ describe("database layer against the real schema", () => {
         await expect(
           queryAs(
             pg,
-            "service_role",
+            "bot_app",
             `UPDATE public.tasks SET description = 'Changed' WHERE id = $1`,
             [task.id],
           ),
@@ -3168,13 +3172,19 @@ describe("the event workflow against the real schema", () => {
   const datedEvent = async (eventDate: string): Promise<string> => {
     const rows = await queryAs<{ id: string }>(
       pg,
-      "service_role",
+      "bot_app",
       `INSERT INTO public.events (guild_id, channel_id, name, event_date, created_by)
        VALUES ($1, $2, 'Workflow', $3, $4) RETURNING id`,
       [guild.guildId, guild.channelId, eventDate, fakeId()],
     );
     return (rows[0] as { id: string }).id;
   };
+  /**
+   * Today in the fixture guild's zone. A step reminder can be claimed only for today or
+   * yesterday there, so an event dated today is the latest one a test can claim on.
+   */
+  const guildToday = (): DateOnly =>
+    todayInZone(new Date(), "America/New_York");
   const farDate = (offsetDays = 0): DateOnly => {
     const base = Date.UTC(3000 + Math.floor(Math.random() * 5000), 5, 15);
     return date(
@@ -3290,13 +3300,8 @@ describe("the event workflow against the real schema", () => {
       });
     });
 
-    it(`allows ${String(MAX_FOOD_PICKUP_ASSIGNEES)} on Food pickup, and only once the budget is approved`, async () => {
+    it(`allows ${String(MAX_FOOD_PICKUP_ASSIGNEES)} on Food pickup, whether or not the budget is approved`, async () => {
       const eventId = await insertEvent(pg, guild);
-      expect(await assign(eventId, "food_pickup")).toEqual({
-        ok: false,
-        error: { category: "step_not_ready", code: "CF428" },
-      });
-      unwrap(await approve(eventId));
       for (let index = 0; index < MAX_FOOD_PICKUP_ASSIGNEES; index += 1) {
         unwrap(await assign(eventId, "food_pickup"));
       }
@@ -3406,12 +3411,7 @@ describe("the event workflow against the real schema", () => {
       const actor = fakeId();
       const setTime = (pickupTime: string) =>
         setEventPickupTime(db, { ...key(eventId), pickupTime, actorId: actor });
-      expect(await setTime("17:30")).toEqual({
-        ok: false,
-        error: { category: "step_not_ready", code: "CF428" },
-      });
-
-      unwrap(await approve(eventId));
+      // The budget need not be approved first.
       expect(await setTime("17:30")).toEqual({ ok: true, value: false });
       const user = fakeId();
       unwrap(await assign(eventId, "food_pickup", user));
@@ -3495,7 +3495,7 @@ describe("the event workflow against the real schema", () => {
 
   describe("event reminders", () => {
     it("lists a live event with its steps, live people and recent log", async () => {
-      const eventDate = farDate();
+      const eventDate = guildToday();
       const eventId = await datedEvent(eventDate);
       const user = fakeId();
       unwrap(await assign(eventId, "budget_sheet", user));
@@ -3554,7 +3554,7 @@ describe("the event workflow against the real schema", () => {
     });
 
     it("claims once, refuses a date after the event, and marks sent or skipped by token", async () => {
-      const eventDate = farDate();
+      const eventDate = guildToday();
       const eventId = await datedEvent(eventDate);
       const daily = {
         eventId,
@@ -3654,7 +3654,7 @@ describe("the event workflow against the real schema", () => {
     });
 
     it("takes over a claim left for over an hour, once", async () => {
-      const eventDate = farDate();
+      const eventDate = guildToday();
       const eventId = await datedEvent(eventDate);
       const daily = {
         eventId,

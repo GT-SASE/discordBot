@@ -1,122 +1,63 @@
-import { readdirSync, readFileSync } from "node:fs";
-import { join } from "node:path";
 import { PGlite } from "@electric-sql/pglite";
-import type pg from "pg";
+import {
+  migrate,
+  pgMigrationConnection,
+  type MigrationConnection,
+} from "../../scripts/migrate.ts";
 
 /** What the helpers here need from a database, so PGlite and pg both fit. */
-export interface Connection {
-  // Callers name the row they expect, as they do with PGlite's own query.
-  // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-parameters
-  query<Row = Record<string, unknown>>(
-    sql: string,
-    params?: unknown[],
-  ): Promise<{ rows: Row[] }>;
-  exec(sql: string): Promise<unknown>;
-}
+export type Connection = MigrationConnection;
 
-export function pgConnection(client: pg.Client): Connection {
-  return {
-    // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-parameters
-    query: async <Row>(sql: string, params: unknown[] = []) => {
-      const result = await client.query(sql, params);
-      return { rows: result.rows as Row[] };
-    },
-    exec: (sql) => client.query(sql),
-  };
-}
+export const pgConnection = pgMigrationConnection;
 
-export type ApiRole = "anon" | "authenticated" | "service_role";
-export const API_ROLES: readonly ApiRole[] = [
-  "anon",
-  "authenticated",
-  "service_role",
-];
+/** The role the bot logs in as. db/migrations/0001_baseline.sql creates it. */
+export const BOT_APP = "bot_app";
 
-/** Stands in for the hosted `postgres` role: owns the schema, is not a superuser. */
+/** Runs the migrations and owns the schema, as a Neon project's owner role does. */
 export const MIGRATION_OWNER = "migration_owner";
+
+/** A role with no grants at all, standing in for any role that is not the bot or owner. */
+export const OTHER_ROLE = "other_role";
 
 /** Postgres error code for a privilege failure. */
 export const INSUFFICIENT_PRIVILEGE = "42501";
 
-const MIGRATIONS_DIR = join(
-  import.meta.dirname,
-  "..",
-  "..",
-  "supabase",
-  "migrations",
-);
-
 /**
- * Recreates the starting state of a Supabase project, as permissively as the
- * platform might set it: API roles with default grants on everything the owner
- * creates, and anon and authenticated with full schema access. Tests only mean
- * something if the migrations have to remove these grants.
- *
- * service_role deliberately gets no USAGE on the schema here. It reaches the schema
- * only through PUBLIC, which the migrations revoke, so the migrations have to grant
- * USAGE themselves. CREATE is granted so that they have to revoke it.
- *
- * Safe to run more than once in a cluster, and in any database.
+ * What a new server has before the first migration: an owner that is not a superuser but
+ * may create roles, and owns the database and its public schema, as on Neon. Safe to
+ * run more than once in a cluster, and in any database.
  */
-export const PLATFORM_BOOTSTRAP = `
+export const SERVER_SETUP = `
   DO $$
-  DECLARE
-    spec text[];
   BEGIN
-    FOREACH spec SLICE 1 IN ARRAY ARRAY[
-      ['anon', 'NOLOGIN NOINHERIT'],
-      ['authenticated', 'NOLOGIN NOINHERIT'],
-      ['service_role', 'NOLOGIN NOINHERIT BYPASSRLS'],
-      ['${MIGRATION_OWNER}', 'NOLOGIN NOSUPERUSER CREATEROLE']
-    ] LOOP
-      IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = spec[1]) THEN
-        EXECUTE format('CREATE ROLE %I %s', spec[1], spec[2]);
-      END IF;
-    END LOOP;
-    EXECUTE format('GRANT CREATE ON DATABASE %I TO ${MIGRATION_OWNER}', current_database());
+    IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '${MIGRATION_OWNER}') THEN
+      CREATE ROLE ${MIGRATION_OWNER} NOLOGIN NOSUPERUSER CREATEROLE;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '${OTHER_ROLE}') THEN
+      CREATE ROLE ${OTHER_ROLE} NOLOGIN;
+    END IF;
+    EXECUTE format('ALTER DATABASE %I OWNER TO ${MIGRATION_OWNER}', current_database());
   END;
   $$;
-
   ALTER SCHEMA public OWNER TO ${MIGRATION_OWNER};
-  GRANT ALL ON SCHEMA public TO anon, authenticated;
-  GRANT CREATE ON SCHEMA public TO service_role;
-
-  ALTER DEFAULT PRIVILEGES FOR ROLE ${MIGRATION_OWNER} IN SCHEMA public
-    GRANT ALL ON TABLES TO anon, authenticated, service_role;
-  ALTER DEFAULT PRIVILEGES FOR ROLE ${MIGRATION_OWNER} IN SCHEMA public
-    GRANT ALL ON SEQUENCES TO anon, authenticated, service_role;
-  ALTER DEFAULT PRIVILEGES FOR ROLE ${MIGRATION_OWNER} IN SCHEMA public
-    GRANT ALL ON FUNCTIONS TO anon, authenticated, service_role;
 `;
 
-export function migrationFiles(): string[] {
-  return readdirSync(MIGRATIONS_DIR)
-    .filter((name) => name.endsWith(".sql"))
-    .sort();
-}
-
-/** A fresh database in the platform's starting state, with no migrations run. */
-export async function createBootstrappedDb(): Promise<PGlite> {
-  const db = new PGlite();
-  await db.waitReady;
-  await db.exec(PLATFORM_BOOTSTRAP);
-  return db;
-}
-
-/** Scripts that apply each migration in its own transaction, as the owner. */
-export function migrationScripts(): string[] {
-  return migrationFiles().map((file) => {
-    const sql = readFileSync(join(MIGRATIONS_DIR, file), "utf8");
-    return `BEGIN; SET LOCAL ROLE ${MIGRATION_OWNER};\n${sql}\nCOMMIT;`;
-  });
+/** Applies every migration as the owner, through the same code as the db:migrate script. */
+export async function migrateAsOwner(db: Connection): Promise<void> {
+  await db.exec(`SET ROLE ${MIGRATION_OWNER}`);
+  try {
+    await migrate(db);
+  } finally {
+    await db.exec("RESET ROLE");
+  }
 }
 
 /** A fresh database with every migration applied. */
 export async function createMigratedDb(): Promise<PGlite> {
-  const db = await createBootstrappedDb();
-  for (const script of migrationScripts()) {
-    await db.exec(script);
-  }
+  const db = new PGlite();
+  await db.waitReady;
+  await db.exec(SERVER_SETUP);
+  await migrateAsOwner(db);
   return db;
 }
 
@@ -131,7 +72,7 @@ export function present<T>(value: T | null | undefined): T {
 /** Runs one parameterised statement as the given role, then restores the session role. */
 export async function queryAs<Row = Record<string, unknown>>(
   db: Connection,
-  role: ApiRole | typeof MIGRATION_OWNER,
+  role: string,
   sql: string,
   params: unknown[] = [],
 ): Promise<Row[]> {

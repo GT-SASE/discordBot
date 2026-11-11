@@ -48,7 +48,7 @@ import {
   uuidList,
 } from "./validate.ts";
 
-/** Enforced by assign_event_step: see the event workflow migration. */
+/** Enforced by assign_event_step: see db/migrations/0001_baseline.sql. */
 export const MAX_ASSIGNEES_PER_STEP = 10;
 /** Enforced by assign_event_step, for Food pickup alone. */
 export const MAX_FOOD_PICKUP_ASSIGNEES = 15;
@@ -157,8 +157,8 @@ function isStepAssignment(input: StepAssignment): boolean {
 /**
  * Puts a member on Budget Sheet, Engage post or Food pickup. True if this call added them,
  * false if they were on it already. Fails as `step_assignee_limit` once the step has
- * `MAX_ASSIGNEES_PER_STEP` people (`MAX_FOOD_PICKUP_ASSIGNEES` for Food pickup), and Food
- * pickup fails as `step_not_ready` until the budget is approved.
+ * `MAX_ASSIGNEES_PER_STEP` people (`MAX_FOOD_PICKUP_ASSIGNEES` for Food pickup). Food pickup
+ * can be set up at any time: it does not wait for the budget.
  */
 export async function assignEventStep(
   db: DbClient,
@@ -273,8 +273,8 @@ export async function markStepHandoffSent(
 
 /**
  * Sets the pickup time, as `HH:MM` on a 24-hour clock, local to the guild on the event's
- * date. Fails as `step_not_ready` until the budget is approved. Returns whether Food pickup
- * is now done, which also needs at least one person on it.
+ * date, at any time. Returns whether Food pickup is now done, which also needs at least one
+ * person on it.
  */
 export async function setEventPickupTime(
   db: DbClient,

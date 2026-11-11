@@ -64,7 +64,7 @@ function serviceRoleToken(secret: string): string {
     base64url(JSON.stringify({ alg: "HS256", typ: "JWT" })),
     base64url(
       JSON.stringify({
-        role: "service_role",
+        role: "bot_app",
         exp: Math.floor(Date.now() / 1000) + 3600,
       }),
     ),

@@ -7,7 +7,8 @@ import {
   type GuildFixture,
 } from "./fixtures.ts";
 import {
-  API_ROLES,
+  BOT_APP,
+  OTHER_ROLE,
   INSUFFICIENT_PRIVILEGE,
   MIGRATION_OWNER,
   createMigratedDb,
@@ -43,11 +44,11 @@ describe("row history", () => {
     return rows;
   }
 
-  it("records the old event row when service_role updates it", async () => {
+  it("records the old event row when bot_app updates it", async () => {
     const eventId = await insertEvent(db, guild);
     await queryAs(
       db,
-      "service_role",
+      "bot_app",
       `UPDATE public.events SET name = 'Renamed' WHERE id = $1`,
       [eventId],
     );
@@ -59,11 +60,11 @@ describe("row history", () => {
     expect(versions[0]?.old_row.name).toBe("General meeting");
   });
 
-  it("records the old task row when service_role updates it", async () => {
+  it("records the old task row when bot_app updates it", async () => {
     const taskId = await insertTask(db, guild, await insertEvent(db, guild));
     await queryAs(
       db,
-      "service_role",
+      "bot_app",
       `UPDATE public.tasks SET description = 'Changed' WHERE id = $1`,
       [taskId],
     );
@@ -79,7 +80,7 @@ describe("row history", () => {
     for (const description of ["Second", "Third"]) {
       await queryAs(
         db,
-        "service_role",
+        "bot_app",
         `UPDATE public.tasks SET description = $2 WHERE id = $1`,
         [taskId, description],
       );
@@ -95,7 +96,7 @@ describe("row history", () => {
     const taskId = await insertTask(db, guild, await insertEvent(db, guild));
     await queryAs(
       db,
-      "service_role",
+      "bot_app",
       `UPDATE public.tasks SET deleted_at = now() WHERE id = $1`,
       [taskId],
     );
@@ -172,7 +173,7 @@ describe("row history", () => {
       await new Promise((resolve) => setTimeout(resolve, 5));
       await queryAs(
         db,
-        "service_role",
+        "bot_app",
         `UPDATE public.${table} SET ${set} WHERE id = $1`,
         [id],
       );
@@ -191,7 +192,7 @@ describe("row history", () => {
     for (const description of ["Changed", "Book the room"]) {
       await queryAs(
         db,
-        "service_role",
+        "bot_app",
         `UPDATE public.tasks SET description = $2 WHERE id = $1`,
         [taskId, description],
       );
@@ -211,7 +212,7 @@ describe("row history", () => {
     expect(rows).toEqual([{ prosecdef: true, proconfig: ['search_path=""'] }]);
   });
 
-  describe.each(API_ROLES)("as %s", (role) => {
+  describe.each([BOT_APP, OTHER_ROLE])("as %s", (role) => {
     it("has no privilege on the schema, table or function", async () => {
       const { rows } = await db.query(
         `SELECT

@@ -121,7 +121,7 @@ async function eventWithPost() {
   });
   const rows = await queryAs<{ id: string }>(
     database,
-    "service_role",
+    "bot_app",
     `INSERT INTO public.events
        (guild_id, channel_id, name, event_date, created_by, thread_id, thread_status)
      VALUES ($1, $2, 'General meeting', '2099-01-15', $3, $4, 'active')
@@ -143,7 +143,7 @@ describe("the client built by liveDependencies", () => {
     database = await createMigratedDb();
     await queryAs(
       database,
-      "service_role",
+      "bot_app",
       `SELECT public.apply_role_bindings($1, 0, $2, $3, $4, NULL, NULL, NULL, NULL)`,
       [GUILD_ID, fakeId(), OFFICER_ROLE, ADMIN_ROLE],
     );

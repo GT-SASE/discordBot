@@ -19,7 +19,10 @@ export type DbErrorCategory =
   | "event_task_limit"
   /** This officer has created as many tasks as they may for now. */
   | "actor_task_limit"
-  /** The step needs the budget approved first. */
+  /**
+   * Nothing raises this since Food pickup stopped waiting for the budget. It stays only
+   * while the handlers still name it, until they are changed to match.
+   */
   | "step_not_ready"
   /** The step already has as many people as it may. */
   | "step_assignee_limit"
@@ -49,7 +52,6 @@ const CATEGORY_BY_CODE = new Map<string, DbErrorCategory>([
   ["CF412", "task_changed"],
   ["CF429", "event_task_limit"],
   ["CF430", "actor_task_limit"],
-  ["CF428", "step_not_ready"],
   ["CF431", "step_assignee_limit"],
   ["23505", "conflict"],
   ["23502", "constraint"],

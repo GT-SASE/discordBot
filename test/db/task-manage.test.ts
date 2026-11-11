@@ -893,14 +893,14 @@ describe("assigning, editing and deleting tasks, on the real schema", () => {
         const removedForum = testSnowflake();
         const config = await queryAs<{ version: number }>(
           world.backend.connection,
-          "service_role",
+          "bot_app",
           `SELECT version FROM public.guild_config WHERE guild_id = $1`,
           [GUILD_ID],
         );
         const version = config[0]?.version ?? 0;
         await queryAs(
           world.backend.connection,
-          "service_role",
+          "bot_app",
           `SELECT public.apply_config_change($1, $2, $3, NULL, ARRAY[$4]::text[])`,
           [GUILD_ID, version, testSnowflake(), removedForum],
         );
@@ -918,7 +918,7 @@ describe("assigning, editing and deleting tasks, on the real schema", () => {
         );
         await queryAs(
           world.backend.connection,
-          "service_role",
+          "bot_app",
           `SELECT public.apply_config_change($1, $2, $3, NULL, NULL, ARRAY[$4]::text[])`,
           [GUILD_ID, version + 1, testSnowflake(), removedForum],
         );
@@ -1315,7 +1315,7 @@ describe("assigning, editing and deleting tasks, on the real schema", () => {
       if (value === "foreign") {
         const rows = await queryAs<{ id: string }>(
           world.backend.connection,
-          "service_role",
+          "bot_app",
           `INSERT INTO public.tasks (event_id, guild_id, assignee_id, description, due_date, created_by)
            VALUES ($1, $2, $3, 'Foreign', '2040-01-01', $3) RETURNING id`,
           [world.foreignEventId, world.foreign.guildId, testSnowflake()],
@@ -1584,7 +1584,7 @@ describe("assigning, editing and deleting tasks, on the real schema", () => {
     it("refuses another guild's task named in a crafted Confirm", async () => {
       const rows = await queryAs<{ id: string }>(
         world.backend.connection,
-        "service_role",
+        "bot_app",
         `INSERT INTO public.tasks (event_id, guild_id, assignee_id, description, due_date, created_by)
          VALUES ($1, $2, $3, 'Foreign', '2040-01-01', $3) RETURNING id`,
         [world.foreignEventId, world.foreign.guildId, testSnowflake()],

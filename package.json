@@ -18,6 +18,7 @@
     "test:db": "vitest run --config vitest.db.config.ts",
     "test:db:concurrency": "vitest run --config vitest.concurrency.config.ts",
     "test:postgrest": "vitest run --config vitest.postgrest.config.ts",
+    "db:migrate": "node scripts/migrate.ts",
     "commands:register": "node --env-file-if-exists=.env scripts/register-commands.ts"
   },
   "type": "module",
