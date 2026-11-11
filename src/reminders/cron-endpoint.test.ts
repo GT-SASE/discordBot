@@ -290,6 +290,7 @@ describe("an authorized request", () => {
       }
       if (
         url.includes("/managed_channels?") ||
+        url.includes("/events?") ||
         url.includes("/reminder_log?")
       ) {
         return Promise.resolve(Response.json([]));
@@ -330,13 +331,17 @@ describe("the Discord client the function builds", () => {
       if (url.includes("/tasks?")) {
         return Promise.resolve(Response.json([candidateRow()]));
       }
+      const forum =
+        status === undefined
+          ? []
+          : [{ guild_id: GUILD, channel_id: FORUM, status }];
       if (url.includes("/managed_channels?")) {
+        return Promise.resolve(Response.json(forum));
+      }
+      // The thread's event, with its forum's row.
+      if (url.includes("/events?select=managed_channels")) {
         return Promise.resolve(
-          Response.json(
-            status === undefined
-              ? []
-              : [{ guild_id: GUILD, channel_id: FORUM, status }],
-          ),
+          Response.json(forum.map((row) => ({ managed_channels: row }))),
         );
       }
       if (url.includes("/reminder_log?")) {

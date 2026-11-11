@@ -166,7 +166,7 @@ async function assign(
     task,
     safe`${userMention(task.assignee_id)}, you have a new task:`,
   );
-  const warning = await reachWarning(ctx, event, task.assignee_id);
+  const warning = await reachWarning(ctx, event, task.assignee_id, outcome);
   const stale = await refreshAfterChange(dependencies, event, ctx);
   return messageWithNotes(
     safe`Assigned task ${shownId(task.id)} to ${userMention(task.assignee_id)}, due ${shownDate(task.due_date)}. ${noticeSummary(outcome, task.assignee_id)}`,

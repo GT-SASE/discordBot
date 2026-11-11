@@ -23,6 +23,7 @@ import {
   type JobRunError,
 } from "../db/job-runs.ts";
 import {
+  getEventThreadForum,
   getManagedChannel,
   markChannelUnavailable,
 } from "../db/managed-channels.ts";
@@ -167,6 +168,16 @@ export function managedChannelCheck(db: DbClient): ManagedChannelCheck {
         throw new Error("managed channel check failed");
       }
       return row.value?.status === "active";
+    },
+    async isManagedEventThread(guildId, threadId) {
+      const forum = await getEventThreadForum(db, { guildId, threadId });
+      if (!forum.ok) {
+        // The client turns this into a refused send. The error is not looked at.
+        throw new Error("managed channel check failed");
+      }
+      return (
+        forum.value?.guild_id === guildId && forum.value.status === "active"
+      );
     },
   };
 }

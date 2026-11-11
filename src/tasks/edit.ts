@@ -160,7 +160,7 @@ async function edit(
       safe`${userMention(saved.assignee_id)}, this task is now yours:`,
     );
     parts.push(noticeSummary(outcome, saved.assignee_id));
-    const warning = await reachWarning(ctx, event, saved.assignee_id);
+    const warning = await reachWarning(ctx, event, saved.assignee_id, outcome);
     if (warning !== undefined) {
       parts.push(warning);
     }

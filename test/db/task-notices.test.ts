@@ -139,19 +139,19 @@ describe("what an officer is told after a task change", () => {
       ];
       return fakeClient({
         getGuildRoles: () => Promise.resolve(roles),
-        getGuildChannels: () =>
-          Promise.resolve([
-            {
-              id: world.fixture.channelId,
-              name: "forum",
-              type: 15,
-              overwrites: [
-                { id: GUILD_ID, type: 0, allow: 0n, deny: VIEW },
-                { id: MEMBER_ROLE, type: 0, allow: VIEW, deny: 0n },
-                ...extra,
-              ],
-            },
-          ]),
+        getGuildChannel: (_guildId, channelId) =>
+          channelId === world.fixture.channelId
+            ? Promise.resolve({
+                id: world.fixture.channelId,
+                name: "forum",
+                type: 15,
+                overwrites: [
+                  { id: GUILD_ID, type: 0, allow: 0n, deny: VIEW },
+                  { id: MEMBER_ROLE, type: 0, allow: VIEW, deny: 0n },
+                  ...extra,
+                ],
+              })
+            : Promise.reject(new Error("not this forum")),
         getGuildMemberRoleIds: () => Promise.resolve(memberRoleIds),
         ...overrides,
       });
@@ -252,7 +252,7 @@ describe("what an officer is told after a task change", () => {
         .spyOn(console, "error")
         .mockImplementation(() => undefined);
       const { client, edits } = privateForum({
-        getGuildChannels: () => Promise.reject(new Error("canary failure")),
+        getGuildChannel: () => Promise.reject(new Error("canary failure")),
       });
 
       await assigned(client, testSnowflake());

@@ -43,6 +43,7 @@ import {
   type JobName,
 } from "./job-runs.ts";
 import {
+  getEventThreadForum,
   getManagedChannel,
   listManagedChannels,
   listManagedChannelsByIds,
@@ -611,6 +612,14 @@ describe("exact requests", () => {
       ),
     ],
     [
+      "getEventThreadForum",
+      (db) => getEventThreadForum(db, { guildId: GUILD, threadId: OTHER }),
+      {},
+      read(
+        `events?select=managed_channels!inner(guild_id,channel_id,status)&guild_id=eq.${GUILD}&thread_id=eq.${OTHER}&deleted_at=is.null&limit=1`,
+      ),
+    ],
+    [
       "listManagedChannels",
       (db) => listManagedChannels(db, { guildId: GUILD }),
       {},
@@ -978,6 +987,14 @@ describe("refusals before any query", () => {
   ][] = [
     ["getTask guild", (c, h) => getTask(c, { guildId: h, taskId: ID })],
     ["getTask id", (c, h) => getTask(c, { guildId: GUILD, taskId: h })],
+    [
+      "getEventThreadForum guild",
+      (c, h) => getEventThreadForum(c, { guildId: h, threadId: OTHER }),
+    ],
+    [
+      "getEventThreadForum thread",
+      (c, h) => getEventThreadForum(c, { guildId: GUILD, threadId: h }),
+    ],
     ["getEvent guild", (c, h) => getEvent(c, { guildId: h, eventId: ID })],
     ["getEvent id", (c, h) => getEvent(c, { guildId: GUILD, eventId: h })],
     [

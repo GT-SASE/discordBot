@@ -102,15 +102,11 @@ async function canViewForum(
   assigneeId: string,
 ): Promise<boolean | undefined> {
   const guildId = event.guild_id;
-  const [roles, channels, memberRoleIds] = await Promise.all([
+  const [roles, channel, memberRoleIds] = await Promise.all([
     ctx.discord.getGuildRoles(guildId),
-    ctx.discord.getGuildChannels(guildId),
+    ctx.discord.getGuildChannel(guildId, event.channel_id),
     ctx.discord.getGuildMemberRoleIds(guildId, assigneeId),
   ]);
-  const channel = channels.find((row) => row.id === event.channel_id);
-  if (channel === undefined) {
-    return undefined;
-  }
   const permissions = channelPermissions({
     guildId,
     roles,
@@ -127,19 +123,26 @@ async function canViewForum(
  * A warning for the officer when this task's reminders won't reach the person. The task
  * stays either way, and a check that can't finish stays silent: it is advice, and must
  * not turn a saved task into a failed reply.
+ *
+ * A notice that was posted has just passed the client's check on this forum, so the
+ * forum's row is only read again when it was not.
  */
 export async function reachWarning(
   ctx: FinishContext,
   event: EventRow,
   assigneeId: string,
+  notice: NoticeOutcome,
 ): Promise<SafeText | undefined> {
   const person = userMention(assigneeId);
   try {
-    const forum = await getManagedChannel(ctx.db, {
-      guildId: event.guild_id,
-      channelId: event.channel_id,
-    });
-    if (forum.ok && forum.value?.status !== "active") {
+    const forum =
+      notice === "posted"
+        ? undefined
+        : await getManagedChannel(ctx.db, {
+            guildId: event.guild_id,
+            channelId: event.channel_id,
+          });
+    if (forum?.ok === true && forum.value?.status !== "active") {
       return safe`This event's forum is no longer managed, so reminders for this task are off until an admin adds the forum back with /config.`;
     }
     if ((await canViewForum(ctx, event, assigneeId)) === false) {

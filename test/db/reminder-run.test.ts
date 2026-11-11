@@ -1206,8 +1206,8 @@ describe("channels and threads that are gone", () => {
     const result = await run({ guilds: [guild] });
 
     expect(result).toMatchObject({ error: "reminders_incomplete" });
-    // The thread, then its forum to see whether the refusal is only the thread's.
-    expect(requests.map((request) => request.method)).toEqual(["GET", "GET"]);
+    // The send, then its forum to see whether the refusal is only the thread's.
+    expect(requests.map((request) => request.method)).toEqual(["POST", "GET"]);
     expect(await channelStatus(guild)).toBe("active");
     expect(await threadStatus(eventId)).toBe("active");
     expect((await jobRow()).results).toMatchObject({
@@ -1235,9 +1235,23 @@ describe("channels and threads that are gone", () => {
 describe("a thread whose parent is not managed", () => {
   it("sends nothing, keeps the claim and leaves it to be retried", async () => {
     const guild = await guildInZone();
-    const { eventId, threadId } = await eventWithThread(guild);
+    const { eventId } = await eventWithThread(guild);
     const taskId = await task(guild, eventId, dateOffset(3));
-    threadParents.set(threadId, { guildId: guild.guildId, parentId: fakeId() });
+    // The forum is removed after the claim, just before the send's check reads it.
+    const forumRow = {
+      guild_id: guild.guildId,
+      channel_id: guild.channelId,
+      status: "removed",
+    };
+    dbGate = (url) => {
+      const { pathname, search } = new URL(url);
+      if (pathname.endsWith("/events") && search.includes("managed_channels")) {
+        return Response.json([{ managed_channels: forumRow }]);
+      }
+      return pathname.endsWith("/managed_channels")
+        ? Response.json([forumRow])
+        : undefined;
+    };
 
     const result = await run({ guilds: [guild] });
 
@@ -2031,7 +2045,7 @@ describe("the bot removed from the server", () => {
       0, 0,
     ]);
     expect(await channelStatus(guild)).toBe("active");
-    expect(posts()).toEqual([]);
+    expect(sent).toEqual([]);
 
     // Added back, and what waited goes out with its ping.
     discordGate = () => undefined;

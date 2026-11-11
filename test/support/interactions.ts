@@ -507,6 +507,11 @@ export function fakeDiscord(data: FakeDiscordData = {}): {
     },
     getGuildRoles: () => orFail(data.roles ?? []),
     getGuildChannels: () => orFail(data.channels ?? []),
+    getGuildChannel: (_guildId, channelId) =>
+      orFail(data.channels ?? []).then((channels) => {
+        const found = channels.find((channel) => channel.id === channelId);
+        return found ?? Promise.reject(new Error("canary discord failure"));
+      }),
     getGuildMemberRoleIds: () => orFail(data.botRoleIds ?? []),
     describeChannel: () => Promise.reject(new Error("canary discord failure")),
     listActiveThreads: () =>

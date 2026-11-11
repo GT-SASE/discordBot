@@ -162,7 +162,7 @@ No system is unhackable, and this one makes no such claim. The aim is to keep th
 
 - Text can only reach a message through one escaping boundary, enforced by types. Member names and nicknames are never rendered. Masked links and server invites are refused in task text, and plain URLs are escaped so that nothing can click them.
 - Every message sets `allowed_mentions` to the named users only, and suppresses link previews.
-- Posts go through one client, which checks the channel or its parent is a managed forum in that server. CI fails on a direct Discord call anywhere else.
+- Posts go through one client, which checks the channel or its parent is a managed forum in that server. For an event's post the parent is the forum stored on the event's row, so that check needs no request to Discord. CI fails on a direct Discord call anywhere else.
 - The bot is invited with `permissions=0` and given View Channel, Send Messages and Send Messages in Threads, per forum. It also gets whatever the server gives `@everyone`, so keep that role narrow.
 
 **Secrets and supply chain**

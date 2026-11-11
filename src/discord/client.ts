@@ -67,9 +67,9 @@ export type ThreadTarget = Readonly<{
   threadId: string;
 }>;
 /**
- * `kind` is a label for the caller. Only the IDs decide anything. Take them, and
- * any message ID, from a row loaded for this guild, never from a `custom_id` or
- * command input.
+ * `kind` is a label for the caller. Only the IDs decide anything: `kind` just picks
+ * which check is tried first. Take them, and any message ID, from a row loaded for
+ * this guild, never from a `custom_id` or command input.
  */
 export type SendTarget = ChannelTarget | ThreadTarget;
 
@@ -80,6 +80,13 @@ export type SendTarget = ChannelTarget | ThreadTarget;
  */
 export interface ManagedChannelCheck {
   isManaged(guildId: string, channelId: string): Promise<boolean>;
+  /**
+   * Whether the thread is the post of a live event of the guild whose forum is managed,
+   * going by the stored rows alone. `true` lets a send to the thread through without
+   * asking Discord for its parent. Any other answer settles nothing, and the client then
+   * makes the full check. An error thrown from here refuses the send.
+   */
+  isManagedEventThread?(guildId: string, threadId: string): Promise<boolean>;
 }
 
 export type DiscordFailure =
@@ -327,6 +334,8 @@ export interface DiscordClient {
   getGuildRoles(guildId: string): Promise<readonly GuildRole[]>;
   /** Every channel in the guild, as Discord reports it now. */
   getGuildChannels(guildId: string): Promise<readonly GuildChannel[]>;
+  /** One channel of the guild, as Discord reports it now. Posts nothing. */
+  getGuildChannel(guildId: string, channelId: string): Promise<GuildChannel>;
   /** Everything Discord reports about a channel or thread, whichever guild it is in. */
   describeChannel(channelId: string): Promise<ChannelSummary>;
   /** The guild's threads that are not archived, as Discord reports them now. */
@@ -676,6 +685,10 @@ export function createDiscordClient(
     guildId: string,
     channelId: string,
     remaining: Remaining,
+    ask: (
+      guildId: string,
+      channelId: string,
+    ) => Promise<boolean> = check.isManaged.bind(check),
   ): Promise<boolean> {
     let timer: NodeJS.Timeout | undefined;
     const expired = new Promise<never>((_, reject) => {
@@ -683,7 +696,7 @@ export function createDiscordClient(
     });
     try {
       const managed: unknown = await Promise.race([
-        check.isManaged(guildId, channelId),
+        ask(guildId, channelId),
         expired,
       ]);
       return managed === true;
@@ -756,14 +769,39 @@ export function createDiscordClient(
     });
   }
 
+  /** True only if the stored rows say so. The thread's ID is the only one used. */
+  async function isManagedEventThread(
+    operation: Operation,
+    guildId: string,
+    threadId: string,
+    remaining: Remaining,
+  ): Promise<boolean> {
+    const ask = check.isManagedEventThread?.bind(check);
+    return (
+      ask !== undefined &&
+      (await isManaged(operation, guildId, threadId, remaining, ask))
+    );
+  }
+
+  /**
+   * A post's thread is looked up among the events first, which takes one database read
+   * and no Discord request. Whatever that does not settle gets the full check.
+   */
   async function assertManaged(
     operation: Operation,
     guildId: string,
     channelId: string,
     remaining: Remaining,
+    kind: SendTarget["kind"],
   ): Promise<void> {
     if (!isSnowflake(guildId) || !isSnowflake(channelId)) {
       throw new DiscordClientError(operation, { kind: "invalid_target" });
+    }
+    if (
+      kind === "thread" &&
+      (await isManagedEventThread(operation, guildId, channelId, remaining))
+    ) {
+      return;
     }
     if (await isManaged(operation, guildId, channelId, remaining)) {
       return;
@@ -943,7 +981,13 @@ export function createDiscordClient(
       const json = serializeOutboundBody(body, "channel-message");
       const remaining = startBudget(operationBudgetMs);
       const channelId = targetChannelId(target);
-      await assertManaged(operation, target.guildId, channelId, remaining);
+      await assertManaged(
+        operation,
+        target.guildId,
+        channelId,
+        remaining,
+        target.kind,
+      );
       const route: Route = {
         method: "POST",
         path: `/channels/${channelId}/messages`,
@@ -964,7 +1008,13 @@ export function createDiscordClient(
       }
       const remaining = startBudget(operationBudgetMs);
       const channelId = targetChannelId(target);
-      await assertManaged(operation, target.guildId, channelId, remaining);
+      await assertManaged(
+        operation,
+        target.guildId,
+        channelId,
+        remaining,
+        target.kind,
+      );
       const route: Route = {
         method: "PATCH",
         path: `/channels/${channelId}/messages/${messageId}`,
@@ -980,7 +1030,7 @@ export function createDiscordClient(
     async reopenThread({ guildId, threadId }) {
       const operation = "reopen thread";
       const remaining = startBudget(operationBudgetMs);
-      await assertManaged(operation, guildId, threadId, remaining);
+      await assertManaged(operation, guildId, threadId, remaining, "thread");
       // No channelId: a refusal here means locked, and says nothing against the thread.
       await request(
         operation,
@@ -1105,6 +1155,16 @@ export function createDiscordClient(
     getGuildChannels(guildId) {
       return readGuild([guildId], `/guilds/${guildId}/channels`, (body) =>
         parseAll(body, parseChannel),
+      );
+    },
+
+    getGuildChannel(guildId, channelId) {
+      // Read as a guild read, so a refusal says nothing against sending to the channel.
+      return readGuild(
+        [guildId, channelId],
+        `/channels/${channelId}`,
+        (body) =>
+          field(body, "guild_id") === guildId ? parseChannel(body) : undefined,
       );
     },
 

@@ -13,6 +13,7 @@ import {
   parseManagedChannel,
   type EventRow,
   type ManagedChannel,
+  type ParsedRow,
 } from "./types.ts";
 import { isSnowflakeList, snowflakeList } from "./validate.ts";
 
@@ -33,6 +34,40 @@ export async function getManagedChannel(
       .eq("channel_id", channelId)
       .limit(1),
     parseManagedChannel,
+  );
+}
+
+function embeddedForum(raw: unknown): ParsedRow<ManagedChannel> {
+  return parseManagedChannel(
+    typeof raw === "object" &&
+      raw !== null &&
+      Object.hasOwn(raw, "managed_channels")
+      ? (raw as Record<string, unknown>).managed_channels
+      : undefined,
+  );
+}
+
+/**
+ * The forum row of the live event in this guild whose post is this thread, or null if
+ * the thread is no live event's post. Every way a post is attached checks that it is in
+ * the event's forum, and a thread never moves, so the row names the thread's parent.
+ */
+export async function getEventThreadForum(
+  db: DbClient,
+  { guildId, threadId }: { guildId: string; threadId: string },
+): Promise<DbResult<ManagedChannel | null>> {
+  if (!isSnowflake(guildId) || !isSnowflake(threadId)) {
+    return refused();
+  }
+  return oneOrNone(
+    await rest(db)
+      .from("events")
+      .select("managed_channels!inner(guild_id,channel_id,status)")
+      .eq("guild_id", guildId)
+      .eq("thread_id", threadId)
+      .is("deleted_at", null)
+      .limit(1),
+    embeddedForum,
   );
 }
 

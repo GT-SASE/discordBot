@@ -4,7 +4,10 @@ import { createDiscordClient } from "../discord/client.ts";
 import type { ManagedChannelCheck } from "../discord/client.ts";
 import { getDb, getInteractionDb } from "../db/client.ts";
 import type { DbClient } from "../db/client.ts";
-import { getManagedChannel } from "../db/managed-channels.ts";
+import {
+  getEventThreadForum,
+  getManagedChannel,
+} from "../db/managed-channels.ts";
 import type { RouterDependencies } from "./router.ts";
 
 /**
@@ -21,6 +24,16 @@ export function managedChannelCheck(db: DbClient): ManagedChannelCheck {
         throw new Error("managed channel check failed");
       }
       return row.value?.status === "active";
+    },
+    async isManagedEventThread(guildId, threadId) {
+      const forum = await getEventThreadForum(db, { guildId, threadId });
+      if (!forum.ok) {
+        // The error itself is not looked at, and is not passed on.
+        throw new Error("managed channel check failed");
+      }
+      return (
+        forum.value?.guild_id === guildId && forum.value.status === "active"
+      );
     },
   };
 }

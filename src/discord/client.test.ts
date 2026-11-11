@@ -613,6 +613,113 @@ describe("managed channel check", () => {
     expect(fetchMock).toHaveBeenCalledOnce();
   });
 
+  describe("an event's post, known from the stored rows", () => {
+    const eventThread = (answer: () => Promise<unknown>) => {
+      const isManagedEventThread = vi.fn(answer);
+      const isManaged = vi.fn((guildId: string, channelId: string) =>
+        check.isManaged(guildId, channelId),
+      );
+      return {
+        isManaged,
+        isManagedEventThread,
+        check: { isManaged, isManagedEventThread } as ManagedChannelCheck,
+      };
+    };
+
+    it.each([
+      [
+        "sends to",
+        (target: ThreadTarget, c: DiscordClient) =>
+          c.sendMessage(target, MESSAGE_BODY),
+      ],
+      [
+        "edits in",
+        (target: ThreadTarget, c: DiscordClient) =>
+          c.editMessage(target, MESSAGE, EDIT_BODY),
+      ],
+      [
+        "reopens",
+        (target: ThreadTarget, c: DiscordClient) => c.reopenThread(target),
+      ],
+    ])("%s it with one check and no lookup", async (_l, act) => {
+      serve();
+      const known = eventThread(() => Promise.resolve(true));
+
+      await act(THREAD_TARGET, client(known.check));
+
+      expect(known.isManagedEventThread).toHaveBeenCalledExactlyOnceWith(
+        GUILD,
+        THREAD,
+      );
+      expect(known.isManaged).not.toHaveBeenCalled();
+      expect(requests().map(({ method }) => method)).not.toContain("GET");
+    });
+
+    it.each([false, "yes", 1, undefined])(
+      "makes the full check when the rows answer %j",
+      async (answer) => {
+        serve({
+          channels: { [THREAD]: { type: 11, parent_id: UNMANAGED_CHANNEL } },
+        });
+        const known = eventThread(() => Promise.resolve(answer));
+
+        const failure = await failureOf(
+          client(known.check).sendMessage(THREAD_TARGET, MESSAGE_BODY),
+        );
+
+        expect(failure).toEqual({
+          kind: "unmanaged_target",
+          channelId: THREAD,
+        });
+        expect(requests().map(({ method, url }) => [method, url])).toEqual([
+          ["GET", `${API}/channels/${THREAD}`],
+        ]);
+        expect(writes()).toEqual([]);
+      },
+    );
+
+    it("refuses the send when the stored rows can't be read", async () => {
+      const known = eventThread(() =>
+        Promise.reject(new Error("database unavailable")),
+      );
+
+      const failure = await failureOf(
+        client(known.check).sendMessage(THREAD_TARGET, MESSAGE_BODY),
+      );
+
+      expect(failure.kind).toBe("check_failed");
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    it("is not asked about a channel", async () => {
+      serve();
+      const known = eventThread(() => Promise.resolve(true));
+
+      const failure = await failureOf(
+        client(known.check).sendMessage(UNMANAGED, MESSAGE_BODY),
+      );
+
+      expect(failure.kind).toBe("unmanaged_target");
+      expect(known.isManagedEventThread).not.toHaveBeenCalled();
+      expect(writes()).toEqual([]);
+    });
+
+    it("is not asked about an interaction's channel", async () => {
+      serve({
+        channels: { [THREAD]: { type: 11, parent_id: UNMANAGED_CHANNEL } },
+      });
+      const known = eventThread(() => Promise.resolve(true));
+      const inThread = interactionIn({ id: THREAD, type: 11 });
+
+      const failure = await failureOf(
+        client(known.check).replyToInteraction(inThread, REPLY_BODY),
+      );
+
+      expect(failure.kind).toBe("unmanaged_target");
+      expect(known.isManagedEventThread).not.toHaveBeenCalled();
+    });
+  });
+
   it("refuses the send when the check itself fails", async () => {
     const broken: ManagedChannelCheck = {
       isManaged: () => Promise.reject(new Error("database unavailable")),
@@ -2130,6 +2237,54 @@ describe("guild reads", () => {
       },
     ]);
     expect(requests()[0]?.url).toBe(`${API}/guilds/${GUILD}/channels`);
+  });
+
+  it("reads one channel of the guild, with its overwrites", async () => {
+    answer({ ...CHANNEL_ROW, guild_id: GUILD });
+
+    await expect(
+      client().getGuildChannel(GUILD, CHANNEL_ROW.id),
+    ).resolves.toEqual({
+      id: CHANNEL_ROW.id,
+      name: "events",
+      type: 15,
+      overwrites: [{ id: GUILD, type: 0, allow: 0n, deny: 1024n }],
+    });
+    expect(requests()[0]?.url).toBe(`${API}/channels/${CHANNEL_ROW.id}`);
+  });
+
+  it.each([
+    ["in another guild", { ...CHANNEL_ROW, guild_id: OTHER_GUILD }],
+    ["in no guild", CHANNEL_ROW],
+    [
+      "with no overwrites",
+      { ...CHANNEL_ROW, guild_id: GUILD, permission_overwrites: undefined },
+    ],
+  ])("refuses one channel %s", async (_label, body) => {
+    answer(body);
+
+    expect(
+      await failureOf(client().getGuildChannel(GUILD, CHANNEL_ROW.id)),
+    ).toEqual({ kind: "invalid_response", status: 200 });
+  });
+
+  it("does not let a refused read stop sends to the channel", async () => {
+    answer({ code: 50001 }, 403);
+    const discord = client();
+
+    expect(
+      (await failureOf(discord.getGuildChannel(GUILD, MANAGED_FORUM))).kind,
+    ).toBe("api");
+    serve();
+    await discord.sendMessage(MANAGED, MESSAGE_BODY);
+    expect(writes()).toHaveLength(1);
+  });
+
+  it("refuses a malformed channel ID before any request", async () => {
+    expect(await failureOf(client().getGuildChannel(GUILD, "../1"))).toEqual({
+      kind: "invalid_target",
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("reads a member's role IDs", async () => {
