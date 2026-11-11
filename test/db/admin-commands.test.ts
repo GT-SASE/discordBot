@@ -329,7 +329,7 @@ describe("admin commands on the real functions", () => {
         editMessage: (_target, messageId, body) => {
           posted.push({
             messageId,
-            content: (body.toJSON() as { content: unknown }).content,
+            content: (body.payload as { content: unknown }).content,
           });
           return Promise.resolve({ id: messageId });
         },

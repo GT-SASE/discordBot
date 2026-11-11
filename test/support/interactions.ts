@@ -502,7 +502,7 @@ export function fakeDiscord(data: FakeDiscordData = {}): {
     sendFollowUp: refuse,
     respondEphemerally: refuse,
     editEphemeralReply: (_interaction, body) => {
-      edits.push(body.toJSON() as (typeof edits)[number]);
+      edits.push(body.payload as (typeof edits)[number]);
       return Promise.resolve({ id: testSnowflake() });
     },
     getGuildRoles: () => orFail(data.roles ?? []),
@@ -545,7 +545,7 @@ export async function run(
   const outcome = await router.handle(interaction, verified, dependencies);
   await outcome.after?.();
   return {
-    reply: outcome.reply.toJSON() as Ran["reply"],
+    reply: outcome.reply.payload as Ran["reply"],
     deferred: outcome.after !== undefined,
   };
 }

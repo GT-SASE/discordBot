@@ -17,7 +17,7 @@ const CONFIG = {
 };
 
 function sent(input: ReturnType<typeof handoffMessage>) {
-  return channelMessage(input).toJSON() as {
+  return channelMessage(input).payload as {
     content: string;
     allowed_mentions: unknown;
   };

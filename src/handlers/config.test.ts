@@ -1713,7 +1713,7 @@ describe("adding a forum back", () => {
 
     expect(state.channels[0]?.status).toBe("active");
     expect(edit).toHaveBeenCalledTimes(1);
-    const body = edit.mock.calls[0]?.[2].toJSON() as { content: string };
+    const body = edit.mock.calls[0]?.[2].payload as { content: string };
     expect(body.content).toContain("Status: Closed");
     expect(edits[0]?.content).toContain(
       `Added <#${FORUM}>. Its 1 event post(s) are up to date.`,

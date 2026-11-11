@@ -954,7 +954,7 @@ describe("private replies", () => {
   });
 
   it("uses one fixed refusal that says what authorize says", () => {
-    expect(refusal().toJSON()).toEqual(FIXED_REFUSAL);
+    expect(refusal().payload).toEqual(FIXED_REFUSAL);
   });
 });
 

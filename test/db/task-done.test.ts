@@ -67,7 +67,7 @@ describe("marking tasks done and reading them, on the real schema", () => {
         content: safe`Task`,
         mentionUserIds: [],
         components: [markDoneRow(UNKNOWN_ID)],
-      }).toJSON() as Notice;
+      }).payload as Notice;
       expect(body.components[0]?.components[0]).toMatchObject({
         custom_id: `task.done:${UNKNOWN_ID}`,
         label: "\u2705 Mark done",

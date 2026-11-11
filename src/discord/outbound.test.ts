@@ -19,7 +19,6 @@ import {
   pong,
   roleSelect,
   serializeDirectResponse,
-  serializeOutboundBody,
   stringSelect,
   textInputRow,
   threadCreate,
@@ -67,7 +66,7 @@ const HOSTILE_CORPUS = [
 type Wire = Record<string, unknown>;
 
 function wire(body: OutboundBody<OutboundKind>): Wire {
-  return JSON.parse(JSON.stringify(body)) as Wire;
+  return JSON.parse(JSON.stringify(body.payload)) as Wire;
 }
 
 function hasLiveSyntax(text: string): boolean {
@@ -374,18 +373,6 @@ describe("interaction responses", () => {
     expect(isEphemeralInitialResponse(pong())).toBe(false);
   });
 
-  it("isEphemeralInitialResponse refuses anything not built here", () => {
-    const forged = {
-      kind: "direct-response" as const,
-      type: 4,
-      data: { flags: 64 },
-      toJSON: () => ({ type: 4, data: { flags: 64 } }),
-    };
-
-    // @ts-expect-error A plain object must not be accepted as a body.
-    expect(isEphemeralInitialResponse(forged)).toBe(false);
-  });
-
   it("isEphemeralInitialResponse ignores other body kinds", () => {
     const followed = followUp({ ...text, ephemeral: true });
 
@@ -447,25 +434,10 @@ describe("serializeDirectResponse", () => {
     }
   });
 
-  it("refuses a forged body, whatever it claims", () => {
-    const forged = {
-      kind: "direct-response" as const,
-      toJSON: () => ({ type: 4, data: { flags: 64, content: "@everyone" } }),
-    };
+  it("reads the payload, not the kind", () => {
+    const body = { ...deferredReply(), kind: "direct-response" as const };
 
-    // @ts-expect-error A plain object must not be accepted as a body.
-    expect(() => serializeDirectResponse(forged)).toThrow(OutboundBodyError);
-  });
-
-  it("does not trust the kind of a public body", () => {
-    const body = deferredReply();
-
-    expect(() => {
-      (body as { kind: string }).kind = "direct-response";
-    }).toThrow(TypeError);
-    expect(() => serializeDirectResponse(body as never)).toThrow(
-      OutboundBodyError,
-    );
+    expect(() => serializeDirectResponse(body)).toThrow(OutboundBodyError);
   });
 });
 
@@ -805,22 +777,6 @@ describe("components", () => {
     ).toThrow(OutboundBodyError);
   });
 
-  it("refuses a component not made here", () => {
-    const forged = {
-      kind: "row" as const,
-      toJSON: () => ({ type: 2, style: 5, url: "https://evil.example" }),
-    };
-
-    expect(() =>
-      channelMessage({
-        content: safe`hi`,
-        mentionUserIds: [],
-        // @ts-expect-error A plain object must not be accepted as a component.
-        components: [forged],
-      }),
-    ).toThrow(OutboundBodyError);
-  });
-
   it("has no way to make a link button", () => {
     const row = actionRow(
       button({
@@ -838,103 +794,5 @@ describe("components", () => {
     );
 
     expect(JSON.stringify(body)).not.toContain("evil");
-  });
-});
-
-describe("OutboundBody", () => {
-  const safeBody = () =>
-    channelMessage({ content: safe`safe`, mentionUserIds: [] });
-  const everyone = {
-    content: "@everyone",
-    allowed_mentions: { parse: ["everyone"] },
-  };
-
-  it("cannot be changed through its JSON form", () => {
-    const body = safeBody();
-
-    const copy = body.toJSON() as { allowed_mentions: { parse: string[] } };
-    copy.allowed_mentions.parse.push("everyone");
-
-    expect(JSON.parse(serializeOutboundBody(body, "channel-message"))).toEqual({
-      content: "safe",
-      flags: 4,
-      allowed_mentions: { parse: [], users: [] },
-    });
-  });
-
-  it("is not satisfied by a plain object, in the types or at runtime", () => {
-    const forged = {
-      kind: "channel-message" as const,
-      ...everyone,
-      toJSON: () => null,
-    };
-
-    expect(() =>
-      // @ts-expect-error A plain object must not be accepted as a body.
-      serializeOutboundBody(forged, "channel-message"),
-    ).toThrow(OutboundBodyError);
-  });
-
-  it("cannot be forged through body.constructor", () => {
-    const Forge = safeBody().constructor as new (
-      ...args: unknown[]
-    ) => OutboundBody<"channel-message">;
-
-    for (const args of [
-      ["channel-message", everyone],
-      [Symbol("OutboundBody"), "channel-message", everyone],
-      [undefined, "channel-message", everyone],
-    ]) {
-      expect(() => new Forge(...args)).toThrow(OutboundBodyError);
-    }
-  });
-
-  it("cannot be forged through a subclass", () => {
-    const Parent = safeBody().constructor as new (
-      ...args: unknown[]
-    ) => OutboundBody<"channel-message">;
-    class Forged extends Parent {}
-
-    expect(() => new Forged("channel-message", everyone)).toThrow(
-      OutboundBodyError,
-    );
-    expect(() =>
-      Reflect.construct(Parent, ["channel-message", everyone], Forged),
-    ).toThrow(OutboundBodyError);
-  });
-
-  it("does not let its kind be rewritten", () => {
-    const body = safeBody();
-
-    expect(Object.isFrozen(body)).toBe(true);
-    expect(() => {
-      (body as { kind: string }).kind = "message-edit";
-    }).toThrow(TypeError);
-    expect(body.kind).toBe("channel-message");
-  });
-
-  it("cannot have its class or prototype patched", () => {
-    const body = safeBody();
-
-    expect(Object.isFrozen(body.constructor)).toBe(true);
-    expect(Object.isFrozen(Object.getPrototypeOf(body))).toBe(true);
-  });
-
-  it("is refused when serialized as another kind", () => {
-    const edit = messageEdit({ content: safe`edit`, mentionUserIds: [] });
-
-    expect(() =>
-      // @ts-expect-error An edit body must not be accepted as a new message.
-      serializeOutboundBody(edit, "channel-message"),
-    ).toThrow(OutboundBodyError);
-  });
-
-  it("keeps each kind of body apart in the types", () => {
-    const edit = messageEdit({ content: safe`edit`, mentionUserIds: [] });
-
-    // @ts-expect-error An edit body must not be accepted as a new message.
-    const message: OutboundBody<"channel-message"> = edit;
-
-    expect(message.kind).toBe("message-edit");
   });
 });

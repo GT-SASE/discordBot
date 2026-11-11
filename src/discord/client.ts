@@ -20,10 +20,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { parsePermissions } from "../lib/actor.ts";
 import { ConfigError } from "../lib/config-error.ts";
 import { isSnowflake } from "../lib/snowflake.ts";
-import {
-  isEphemeralInitialResponse,
-  serializeOutboundBody,
-} from "./outbound.ts";
+import { isEphemeralInitialResponse } from "./outbound.ts";
 import type { OutboundBody } from "./outbound.ts";
 import { interactionToken, isThreadChannelType } from "./verify.ts";
 import type { VerifiedInteraction } from "./verify.ts";
@@ -978,7 +975,7 @@ export function createDiscordClient(
 
     async sendMessage(target, body) {
       const operation = "send message";
-      const json = serializeOutboundBody(body, "channel-message");
+      const json = JSON.stringify(body.payload);
       const remaining = startBudget(operationBudgetMs);
       const channelId = targetChannelId(target);
       await assertManaged(
@@ -1002,7 +999,7 @@ export function createDiscordClient(
 
     async editMessage(target, messageId, body) {
       const operation = "edit message";
-      const json = serializeOutboundBody(body, "message-edit");
+      const json = JSON.stringify(body.payload);
       if (!isSnowflake(messageId)) {
         throw new DiscordClientError(operation, { kind: "invalid_target" });
       }
@@ -1042,7 +1039,7 @@ export function createDiscordClient(
 
     async createThread(parent, body) {
       const operation = "create thread";
-      const json = serializeOutboundBody(body, "thread-create");
+      const json = JSON.stringify(body.payload);
       const { kind, guildId, channelId } = parent;
       if (
         (kind as string) !== "channel" ||
@@ -1090,7 +1087,7 @@ export function createDiscordClient(
 
     async replyToInteraction(interaction, body) {
       const operation = "reply to interaction";
-      const json = serializeOutboundBody(body, "checked-response");
+      const json = JSON.stringify(body.payload);
       const route = callbackRoute(operation, interaction);
       const remaining = startBudget(callbackBudgetMs);
       await assertInteractionManaged(operation, interaction, remaining);
@@ -1099,7 +1096,7 @@ export function createDiscordClient(
 
     async editInteractionReply(interaction, body) {
       const operation = "edit interaction reply";
-      const json = serializeOutboundBody(body, "message-edit");
+      const json = JSON.stringify(body.payload);
       const path = originalPath(operation, interaction);
       const remaining = startBudget(operationBudgetMs);
       await assertInteractionManaged(operation, interaction, remaining);
@@ -1108,7 +1105,7 @@ export function createDiscordClient(
 
     async sendFollowUp(interaction, body) {
       const operation = "send follow-up";
-      const json = serializeOutboundBody(body, "follow-up");
+      const json = JSON.stringify(body.payload);
       const token = tokenOf(operation, interaction);
       const remaining = startBudget(operationBudgetMs);
       await assertInteractionManaged(operation, interaction, remaining);
@@ -1125,7 +1122,7 @@ export function createDiscordClient(
 
     async respondEphemerally(interaction, body) {
       const operation = "reply to interaction";
-      const json = serializeOutboundBody(body, "direct-response");
+      const json = JSON.stringify(body.payload);
       if (!isEphemeralInitialResponse(body)) {
         throw new DiscordClientError(operation, { kind: "not_ephemeral" });
       }
@@ -1135,7 +1132,7 @@ export function createDiscordClient(
 
     async editEphemeralReply(interaction, body) {
       const operation = "edit interaction reply";
-      const json = serializeOutboundBody(body, "message-edit");
+      const json = JSON.stringify(body.payload);
       const path = originalPath(operation, interaction);
       const remaining = startBudget(operationBudgetMs);
       const original = await readOriginal(operation, path, remaining);

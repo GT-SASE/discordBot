@@ -106,7 +106,7 @@ describe("renderOverview with the event's workflow", () => {
   const NO_TASKS = { rows: [], truncated: false };
 
   function ids(input: ReturnType<typeof renderOverview>): string[] {
-    const body = channelMessage(input).toJSON() as {
+    const body = channelMessage(input).payload as {
       components?: { components: { custom_id: string }[] }[];
     };
     return (body.components ?? []).flatMap((row) =>
@@ -366,7 +366,7 @@ describe("refreshOverview", () => {
         duringEdit = undefined;
         edited.push({
           messageId,
-          body: body.toJSON() as Record<string, unknown>,
+          body: body.payload as Record<string, unknown>,
         });
         return Promise.resolve({ id: messageId });
       },
@@ -376,7 +376,7 @@ describe("refreshOverview", () => {
             new DiscordClientError("send message", sendFails),
           );
         }
-        sent.push({ target, body: body.toJSON() as Record<string, unknown> });
+        sent.push({ target, body: body.payload as Record<string, unknown> });
         return Promise.resolve({ id: OVERVIEW });
       },
     } as Partial<DiscordClient> as DiscordClient;

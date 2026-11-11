@@ -110,7 +110,7 @@ describe("hostile task text", () => {
       throw new Error("expected a message");
     }
     expect(message.mentionUserIds).toEqual([USER]);
-    expect(channelMessage(message).toJSON()).toMatchObject({
+    expect(channelMessage(message).payload).toMatchObject({
       allowed_mentions: { parse: [], users: [USER] },
       flags: 4,
     });
@@ -268,7 +268,7 @@ describe("the Mark done button", () => {
       content: safe`x`,
       mentionUserIds: [],
       components: [row],
-    }).toJSON() as {
+    }).payload as {
       components: { components: { custom_id: string; label: string }[] }[];
     };
     return body.components[0]?.components[0];

@@ -26,7 +26,6 @@ import {
   followUp,
   interactionReply,
   messageEdit,
-  OutboundBodyError,
   pong,
   threadCreate,
   updateMessage,
@@ -302,37 +301,6 @@ describe("requests", () => {
       `${API}/webhooks/${APP_ID}/${ENCODED_TOKEN}/messages/@original`,
     );
     expect(request?.headers.Authorization).toBeUndefined();
-  });
-
-  it("refuses a body that did not come from the builders", async () => {
-    const forged = { kind: "channel-message" as const, toJSON: () => null };
-
-    await expect(
-      // @ts-expect-error A plain object must not be accepted as a body.
-      client().sendMessage(MANAGED, forged),
-    ).rejects.toThrow(OutboundBodyError);
-    expect(fetchMock).not.toHaveBeenCalled();
-  });
-
-  it("refuses a body of the wrong kind at runtime", async () => {
-    await expect(
-      // @ts-expect-error An edit body must not be accepted as a new message.
-      client().sendMessage(MANAGED, EDIT_BODY),
-    ).rejects.toThrow(OutboundBodyError);
-    expect(fetchMock).not.toHaveBeenCalled();
-  });
-
-  it("refuses a body whose kind was rewritten", async () => {
-    const body = messageEdit({ content: safe`text`, mentionUserIds: [] });
-
-    expect(() => {
-      (body as { kind: string }).kind = "channel-message";
-    }).toThrow(TypeError);
-    await expect(
-      // @ts-expect-error An edit body must not be accepted as a new message.
-      client().sendMessage(MANAGED, body),
-    ).rejects.toThrow(OutboundBodyError);
-    expect(fetchMock).not.toHaveBeenCalled();
   });
 });
 
@@ -972,9 +940,9 @@ describe("ephemeral responses", () => {
       updateMessage({ content: safe`hi`, mentionUserIds: [] }),
     ],
   ])("refuses %s, even in a managed channel", async (_label, body) => {
-    await expect(
-      client().respondEphemerally(IN_MANAGED, body as never),
-    ).rejects.toThrow(OutboundBodyError);
+    expect(
+      await failureOf(client().respondEphemerally(IN_MANAGED, body as never)),
+    ).toEqual({ kind: "not_ephemeral" });
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
@@ -982,29 +950,6 @@ describe("ephemeral responses", () => {
     expect(
       await failureOf(client().respondEphemerally(IN_UNMANAGED, pong())),
     ).toEqual({ kind: "not_ephemeral" });
-    expect(fetchMock).not.toHaveBeenCalled();
-  });
-
-  it("refuses a body of another kind whose kind is claimed", async () => {
-    const edit = messageEdit({ content: safe`text`, mentionUserIds: [] });
-
-    await expect(
-      // @ts-expect-error An edit body is not a first response.
-      client().respondEphemerally(IN_UNMANAGED, edit),
-    ).rejects.toThrow(OutboundBodyError);
-    expect(fetchMock).not.toHaveBeenCalled();
-  });
-
-  it("refuses a forged ephemeral body", async () => {
-    const forged = {
-      kind: "interaction-reply" as const,
-      toJSON: () => ({ type: 4, data: { flags: 64, content: "@everyone" } }),
-    };
-
-    await expect(
-      // @ts-expect-error A plain object must not be accepted as a body.
-      client().respondEphemerally(IN_UNMANAGED, forged),
-    ).rejects.toThrow(OutboundBodyError);
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
@@ -1043,14 +988,6 @@ describe("ephemeral responses", () => {
 
     expect(failure.kind).toBe("unmanaged_target");
     expect(isManaged).toHaveBeenCalledWith(GUILD, UNMANAGED_CHANNEL);
-    expect(fetchMock).not.toHaveBeenCalled();
-  });
-
-  it("does not take an ephemeral body on the checked path", async () => {
-    await expect(
-      // @ts-expect-error An ephemeral body goes through respondEphemerally.
-      client().replyToInteraction(IN_MANAGED, EPHEMERAL_BODY),
-    ).rejects.toThrow(OutboundBodyError);
     expect(fetchMock).not.toHaveBeenCalled();
   });
 });

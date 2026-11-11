@@ -114,7 +114,7 @@ describe("the checklist", () => {
     const body = channelMessage({
       content: safe`${checklistLines(workflow([], [{ kind: "budget_sheet", user_id: person }]))[1] ?? safe`-`}`,
       mentionUserIds: [],
-    }).toJSON() as { allowed_mentions: unknown };
+    }).payload as { allowed_mentions: unknown };
 
     expect(body.allowed_mentions).toEqual({ parse: [], users: [] });
   });
@@ -126,7 +126,7 @@ describe("the step buttons", () => {
       content: safe`x`,
       mentionUserIds: [],
       components: stepButtonRows(flow),
-    }).toJSON() as { components: { components: { custom_id: string }[] }[] };
+    }).payload as { components: { components: { custom_id: string }[] }[] };
     return body.components.flatMap((row) =>
       row.components.map((part) => part.custom_id),
     );

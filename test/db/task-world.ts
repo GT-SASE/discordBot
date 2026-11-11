@@ -113,7 +113,7 @@ export function fakeClient(overrides: Partial<DiscordClient> = {}) {
       notices.push({
         channelId:
           target.kind === "thread" ? target.threadId : target.channelId,
-        ...(body.toJSON() as Omit<Notice, "channelId">),
+        ...(body.payload as Omit<Notice, "channelId">),
       });
       return Promise.resolve({ id: testSnowflake() });
     },
