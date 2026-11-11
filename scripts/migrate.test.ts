@@ -73,12 +73,48 @@ describe("migrate", () => {
     const failure = await migrate(db, files).catch((error: unknown) => error);
 
     expect(failure).toBeInstanceOf(MigrationError);
-    expect((failure as Error).message).toBe("0002_test.sql failed with 22P02");
+    expect((failure as Error).message).toBe(
+      "0002_test.sql failed with 22P02 at position 40, line 1, in the statement starting: SELECT 'secret-value'::int;",
+    );
+    // The server's message, which can quote row data, is never passed on.
+    expect((failure as Error).message).not.toContain("invalid input");
     expect(await versions()).toEqual(["0001"]);
     const { rows } = await db.query(
       "SELECT to_regclass('public.b') IS NULL AS absent",
     );
     expect(rows).toEqual([{ absent: true }]);
+  });
+
+  it("names the line and statement of a failure inside a longer file", async () => {
+    const sql = [
+      "-- Two tables; the second is wrong.",
+      "CREATE TABLE public.a (id int);",
+      "",
+      "/* a comment; with a semicolon */",
+      "CREATE TABLE public.b (",
+      "  note text DEFAULT 'a;b',",
+      "  id nosuchtype",
+      ");",
+    ].join("\r\n");
+
+    const failure = await migrate(db, [migration("0001", sql)]).catch(
+      (error: unknown) => error,
+    );
+
+    expect((failure as Error).message).toMatch(
+      /^0001_test\.sql failed with 42704 at position \d+, line 7, in the statement starting: CREATE TABLE public\.b \($/,
+    );
+  });
+
+  it("gives only the code when Postgres gives no position", async () => {
+    const failure = await migrate(db, [
+      migration(
+        "0001",
+        "DO $$ BEGIN RAISE EXCEPTION 'row text' USING ERRCODE = 'P0001'; END $$;",
+      ),
+    ]).catch((error: unknown) => error);
+
+    expect((failure as Error).message).toBe("0001_test.sql failed with P0001");
   });
 
   it("refuses a database that has versions the checkout lacks", async () => {
@@ -143,7 +179,9 @@ describe("migrate", () => {
     ]).catch((error: unknown) => error);
 
     expect(failure).toBeInstanceOf(MigrationError);
-    expect((failure as Error).message).toBe("0001_test.sql failed with 22P02");
+    expect((failure as Error).message).toMatch(
+      /^0001_test\.sql failed with 22P02 at position/,
+    );
   });
 
   it("refuses to finish while bot_app can still create temp tables", async () => {
