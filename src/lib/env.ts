@@ -4,59 +4,59 @@
  * it uses. Errors name the setting and never include its value.
  */
 
+import { z } from "zod";
 import { ConfigError } from "./config-error.ts";
 import { isSnowflake } from "./snowflake.ts";
 
-const ED25519_PUBLIC_KEY_HEX = /^[0-9a-f]{64}$/i;
-const BOT_TOKEN = /^[\x21-\x7e]+$/;
+const DiscordId = z.string().refine(isSnowflake);
+// Anything else cannot go in a header, and HTTP clients quote the rejected header
+// in their errors, which would print the token.
+const BotToken = z.string().regex(/^[\x21-\x7e]+$/);
+const PublicKey = z.string().regex(/^[0-9a-f]{64}$/i);
+/** A malformed entry fails the whole list, so a typo cannot widen access. */
+const GuildIds = z
+  .string()
+  .transform((list) => list.split(",").map((id) => id.trim()))
+  .pipe(z.array(DiscordId))
+  .transform((ids): ReadonlySet<string> => new Set(ids));
 
-function readRequired(name: string): string {
+/** Reads a setting. Zod's own messages are not used, so no error can quote a value. */
+function read<T>(
+  name: string,
+  schema: z.ZodType<T, string>,
+  problem: string,
+): T {
   const value = process.env[name]?.trim();
   if (value === undefined || value === "") {
     throw new ConfigError(name, "must be set");
   }
-  return value;
+  const parsed = schema.safeParse(value);
+  if (!parsed.success) {
+    throw new ConfigError(name, problem);
+  }
+  return parsed.data;
 }
 
 export function getDiscordAppId(): string {
-  const value = readRequired("DISCORD_APP_ID");
-  if (!isSnowflake(value)) {
-    throw new ConfigError("DISCORD_APP_ID", "must be a Discord ID");
-  }
-  return value;
+  return read("DISCORD_APP_ID", DiscordId, "must be a Discord ID");
 }
 
 export function getDiscordBotToken(): string {
-  const value = readRequired("DISCORD_BOT_TOKEN");
-  // Anything else cannot go in a header, and HTTP clients quote the rejected
-  // header in their errors, which would print the token.
-  if (!BOT_TOKEN.test(value)) {
-    throw new ConfigError(
-      "DISCORD_BOT_TOKEN",
-      "must contain only printable ASCII with no spaces",
-    );
-  }
-  return value;
+  return read(
+    "DISCORD_BOT_TOKEN",
+    BotToken,
+    "must contain only printable ASCII with no spaces",
+  );
 }
 
 export function getDiscordPublicKey(): string {
-  const value = readRequired("DISCORD_PUBLIC_KEY");
-  if (!ED25519_PUBLIC_KEY_HEX.test(value)) {
-    throw new ConfigError("DISCORD_PUBLIC_KEY", "must be 64 hex characters");
-  }
-  return value;
+  return read("DISCORD_PUBLIC_KEY", PublicKey, "must be 64 hex characters");
 }
 
-/** A malformed entry fails the whole list, so a typo cannot widen access. */
 export function getAllowedGuildIds(): ReadonlySet<string> {
-  const ids = readRequired("ALLOWED_GUILD_IDS")
-    .split(",")
-    .map((id) => id.trim());
-  if (!ids.every(isSnowflake)) {
-    throw new ConfigError(
-      "ALLOWED_GUILD_IDS",
-      "must be a comma-separated list of Discord IDs",
-    );
-  }
-  return new Set(ids);
+  return read(
+    "ALLOWED_GUILD_IDS",
+    GuildIds,
+    "must be a comma-separated list of Discord IDs",
+  );
 }
