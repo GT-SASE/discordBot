@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 // `npm run lint:lockfile`.
 
 // Every runtime dependency sees all the secrets, and a lookalike name is a known
-// attack, so adding one should be a visible decision in review.
+// attack, so adding one should be a deliberate change that this test makes visible.
 const RUNTIME = [
   "@supabase/postgrest-js",
   "@vercel/functions",
