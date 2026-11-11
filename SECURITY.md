@@ -182,9 +182,10 @@ Do this only after rotating.
 - Confirm that history is clean:
 
 ```sh
-.tools/gitleaks git . --config .gitleaks.toml --redact --ignore-gitleaks-allow --log-opts="--all -m --text --no-color"
+.tools/gitleaks git . --config .gitleaks.toml --redact --ignore-gitleaks-allow --no-banner --log-opts="--all -m --text --no-color"
+.tools/gitleaks git . --config .gitleaks-custom.toml --redact --ignore-gitleaks-allow --no-banner --log-opts="--all -m --text --no-color"
 ```
 
 ### 4. Learn from it
 
-Record what leaked, how and when, without repeating the value. If the scanner missed it, add a rule to `.gitleaks.toml` and check that it fires on a sample built at runtime, never a real value.
+Record what leaked, how and when, without repeating the value. If the scanner missed it, add a rule to `.gitleaks-custom.toml` and check that it fires on a sample built at runtime, never a real value.

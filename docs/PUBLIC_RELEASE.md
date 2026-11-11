@@ -43,7 +43,9 @@ git fetch origin '+refs/pull/*:refs/remotes/pull/*'
 npm ci --ignore-scripts
 npm run gitleaks:install
 git rev-list --count --all
-.tools/gitleaks git . --config .gitleaks.toml --redact --ignore-gitleaks-allow --log-opts="--all -m --text --no-color"
+test ! -e .gitleaksignore
+.tools/gitleaks git . --config .gitleaks.toml --redact --ignore-gitleaks-allow --no-banner --log-opts="--all -m --text --no-color"
+.tools/gitleaks git . --config .gitleaks-custom.toml --redact --ignore-gitleaks-allow --no-banner --log-opts="--all -m --text --no-color"
 ```
 
 **Expect:** `no leaks found`, and a commit count above your branch's, which shows the pull request refs were included.
@@ -72,7 +74,8 @@ gh pr list --state all --limit 1000 --json number,title,body,comments,reviews > 
 gh api --paginate 'repos/{owner}/{repo}/pulls/comments' > ../release-text/review-comments.json
 gh api --paginate 'repos/{owner}/{repo}/comments' > ../release-text/commit-comments.json
 gh issue list --state all --limit 1000 --json number,title,body,comments > ../release-text/issues.json
-.tools/gitleaks dir ../release-text --config .gitleaks.toml --redact
+.tools/gitleaks dir ../release-text --config .gitleaks.toml --redact --ignore-gitleaks-allow --no-banner
+.tools/gitleaks dir ../release-text --config .gitleaks-custom.toml --redact --ignore-gitleaks-allow --no-banner
 ```
 
 **Expect:** the scan reports no leaks. Then **read** all of this by hand. Look for:
@@ -90,7 +93,7 @@ gh run list --limit 200 --json databaseId,name,createdAt > ../release-text/runs.
 gh run view <run-id> --log > ../release-text/run-<run-id>.log
 ```
 
-Read a sample of each workflow, and every failed run. Then scan the folder again with the `gitleaks dir` command. Also check workflow artifacts, the wiki, releases, repository secrets' names, deployments and Dependabot's pull requests.
+Read a sample of each workflow, and every failed run. Then scan the folder again with both `gitleaks dir` commands. Also check workflow artifacts, the wiki, releases, repository secrets' names, deployments and Dependabot's pull requests.
 
 If you find something that needs removing, editing a pull request body does not clear its edit history. Publish from a new repository.
 
@@ -189,10 +192,12 @@ Use this if a scan found anything, if you found text you do not want public, or 
 
    ```sh
    git log --format='%an %ae %cn %ce'
-   ../<old-clone>/.tools/gitleaks dir . --config .gitleaks.toml --redact
+   test ! -e .gitleaksignore
+   ../<old-clone>/.tools/gitleaks dir . --config .gitleaks.toml --redact --ignore-gitleaks-allow --no-banner
+   ../<old-clone>/.tools/gitleaks dir . --config .gitleaks-custom.toml --redact --ignore-gitleaks-allow --no-banner
    ```
 
-   **Expect:** one line from `git log`, with your username and noreply address in both places, and no leaks from the scan.
+   **Expect:** one line from `git log`, with your username and noreply address in both places, and no leaks from either scan.
 
    **If the identity is wrong, or a scan reports an email address under `.git/`:** run `rm -rf .git` here and go back to `git init` in step 3. Do not amend, because the reflog keeps the old address.
 
