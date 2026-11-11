@@ -89,7 +89,7 @@ function privateReplies(): number {
 function eventInserts(): string[] {
   return world
     .dbRequests()
-    .filter((request) => /^POST .*\/events/.test(request));
+    .filter((request) => request.startsWith('SQL insert into "events"'));
 }
 
 function postTitles(): unknown[] {
@@ -888,7 +888,7 @@ describe("/event create", () => {
 
       it("posts nothing if the attempt can't be taken", async () => {
         await world.addManagedForum();
-        world.failDb(/rpc\/claim_event_post_attempt/);
+        world.failDb(/public\.claim_event_post_attempt\(/);
 
         await world.send(create());
 
@@ -1019,10 +1019,10 @@ describe("/event create", () => {
 
   describe("when the database fails", () => {
     it.each([
-      ["the claim", /rpc\/claim_interaction/],
+      ["the claim", /public\.claim_interaction\(/],
       ["reading the forums", /^SQL select .*"managed_channels"/],
       ["looking for the event", /^SQL select .* from "events"/],
-      ["the insert", /POST .*events/],
+      ["the insert", /^SQL insert into "events"/],
     ])("posts nothing and says so when %s fails", async (_label, pattern) => {
       await world.addManagedForum();
       world.failDb(pattern);
@@ -1038,7 +1038,7 @@ describe("/event create", () => {
 
     it("retries saving the post through a brief failure", async () => {
       await world.addManagedForum();
-      world.failDb(/PATCH .*events/, 500, 2);
+      world.failDb(/^SQL update "events"/, 500, 2);
 
       await world.send(create());
 
@@ -1048,7 +1048,7 @@ describe("/event create", () => {
 
     it("names and logs the post when it can't be saved", async () => {
       await world.addManagedForum();
-      world.failDb(/PATCH .*events/);
+      world.failDb(/^SQL update "events"/);
 
       await world.send(create());
 
@@ -1069,7 +1069,7 @@ describe("/event create", () => {
 
     it("attaches that post when the same command runs again", async () => {
       await world.addManagedForum();
-      world.failDb(/PATCH .*events/, 500, 3);
+      world.failDb(/^SQL update "events"/, 500, 3);
 
       await world.send(create());
       await world.send(create());
@@ -1082,7 +1082,7 @@ describe("/event create", () => {
 
     it("attaches that post when /event link runs inside it", async () => {
       const forum = await world.addManagedForum();
-      world.failDb(/PATCH .*events/, 500, 3);
+      world.failDb(/^SQL update "events"/, 500, 3);
 
       await world.send(create());
 
@@ -1536,7 +1536,7 @@ describe("/event link", () => {
 
     it("keeps the link when saving the overview's ID fails", async () => {
       const { parent, threadId } = await post();
-      world.failDb(/PATCH .*events/);
+      world.failDb(/^SQL update "events"/);
 
       await world.send(link(threadId, parent));
 
@@ -1554,7 +1554,7 @@ describe("/event link", () => {
 
     it("waits out a longer failure to save the overview's ID", async () => {
       const { parent, threadId } = await post();
-      world.failDb(/PATCH .*events/, 500, 4);
+      world.failDb(/^SQL update "events"/, 500, 4);
 
       await world.send(link(threadId, parent));
 
@@ -1565,19 +1565,20 @@ describe("/event link", () => {
 
     it("gives up on saving the overview's ID well inside the function's limit", async () => {
       const { parent, threadId } = await post();
-      world.failDb(/PATCH .*events/);
-      const timeouts = vi.spyOn(AbortSignal, "timeout");
+      world.failDb(/^SQL update "events"/);
+      // Each query's deadline is a timer the client starts as the query goes out.
+      const timeouts = vi.spyOn(globalThis, "setTimeout");
       const started = Date.now();
 
       await world.send(link(threadId, parent));
 
       const pauses = Date.now() - started;
-      const deadlines = timeouts.mock.calls.flat().filter((ms) => ms === 4000);
+      const deadlines = timeouts.mock.calls.filter(([, ms]) => ms === 4000);
       timeouts.mockRestore();
       world.clearDbFailures();
       const writes = world
         .dbRequests()
-        .filter((request) => /^PATCH .*events/.test(request));
+        .filter((request) => request.startsWith('SQL update "events"'));
       expect(writes).toHaveLength(5);
       expect(deadlines).toHaveLength(5);
       // A database that hangs uses every deadline, and the function is stopped at 60 s.
@@ -1598,7 +1599,7 @@ describe("/event link", () => {
         name: "A Post",
         owner_id: APP_ID,
       });
-      world.failDb(/PATCH .*events(?!.*thread_status=neq)/);
+      world.failDb(/^SQL update "events"(?!.*"thread_status" <> \$)/);
       const before = world.discord.requests.length;
 
       await world.send(link(threadId, forum));
@@ -1615,7 +1616,7 @@ describe("/event link", () => {
 
     it("writes nothing when the insert fails", async () => {
       const { parent, threadId } = await post();
-      world.failDb(/POST .*events/);
+      world.failDb(/^SQL insert into "events"/);
 
       await world.send(link(threadId, parent));
 
@@ -1930,7 +1931,7 @@ describe("an event whose post was deleted", () => {
 
     it("names and logs the post when it can't be saved, and a retry joins it", async () => {
       const { sent } = await lostEvent();
-      world.failDb(/PATCH .*events/);
+      world.failDb(/^SQL update "events"/);
 
       await world.send(create());
 
@@ -1951,7 +1952,7 @@ describe("an event whose post was deleted", () => {
 
     it("says so when the overview's ID can't be saved", async () => {
       const { sent } = await lostEvent();
-      world.failDb(/PATCH .*events(?!.*thread_status=neq)/);
+      world.failDb(/^SQL update "events"(?!.*"thread_status" <> \$)/);
 
       await world.send(create());
 
@@ -2143,7 +2144,7 @@ describe("an event whose post was deleted", () => {
 
     it("says so when the row changed just before the write", async () => {
       const { forum } = await lostEvent();
-      world.failDb(/PATCH .*events/, 200, 1);
+      world.failDb(/^SQL update "events"/, 200, 1);
 
       await world.send(linkIn(memberPost(forum), forum));
 

@@ -338,8 +338,14 @@ describe("refreshOverview", () => {
       if (dbFails !== undefined && target.includes(dbFails)) {
         return { status: 500, body: { message: "canary row text" } };
       }
-      if (request.method === "PATCH") {
-        return { body: [{ ...eventRow(), ...(request.body as object) }] };
+      if (target === "update events") {
+        const written = request.body as Record<string, unknown>;
+        return {
+          body: asSelected(
+            request.target.replace(/^.* returning /, "select "),
+            [{ ...eventRow(), ...written }],
+          ),
+        };
       }
       if (target === "select events") {
         return {
@@ -436,7 +442,8 @@ describe("refreshOverview", () => {
       threadId: THREAD,
     });
     expect(
-      requests.find((request) => request.method === "PATCH")?.body,
+      requests.find((request) => sqlTarget(request.target) === "update events")
+        ?.body,
     ).toEqual({ overview_message_id: OVERVIEW });
   });
 
@@ -552,9 +559,11 @@ describe("refreshOverview", () => {
     await expect(refreshOverview(context(), eventRow())).resolves.toBe(false);
 
     expect(sent).toEqual([]);
-    expect(requests.filter((request) => request.method === "PATCH")).toEqual(
-      [],
-    );
+    expect(
+      requests.filter(
+        (request) => sqlTarget(request.target) === "update events",
+      ),
+    ).toEqual([]);
   });
 
   it("marks the thread missing only when Discord says it is gone", async () => {
@@ -568,7 +577,8 @@ describe("refreshOverview", () => {
     await expect(refreshOverview(context(), eventRow())).resolves.toBe(false);
 
     expect(
-      requests.find((request) => request.method === "PATCH")?.body,
+      requests.find((request) => sqlTarget(request.target) === "update events")
+        ?.body,
     ).toEqual({ thread_status: "missing" });
   });
 

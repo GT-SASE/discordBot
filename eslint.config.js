@@ -236,6 +236,12 @@ export default defineConfig([
           message: "Pass execute() a sql`...` template, written out in place.",
         },
         {
+          selector:
+            "CallExpression[callee.name='callFunction']:not([arguments.1.type='TaggedTemplateExpression'])",
+          message:
+            "Pass callFunction() a fragment`public.f(...)` template, written out in place.",
+        },
+        {
           selector: "MemberExpression[property.name='$client']",
           message: "Do not reach past Drizzle to the driver.",
         },

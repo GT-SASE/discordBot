@@ -1,5 +1,11 @@
 import { createDbClient, type DbClient } from "../../src/db/client.ts";
-import { recordingSql, serverError } from "./sql-client.ts";
+import {
+  callArguments,
+  recordingSql,
+  serverError,
+  sqlTarget,
+  writtenValues,
+} from "./sql-client.ts";
 
 export interface RecordedRequest {
   method: string;
@@ -23,30 +29,40 @@ export const TEST_ORIGIN = "https://project.example.test";
 
 /**
  * A client whose network layer records each request and answers from `respond`. A
- * statement built with Drizzle is recorded too, with method `SQL`, its text as the
- * target and its parameters as the body. A status other than 200 fails it with the
- * body's code, and a body that is a list answers it with those rows.
+ * statement built with Drizzle is recorded with method `SQL` and its text as the
+ * target. Its body is what it carries: a function call's named arguments, the columns
+ * an insert or update writes, or a read's parameters. A status of 400 or more fails it
+ * with the body's code. A call answers with the body as the function's value, and any
+ * other statement with the body's rows if it is a list.
  */
 export function mockPostgrest(
   respond: (request: RecordedRequest) => MockResponse = () => ({ body: [] }),
 ): { db: DbClient; requests: RecordedRequest[] } {
   const requests: RecordedRequest[] = [];
   const { sql } = recordingSql((call) => {
+    const target = sqlTarget(call.sql);
     const request: RecordedRequest = {
       method: "SQL",
       target: call.sql,
       rawTarget: call.sql,
       headers: new Headers(),
-      body: call.params,
+      body: target.startsWith("call ")
+        ? callArguments(call)
+        : /^(insert|update) /.test(target)
+          ? writtenValues(call)
+          : call.params,
     };
     requests.push(request);
     const { status = 200, body = [] } = respond(request);
-    if (status !== 200) {
+    if (status >= 400) {
       const code =
         typeof body === "object" && body !== null && "code" in body
           ? String(body.code)
           : "XX000";
       return serverError(code);
+    }
+    if (target.startsWith("call ")) {
+      return { rows: [{ value: body }] };
     }
     return { rows: Array.isArray(body) ? body : [] };
   });

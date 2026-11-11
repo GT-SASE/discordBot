@@ -1,36 +1,16 @@
 /** Turns query outcomes into results, with the row counts each caller expects. */
 
-import { failure, failureFromResponse, type DbResult } from "./errors.ts";
+import { failure, type DbResult } from "./errors.ts";
 import type { ExcludedRow, RowParser } from "./types.ts";
 import { isUuid } from "./validate.ts";
 
-/** The parts of a response read here. `data` stays unknown until it is parsed. */
-export interface ApiResponse {
-  readonly data: unknown;
-  readonly error: unknown;
-  readonly status: number;
-}
+/** The rows a query returned, or why it failed. */
+export type Rows = DbResult<readonly unknown[]>;
 
 export interface RowList<T> {
   readonly rows: T[];
   /** Rows that failed their checks. Callers should log these: they hold no row text. */
   readonly excluded: ExcludedRow[];
-}
-
-/** The rows a query returned, or why it failed. */
-export type Rows = DbResult<readonly unknown[]>;
-
-function responseRows(response: ApiResponse | Rows): Rows {
-  if ("ok" in response) {
-    return response;
-  }
-  if (response.error !== null) {
-    return failureFromResponse(response.error, response.status);
-  }
-  const { data } = response;
-  return Array.isArray(data)
-    ? { ok: true, value: data as readonly unknown[] }
-    : failure("bad_row");
 }
 
 export interface CappedList<T> extends RowList<T> {
@@ -53,20 +33,18 @@ function parseAll<T>(raw: readonly unknown[], parse: RowParser<T>): RowList<T> {
 }
 
 export function rowList<T>(
-  response: ApiResponse | Rows,
+  raw: Rows,
   parse: RowParser<T>,
 ): DbResult<RowList<T>> {
-  const raw = responseRows(response);
   return raw.ok ? { ok: true, value: parseAll(raw.value, parse) } : raw;
 }
 
 /** For a query that asked for `cap + 1` rows. The extra row only shows there are more. */
 export function cappedList<T>(
-  response: ApiResponse | Rows,
+  raw: Rows,
   parse: RowParser<T>,
   cap: number,
 ): DbResult<CappedList<T>> {
-  const raw = responseRows(response);
   if (!raw.ok) {
     return raw;
   }
@@ -81,10 +59,10 @@ export function cappedList<T>(
 
 /** A read by key: at most one row. A row that fails its checks is a `bad_row` failure. */
 export function oneOrNone<T>(
-  response: ApiResponse | Rows,
+  raw: Rows,
   parse: RowParser<T>,
 ): DbResult<T | null> {
-  const list = rowList(response, parse);
+  const list = rowList(raw, parse);
   if (!list.ok) {
     return list;
   }
@@ -99,11 +77,7 @@ export function oneOrNone<T>(
  * A write that must change exactly one row. No match is `not_found`, covering a row
  * that is absent, in another guild, or no longer meets the write's conditions.
  */
-export function exactlyOne<T>(
-  response: ApiResponse | Rows,
-  parse: RowParser<T>,
-): DbResult<T> {
-  const raw = responseRows(response);
+export function exactlyOne<T>(raw: Rows, parse: RowParser<T>): DbResult<T> {
   if (!raw.ok) {
     return raw;
   }
@@ -118,39 +92,62 @@ export function exactlyOne<T>(
   return parsed.ok ? { ok: true, value: parsed.row } : failure("bad_row");
 }
 
-/** A write that returns nothing. Its only outcomes are success and a refusal. */
-export function noRows(response: ApiResponse): DbResult<null> {
-  return response.error === null
-    ? { ok: true, value: null }
-    : failureFromResponse(response.error, response.status);
-}
-
-export function booleanValue(response: ApiResponse): DbResult<boolean> {
-  if (response.error !== null) {
-    return failureFromResponse(response.error, response.status);
+export function booleanValue(result: DbResult<unknown>): DbResult<boolean> {
+  if (!result.ok) {
+    return result;
   }
-  return typeof response.data === "boolean"
-    ? { ok: true, value: response.data }
+  return typeof result.value === "boolean"
+    ? { ok: true, value: result.value }
     : failure("bad_row");
 }
 
-export function integerValue(response: ApiResponse): DbResult<number> {
-  if (response.error !== null) {
-    return failureFromResponse(response.error, response.status);
+export function integerValue(result: DbResult<unknown>): DbResult<number> {
+  if (!result.ok) {
+    return result;
   }
-  return typeof response.data === "number" &&
-    Number.isSafeInteger(response.data)
-    ? { ok: true, value: response.data }
+  return typeof result.value === "number" && Number.isSafeInteger(result.value)
+    ? { ok: true, value: result.value }
     : failure("bad_row");
 }
 
 export function nullableUuidValue(
-  response: ApiResponse,
+  result: DbResult<unknown>,
 ): DbResult<string | null> {
-  if (response.error !== null) {
-    return failureFromResponse(response.error, response.status);
+  if (!result.ok) {
+    return result;
   }
-  return response.data === null || isUuid(response.data)
-    ? { ok: true, value: response.data }
+  return result.value === null || isUuid(result.value)
+    ? { ok: true, value: result.value }
+    : failure("bad_row");
+}
+
+/**
+ * The value a call to one database function returned: the one column of the one row
+ * that `select public.f(...) AS value` gives. Anything else is a `bad_row`.
+ */
+export function functionValue(result: DbResult<unknown>): DbResult<unknown> {
+  if (!result.ok) {
+    return result;
+  }
+  const rows: unknown =
+    typeof result.value === "object" && result.value !== null
+      ? (result.value as { rows?: unknown }).rows
+      : undefined;
+  if (!Array.isArray(rows) || rows.length !== 1) {
+    return failure("bad_row");
+  }
+  const [row] = rows as unknown[];
+  return typeof row === "object" && row !== null && Object.hasOwn(row, "value")
+    ? { ok: true, value: (row as { value: unknown }).value }
+    : failure("bad_row");
+}
+
+/** A function's answer that is a JSON array of rows, as rows to check one by one. */
+export function jsonRows(result: DbResult<unknown>): Rows {
+  if (!result.ok) {
+    return result;
+  }
+  return Array.isArray(result.value)
+    ? { ok: true, value: result.value as readonly unknown[] }
     : failure("bad_row");
 }

@@ -2,13 +2,13 @@ import { hash } from "node:crypto";
 import { isUsableTimeZone } from "../lib/dates.ts";
 import { isSnowflake } from "../lib/snowflake.ts";
 import type { DbClient } from "./client.ts";
-import { and, desc, eq, gt } from "drizzle-orm";
+import { and, desc, eq, gt, sql as fragment } from "drizzle-orm";
 import {
   CONFIG_CHANGE_COLUMNS,
   GUILD_CONFIG_COLUMNS,
   SETUP_DRAFT_COLUMNS,
 } from "./columns.ts";
-import { rest, run } from "./internal.ts";
+import { callFunction, run } from "./internal.ts";
 import { configAudit, guildConfig, setupDrafts } from "./schema.ts";
 import { refused, type DbResult } from "./errors.ts";
 import {
@@ -120,17 +120,10 @@ export async function applyRoleBindings(
     return refused();
   }
   return integerValue(
-    await rest(db).rpc("apply_role_bindings", {
-      p_guild_id: guildId,
-      p_expected_version: expectedVersion,
-      p_actor_id: actorId,
-      p_officer_role_id: officerRoleId,
-      p_admin_role_id: adminRoleId,
-      p_eboard_role_id: eboardRoleId,
-      p_events_committee_role_id: eventsCommitteeRoleId,
-      p_treasury_role_id: treasuryRoleId,
-      p_marketing_role_id: marketingRoleId,
-    }),
+    await callFunction(
+      db,
+      fragment`public.apply_role_bindings(p_guild_id => ${guildId}, p_expected_version => ${expectedVersion}, p_actor_id => ${actorId}, p_officer_role_id => ${officerRoleId}, p_admin_role_id => ${adminRoleId}, p_eboard_role_id => ${eboardRoleId}, p_events_committee_role_id => ${eventsCommitteeRoleId}, p_treasury_role_id => ${treasuryRoleId}, p_marketing_role_id => ${marketingRoleId})`,
+    ),
   );
 }
 
@@ -190,17 +183,10 @@ export async function saveSetupDraft(
   }
   const fingerprint = setupDraftFingerprint(roles);
   const saved = booleanValue(
-    await rest(db).rpc("save_setup_draft", {
-      p_guild_id: guildId,
-      p_actor_id: actorId,
-      p_officer_role_id: roles.officerRoleId,
-      p_admin_role_id: roles.adminRoleId,
-      p_eboard_role_id: roles.eboardRoleId,
-      p_events_committee_role_id: roles.eventsCommitteeRoleId,
-      p_treasury_role_id: roles.treasuryRoleId,
-      p_marketing_role_id: roles.marketingRoleId,
-      p_fingerprint: fingerprint,
-    }),
+    await callFunction(
+      db,
+      fragment`public.save_setup_draft(p_guild_id => ${guildId}, p_actor_id => ${actorId}, p_officer_role_id => ${roles.officerRoleId}, p_admin_role_id => ${roles.adminRoleId}, p_eboard_role_id => ${roles.eboardRoleId}, p_events_committee_role_id => ${roles.eventsCommitteeRoleId}, p_treasury_role_id => ${roles.treasuryRoleId}, p_marketing_role_id => ${roles.marketingRoleId}, p_fingerprint => ${fingerprint})`,
+    ),
   );
   return saved.ok ? { ok: true, value: fingerprint } : saved;
 }
@@ -310,15 +296,10 @@ export async function applyConfigChange(
     return refused();
   }
   return integerValue(
-    await rest(db).rpc("apply_config_change", {
-      p_guild_id: guildId,
-      p_expected_version: expectedVersion,
-      p_actor_id: actorId,
-      p_reminders_enabled: remindersEnabled,
-      p_add_channel_ids: [...addChannelIds],
-      p_remove_channel_ids: [...removeChannelIds],
-      p_timezone: timezone,
-    }),
+    await callFunction(
+      db,
+      fragment`public.apply_config_change(p_guild_id => ${guildId}, p_expected_version => ${expectedVersion}, p_actor_id => ${actorId}, p_reminders_enabled => ${remindersEnabled}, p_add_channel_ids => ${fragment.param([...addChannelIds])}::text[]::text[], p_remove_channel_ids => ${fragment.param([...removeChannelIds])}::text[]::text[], p_timezone => ${timezone})`,
+    ),
   );
 }
 

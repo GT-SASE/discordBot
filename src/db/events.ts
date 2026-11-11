@@ -1,10 +1,19 @@
 import type { DateOnly } from "../lib/dates.ts";
 import { isSnowflake } from "../lib/snowflake.ts";
 import type { DbClient } from "./client.ts";
-import { and, asc, desc, eq, ilike, isNull } from "drizzle-orm";
+import {
+  and,
+  asc,
+  desc,
+  eq,
+  ilike,
+  isNull,
+  sql as fragment,
+  ne,
+} from "drizzle-orm";
 import { EVENT_CHOICE_COLUMNS, EVENT_COLUMNS } from "./columns.ts";
-import { rest, run } from "./internal.ts";
-import { events } from "./schema.ts";
+import { callFunction, run } from "./internal.ts";
+import { eventInserts, events } from "./schema.ts";
 import { failure, refused, type DbResult } from "./errors.ts";
 import {
   booleanValue,
@@ -67,18 +76,18 @@ export async function createEvent(
     return refused();
   }
   return exactlyOne(
-    await rest(db)
-      .from("events")
-      .insert({
-        guild_id: guildId,
-        channel_id: channelId,
-        name,
-        event_date: eventDate,
-        created_by: actorId,
-      })
-      .select(
-        "id,guild_id,channel_id,name,event_date,thread_id,overview_message_id,status,thread_status,created_by,deleted_at,created_at",
-      ),
+    await run(db, (sql) =>
+      sql
+        .insert(eventInserts)
+        .values({
+          guildId: guildId,
+          channelId: channelId,
+          name: name,
+          eventDate: eventDate,
+          createdBy: actorId,
+        })
+        .returning(EVENT_COLUMNS),
+    ),
     parseEvent,
   );
 }
@@ -107,20 +116,20 @@ export async function createLinkedEvent(
     return refused();
   }
   return exactlyOne(
-    await rest(db)
-      .from("events")
-      .insert({
-        guild_id: guildId,
-        channel_id: channelId,
-        name,
-        event_date: eventDate,
-        created_by: actorId,
-        thread_id: threadId,
-        thread_status: "active",
-      })
-      .select(
-        "id,guild_id,channel_id,name,event_date,thread_id,overview_message_id,status,thread_status,created_by,deleted_at,created_at",
-      ),
+    await run(db, (sql) =>
+      sql
+        .insert(eventInserts)
+        .values({
+          guildId: guildId,
+          channelId: channelId,
+          name: name,
+          eventDate: eventDate,
+          createdBy: actorId,
+          threadId: threadId,
+          threadStatus: "active",
+        })
+        .returning(EVENT_COLUMNS),
+    ),
     parseEvent,
   );
 }
@@ -253,16 +262,20 @@ export async function setEventThread(
     return refused();
   }
   return exactlyOne(
-    await rest(db)
-      .from("events")
-      .update({ thread_id: key.threadId, thread_status: "active" })
-      .eq("id", key.eventId)
-      .eq("guild_id", key.guildId)
-      .is("deleted_at", null)
-      .neq("thread_status", "active")
-      .select(
-        "id,guild_id,channel_id,name,event_date,thread_id,overview_message_id,status,thread_status,created_by,deleted_at,created_at",
-      ),
+    await run(db, (sql) =>
+      sql
+        .update(events)
+        .set({ threadId: key.threadId, threadStatus: "active" })
+        .where(
+          and(
+            eq(events.id, key.eventId),
+            eq(events.guildId, key.guildId),
+            isNull(events.deletedAt),
+            ne(events.threadStatus, "active"),
+          ),
+        )
+        .returning(EVENT_COLUMNS),
+    ),
     parseEvent,
   );
 }
@@ -284,20 +297,24 @@ export async function attachEventPost(
     return refused();
   }
   return exactlyOne(
-    await rest(db)
-      .from("events")
-      .update({
-        thread_id: key.threadId,
-        overview_message_id: key.overviewMessageId,
-        thread_status: "active",
-      })
-      .eq("id", key.eventId)
-      .eq("guild_id", key.guildId)
-      .is("deleted_at", null)
-      .eq("thread_status", "pending")
-      .select(
-        "id,guild_id,channel_id,name,event_date,thread_id,overview_message_id,status,thread_status,created_by,deleted_at,created_at",
-      ),
+    await run(db, (sql) =>
+      sql
+        .update(events)
+        .set({
+          threadId: key.threadId,
+          overviewMessageId: key.overviewMessageId,
+          threadStatus: "active",
+        })
+        .where(
+          and(
+            eq(events.id, key.eventId),
+            eq(events.guildId, key.guildId),
+            isNull(events.deletedAt),
+            eq(events.threadStatus, "pending"),
+          ),
+        )
+        .returning(EVENT_COLUMNS),
+    ),
     parseEvent,
   );
 }
@@ -310,16 +327,20 @@ export async function markEventThreadMissing(
     return refused();
   }
   return exactlyOne(
-    await rest(db)
-      .from("events")
-      .update({ thread_status: "missing" })
-      .eq("id", key.eventId)
-      .eq("guild_id", key.guildId)
-      .is("deleted_at", null)
-      .eq("thread_status", "active")
-      .select(
-        "id,guild_id,channel_id,name,event_date,thread_id,overview_message_id,status,thread_status,created_by,deleted_at,created_at",
-      ),
+    await run(db, (sql) =>
+      sql
+        .update(events)
+        .set({ threadStatus: "missing" })
+        .where(
+          and(
+            eq(events.id, key.eventId),
+            eq(events.guildId, key.guildId),
+            isNull(events.deletedAt),
+            eq(events.threadStatus, "active"),
+          ),
+        )
+        .returning(EVENT_COLUMNS),
+    ),
     parseEvent,
   );
 }
@@ -332,15 +353,19 @@ export async function setEventOverviewMessage(
     return refused();
   }
   return exactlyOne(
-    await rest(db)
-      .from("events")
-      .update({ overview_message_id: key.messageId })
-      .eq("id", key.eventId)
-      .eq("guild_id", key.guildId)
-      .is("deleted_at", null)
-      .select(
-        "id,guild_id,channel_id,name,event_date,thread_id,overview_message_id,status,thread_status,created_by,deleted_at,created_at",
-      ),
+    await run(db, (sql) =>
+      sql
+        .update(events)
+        .set({ overviewMessageId: key.messageId })
+        .where(
+          and(
+            eq(events.id, key.eventId),
+            eq(events.guildId, key.guildId),
+            isNull(events.deletedAt),
+          ),
+        )
+        .returning(EVENT_COLUMNS),
+    ),
     parseEvent,
   );
 }
@@ -354,16 +379,20 @@ export async function closeEvent(
     return refused();
   }
   return exactlyOne(
-    await rest(db)
-      .from("events")
-      .update({ status: "closed" })
-      .eq("id", key.eventId)
-      .eq("guild_id", key.guildId)
-      .is("deleted_at", null)
-      .eq("status", "active")
-      .select(
-        "id,guild_id,channel_id,name,event_date,thread_id,overview_message_id,status,thread_status,created_by,deleted_at,created_at",
-      ),
+    await run(db, (sql) =>
+      sql
+        .update(events)
+        .set({ status: "closed" })
+        .where(
+          and(
+            eq(events.id, key.eventId),
+            eq(events.guildId, key.guildId),
+            isNull(events.deletedAt),
+            eq(events.status, "active"),
+          ),
+        )
+        .returning(EVENT_COLUMNS),
+    ),
     parseEvent,
   );
 }
@@ -380,10 +409,10 @@ export async function claimEventPostAttempt(
     return refused();
   }
   return booleanValue(
-    await rest(db).rpc("claim_event_post_attempt", {
-      p_event_id: key.eventId,
-      p_guild_id: key.guildId,
-    }),
+    await callFunction(
+      db,
+      fragment`public.claim_event_post_attempt(p_event_id => ${key.eventId}, p_guild_id => ${key.guildId})`,
+    ),
   );
 }
 
@@ -396,10 +425,10 @@ export async function releaseEventPostAttempt(
     return refused();
   }
   return booleanValue(
-    await rest(db).rpc("release_event_post_attempt", {
-      p_event_id: key.eventId,
-      p_guild_id: key.guildId,
-    }),
+    await callFunction(
+      db,
+      fragment`public.release_event_post_attempt(p_event_id => ${key.eventId}, p_guild_id => ${key.guildId})`,
+    ),
   );
 }
 
@@ -411,12 +440,12 @@ export async function softDeleteEvent(
   if (!isEventKey(key)) {
     return refused();
   }
-  const response = await rest(db).rpc("soft_delete_event", {
-    p_event_id: key.eventId,
-    p_guild_id: key.guildId,
-  });
+  const response = await callFunction(
+    db,
+    fragment`public.soft_delete_event(p_event_id => ${key.eventId}, p_guild_id => ${key.guildId})`,
+  );
   // The function returns null when there is no live event with that ID in that guild.
-  if (response.error === null && response.data === null) {
+  if (response.ok && response.value === null) {
     return failure("not_found");
   }
   return integerValue(response);

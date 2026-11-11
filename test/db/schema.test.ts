@@ -278,7 +278,7 @@ describe("schema constraints", () => {
       const code = await errorCodeOf(
         queryAs(
           db,
-          "bot_app",
+          MIGRATION_OWNER,
           `UPDATE public.tasks SET due_date = 'infinity' WHERE id = $1`,
           [taskId],
         ),
@@ -424,7 +424,7 @@ describe("schema constraints", () => {
     await queryAs(
       db,
       "bot_app",
-      `UPDATE public.tasks SET description = 'Changed' WHERE id = $1`,
+      `UPDATE public.tasks SET status = 'done', completed_at = now() WHERE id = $1`,
       [taskId],
     );
     const { rows } = await db.query<{ refreshed: boolean }>(
@@ -570,7 +570,7 @@ describe("schema constraints", () => {
 
       await queryAs(
         db,
-        "bot_app",
+        MIGRATION_OWNER,
         `UPDATE public.tasks SET due_date = '2030-01-09' WHERE id = $1`,
         [taskId],
       );

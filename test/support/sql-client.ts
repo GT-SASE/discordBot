@@ -134,9 +134,11 @@ export function sqlTarget(text: string): string {
   return `select ${topLevelFrom(text) ?? "?"}`;
 }
 
-/** The columns a simple select names, in order, by their own names. */
+/** The columns a simple select or a returning clause names, in order, by their own names. */
 export function selectedColumns(text: string): string[] {
-  const end = text.indexOf(` from "${topLevelFrom(text) ?? ""}"`);
+  const table = topLevelFrom(text);
+  const end =
+    table === undefined ? text.length : text.indexOf(` from "${table}"`);
   return [
     ...text
       .slice("select ".length, end)
@@ -171,4 +173,53 @@ export function limitOf(call: SqlCall): number | undefined {
   return index === undefined
     ? undefined
     : Number(call.params[Number(index) - 1]);
+}
+
+/** The named arguments of a function call, as name to value. */
+export function callArguments(call: SqlCall): Record<string, unknown> {
+  const found: Record<string, unknown> = {};
+  for (const match of call.sql.matchAll(
+    /(p_[a-z_]+) => \$([0-9]+)(::text::jsonb)?/g,
+  )) {
+    const [, name = "", index = "0", json] = match;
+    const value = call.params[Number(index) - 1];
+    found[name] = json === undefined ? value : JSON.parse(String(value));
+  }
+  return found;
+}
+
+/** The columns an insert or update writes, as column to value. */
+export function writtenValues(call: SqlCall): Record<string, unknown> {
+  const found: Record<string, unknown> = {};
+  const insert = /^insert into "[a-z_]+" \(([^)]*)\) values \(([^)]*)\)/.exec(
+    call.sql,
+  );
+  if (insert !== null) {
+    const columns = [...(insert[1] ?? "").matchAll(/"([a-z_]+)"/g)];
+    const values = (insert[2] ?? "").split(", ");
+    columns.forEach(([, column = ""], index) => {
+      const param = /^\$([0-9]+)$/.exec(values[index] ?? "")?.[1];
+      // A column given no value is written as DEFAULT, which is no value written.
+      if (param !== undefined) {
+        found[column] = call.params[Number(param) - 1];
+      }
+    });
+    return found;
+  }
+  const set = /^update "[a-z_]+" set (.*?) where /.exec(call.sql)?.[1] ?? "";
+  for (const match of set.matchAll(/"([a-z_]+)" = \$([0-9]+)/g)) {
+    const [, column = "", index = "0"] = match;
+    found[column] = call.params[Number(index) - 1];
+  }
+  return found;
+}
+
+/** A call to this database function. */
+export function callsFunction(call: SqlCall, name: string): boolean {
+  return sqlTarget(call.sql) === `call ${name}`;
+}
+
+/** A failure that never reached the server, such as a dropped connection. */
+export function unavailable(): Error {
+  return new Error("connection lost");
 }

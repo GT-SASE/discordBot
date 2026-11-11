@@ -77,6 +77,72 @@ describe("the baseline's guards", () => {
     });
   });
 
+  describe("a change of person", () => {
+    it.each([
+      "UPDATE public.tasks SET assignee_id = assignee_id",
+      "UPDATE public.tasks SET description = description",
+      "UPDATE public.tasks SET due_date = due_date",
+    ])("cannot skip edit_task: %s", async (sql) => {
+      expect(await errorCodeOf(queryAs(db, BOT_APP, sql))).toBe(
+        INSUFFICIENT_PRIVILEGE,
+      );
+    });
+
+    it("cannot be counted, or left uncounted, by the bot itself", async () => {
+      expect(
+        await errorCodeOf(
+          queryAs(
+            db,
+            BOT_APP,
+            `INSERT INTO public.task_reassignments (guild_id, actor_id, task_id)
+             VALUES ($1, $1, gen_random_uuid())`,
+            [fakeId()],
+          ),
+        ),
+      ).toBe(INSUFFICIENT_PRIVILEGE);
+    });
+
+    it("counts against the officer's limit only when the person changes", async () => {
+      const guild = await insertGuild(db);
+      const taskId = await insertTask(db, guild, await insertEvent(db, guild));
+      const actor = fakeId();
+      const edit = async (assignee: string | null) => {
+        const { rows } = await db.query<{
+          assignee_id: string;
+          updated_at: string;
+        }>(
+          "SELECT assignee_id, updated_at::text FROM public.tasks WHERE id = $1",
+          [taskId],
+        );
+        const [task] = rows;
+        await queryAs(
+          db,
+          BOT_APP,
+          `SELECT public.edit_task($1, $2, $3, 'Book the room', '2030-01-10', $4, $5)`,
+          [
+            taskId,
+            guild.guildId,
+            task?.updated_at,
+            assignee ?? task?.assignee_id,
+            actor,
+          ],
+        );
+      };
+      const counted = async () => {
+        const { rows } = await db.query<{ count: number }>(
+          "SELECT count(*)::int AS count FROM public.task_reassignments WHERE actor_id = $1",
+          [actor],
+        );
+        return rows[0]?.count;
+      };
+
+      await edit(null);
+      expect(await counted()).toBe(0);
+      await edit(fakeId());
+      expect(await counted()).toBe(1);
+    });
+  });
+
   it("refuses a step's hand-off on a closed event as parent_unavailable", async () => {
     const guild = await insertGuild(db);
     const eventId = await insertEvent(db, guild);

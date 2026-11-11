@@ -15,11 +15,15 @@ import { testDatabaseUrl } from "../../test/support/sql-client.ts";
 
 const waitUntil = vi.hoisted(() => vi.fn());
 vi.mock("@vercel/functions", () => ({ waitUntil }));
-// The database the endpoint builds from its settings reads nothing.
+// The database the endpoint builds from its settings reads nothing, and saves a draft.
 vi.mock("../db/pool.ts", async () => {
-  const { recordingSql } = await import("../../test/support/sql-client.ts");
+  const { callsFunction, recordingSql } =
+    await import("../../test/support/sql-client.ts");
   return {
-    poolDatabase: () => recordingSql().sql,
+    poolDatabase: () =>
+      recordingSql((call) => ({
+        rows: callsFunction(call, "save_setup_draft") ? [{ value: true }] : [],
+      })).sql,
     closePool: () => Promise.resolve(),
   };
 });
@@ -711,12 +715,6 @@ describe("work done after the reply", () => {
     send.mockReset();
     send.mockImplementation((input, init) => {
       const url = input as string;
-      if (url.includes("/rest/v1/rpc/save_setup_draft")) {
-        return Promise.resolve(Response.json(true));
-      }
-      if (url.includes("/rest/v1/")) {
-        return Promise.resolve(Response.json([]));
-      }
       if (url.endsWith("/roles")) {
         return Promise.resolve(Response.json([roleRow(ROLE_A)]));
       }

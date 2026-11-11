@@ -19,9 +19,19 @@ import {
   withDeadline,
   type DbClient,
 } from "./client.ts";
-import { errorSummary, failureFromResponse } from "./errors.ts";
+import {
+  errorSummary,
+  failureFromError,
+  failureFromResponse,
+} from "./errors.ts";
 import { rest } from "./internal.ts";
-import { cappedList, oneOrNone, rowList } from "./result.ts";
+import {
+  cappedList,
+  functionValue,
+  jsonRows,
+  oneOrNone,
+  rowList,
+} from "./result.ts";
 import { parseJobRun, parseTask, type Database } from "./types.ts";
 import {
   MAX_SEARCH_LENGTH,
@@ -71,24 +81,6 @@ describe("client", () => {
     const init = send.mock.calls[0]?.[1];
     expect(init?.redirect).toBe("error");
     expect(init?.signal).toBeInstanceOf(AbortSignal);
-  });
-
-  it("abandons a request at its deadline and reports it as unavailable", async () => {
-    const send: typeof fetch = (_input, init) =>
-      new Promise((_resolve, reject) => {
-        init?.signal?.addEventListener("abort", () => {
-          reject(init.signal?.reason as Error);
-        });
-      });
-    const db = withDeadline(createDbClient({ ...settings, fetch: send }), 10);
-    const result = oneOrNone(
-      await rest(db).from("tasks").select("id").limit(1),
-      parseTask,
-    );
-    expect(result).toEqual({
-      ok: false,
-      error: { category: "unavailable", code: null },
-    });
   });
 
   it("abandons a query at its deadline and reports it as unavailable", async () => {
@@ -246,21 +238,78 @@ describe("errors", () => {
     expect(result.error.code).toBeNull();
     expect(JSON.stringify(result)).not.toContain(canary);
   });
+});
 
-  it("reports a rejected fetch as unavailable, with no text from the error", async () => {
-    const db = createDbClient({
-      url: TEST_ORIGIN,
-      secretKey: TEST_SECRET_KEY,
-      sql: recordingSql().sql,
-      fetch: () => Promise.reject(new TypeError(canary)),
+describe("errors from the driver", () => {
+  const canary = "canary-row-text";
+
+  it("keeps only a category and the SQLSTATE of a server error", () => {
+    const error = Object.assign(new Error(`failing row contains ${canary}`), {
+      code: "23514",
+      severity: "ERROR",
+      detail: canary,
     });
-    const result = oneOrNone(
-      await rest(db).from("tasks").select("id").limit(1),
-      parseTask,
-    );
-    expect(result).toEqual({
+    expect(failureFromError(error)).toEqual({
       ok: false,
-      error: { category: "unavailable", code: null },
+      error: { category: "constraint", code: "23514" },
+    });
+  });
+
+  it("reads the code under Drizzle's wrapper, whose message quotes the query", () => {
+    const cause = Object.assign(new Error("row text"), {
+      code: "CF409",
+      severity: "ERROR",
+    });
+    const wrapped = Object.assign(new Error(`Failed query: select ${canary}`), {
+      cause,
+    });
+    const result = failureFromError(wrapped);
+    expect(result.error).toEqual({ category: "stale_version", code: "CF409" });
+    expect(JSON.stringify(result)).not.toContain(canary);
+  });
+
+  it.each([
+    ["CF410", "parent_unavailable"],
+    ["CF412", "task_changed"],
+    ["CF429", "event_task_limit"],
+    ["CF430", "actor_task_limit"],
+    ["CF431", "step_assignee_limit"],
+    ["23505", "conflict"],
+    ["42501", "forbidden"],
+    ["57014", "unavailable"],
+    ["08006", "unavailable"],
+    ["53300", "unavailable"],
+    ["XX000", "unavailable"],
+    ["42601", "unexpected"],
+  ])("maps %s to %s", (code, category) => {
+    expect(
+      failureFromError(
+        Object.assign(new Error(canary), { code, severity: "ERROR" }),
+      ).error,
+    ).toEqual({ category, code });
+  });
+
+  it.each([
+    [
+      "a refused connection",
+      Object.assign(new Error(canary), { code: "ECONNREFUSED" }),
+    ],
+    [
+      "a short network code",
+      Object.assign(new Error(canary), { code: "EPIPE" }),
+    ],
+    ["a dropped connection", new Error(canary)],
+    ["a timeout", new Error("Query read timeout")],
+  ])("reports %s as unavailable, with no code or text", (_name, error) => {
+    const result = failureFromError(error);
+    expect(result.error).toEqual({ category: "unavailable", code: null });
+    expect(JSON.stringify(result)).not.toContain(canary);
+  });
+
+  it("refuses a value that is not an error at all", () => {
+    expect(failureFromError("text").error).toEqual({
+      category: "unexpected",
+      code: null,
     });
   });
 });
@@ -279,7 +328,10 @@ describe("row checks", () => {
     deleted_at: null,
     updated_at: "2030-01-01T12:00:00.123456+00:00",
   };
-  const response = (data: unknown) => ({ data, error: null, status: 200 });
+  const response = (data: unknown) => ({
+    ok: true as const,
+    value: data as readonly unknown[],
+  });
 
   it("reads a good row with a real date", () => {
     const parsed = parseTask(goodTask);
@@ -365,8 +417,24 @@ describe("row checks", () => {
     });
   });
 
-  it("treats a response that is not a list as a failure", () => {
-    expect(rowList(response({ id: UUID }), parseTask).ok).toBe(false);
+  it("treats a function's answer that is not a list of rows as a failure", () => {
+    expect(jsonRows({ ok: true, value: { id: UUID } }).ok).toBe(false);
+    expect(jsonRows({ ok: true, value: [] })).toEqual({ ok: true, value: [] });
+  });
+
+  it("reads a function's value from its one row, and nothing else", () => {
+    expect(
+      functionValue({ ok: true, value: { rows: [{ value: 3 }] } }),
+    ).toEqual({ ok: true, value: 3 });
+    for (const value of [
+      { rows: [] },
+      { rows: [{ value: 1 }, { value: 2 }] },
+      { rows: [{ other: 1 }] },
+      { rows: "x" },
+      null,
+    ]) {
+      expect(functionValue({ ok: true, value }).ok).toBe(false);
+    }
   });
 
   it("requires job results to be an object", () => {

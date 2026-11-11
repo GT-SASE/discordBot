@@ -97,8 +97,10 @@ function workflowRow() {
 }
 
 const rpc = (name: string, body: unknown) => ({
-  method: "POST",
-  target: `/rest/v1/rpc/${name}?`,
+  method: "SQL",
+  target: expect.stringMatching(
+    new RegExp(`^select public\\.${name}\\(`),
+  ) as string,
   body,
 });
 /**

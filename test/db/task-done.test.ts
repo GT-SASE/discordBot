@@ -321,9 +321,10 @@ describe("marking tasks done and reading them, on the real schema", () => {
       await run(
         world.router,
         click(task.id, { member: plainMember(assignee) }),
-        world.racing(client, "PATCH", async () => {
+        world.racing(client, "update", async () => {
           unwrap(
             await editTask(world.db(), {
+              actorId: testSnowflake(),
               guildId: GUILD_ID,
               taskId: task.id,
               expectedUpdatedAt: task.updated_at,
@@ -351,7 +352,7 @@ describe("marking tasks done and reading them, on the real schema", () => {
       await run(
         world.router,
         click(task.id, { member: plainMember(assignee) }),
-        world.racing(client, "PATCH", async () => {
+        world.racing(client, "update", async () => {
           unwrap(await closeEvent(world.db(), { guildId: GUILD_ID, eventId }));
         }),
       );
@@ -370,7 +371,7 @@ describe("marking tasks done and reading them, on the real schema", () => {
       await run(
         world.router,
         click(task.id, { member: plainMember(assignee) }),
-        world.racing(client, "PATCH", async () => {
+        world.racing(client, "update", async () => {
           await world.backend.connection.query(
             `UPDATE public.tasks SET status = 'done', completed_at = now() WHERE id = $1`,
             [task.id],
@@ -924,6 +925,7 @@ describe("marking tasks done and reading them, on the real schema", () => {
     const task = await newTask(eventId, assignee);
     unwrap(
       await editTask(world.db(), {
+        actorId: testSnowflake(),
         guildId: GUILD_ID,
         taskId: task.id,
         expectedUpdatedAt: task.updated_at,

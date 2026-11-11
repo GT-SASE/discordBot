@@ -470,7 +470,7 @@ describe.each(["status", "close", "delete"])(
           .filter(
             (request) =>
               !/^(GET |SQL select )/.test(request) &&
-              !request.includes("/rpc/claim_interaction"),
+              !request.includes("public.claim_interaction("),
           ),
       ).toEqual([]);
       expect((await world.events(`id = '${bystander.id}'`))[0]).toMatchObject({
@@ -1210,7 +1210,7 @@ describe("/event close", () => {
 
   it("posts nothing when the write fails", async () => {
     const event = await seed();
-    world.failDb(/PATCH .*\/events/);
+    world.failDb(/^SQL update "events"/);
 
     await close(event.id);
 
@@ -1222,7 +1222,7 @@ describe("/event close", () => {
 
   it("changes nothing when the claim fails", async () => {
     const event = await seed();
-    world.failDb(/rpc\/claim_interaction/);
+    world.failDb(/public\.claim_interaction\(/);
 
     await close(event.id);
 
@@ -1572,7 +1572,7 @@ describe("/event delete", () => {
 
     it("posts nothing when the delete fails", async () => {
       const event = await seed();
-      world.failDb(/rpc\/soft_delete_event/);
+      world.failDb(/public\.soft_delete_event\(/);
 
       await world.send(await confirmClick(event.id));
 

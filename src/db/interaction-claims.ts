@@ -1,6 +1,7 @@
 import { isSnowflake } from "../lib/snowflake.ts";
+import { sql as fragment } from "drizzle-orm";
 import type { DbClient } from "./client.ts";
-import { rest } from "./internal.ts";
+import { callFunction } from "./internal.ts";
 import { refused, type DbResult } from "./errors.ts";
 import { booleanValue, integerValue } from "./result.ts";
 
@@ -8,7 +9,9 @@ import { booleanValue, integerValue } from "./result.ts";
 export async function expireInteractionClaims(
   db: DbClient,
 ): Promise<DbResult<number>> {
-  return integerValue(await rest(db).rpc("expire_interaction_claims", {}));
+  return integerValue(
+    await callFunction(db, fragment`public.expire_interaction_claims()`),
+  );
 }
 
 /** True for the first caller with this interaction ID, false for every later one. */
@@ -20,8 +23,9 @@ export async function claimInteraction(
     return refused();
   }
   return booleanValue(
-    await rest(db).rpc("claim_interaction", {
-      p_interaction_id: interactionId,
-    }),
+    await callFunction(
+      db,
+      fragment`public.claim_interaction(p_interaction_id => ${interactionId})`,
+    ),
   );
 }

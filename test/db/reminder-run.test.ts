@@ -17,9 +17,11 @@ import {
 } from "vitest";
 import {
   pgliteSql,
+  callsFunction,
   readsFrom,
   serverError,
   sqlTarget,
+  unavailable,
   type Intercept,
 } from "../support/sql-client.ts";
 import { createDbClient, type DbClient } from "../../src/db/client.ts";
@@ -79,11 +81,6 @@ type DiscordAnswer = Response | undefined;
 
 let database: PGlite;
 let db: DbClient;
-/** Lets a test break or rewrite one database request. */
-let dbGate: (
-  url: string,
-  init: RequestInit | undefined,
-) => Response | undefined;
 /** Lets a test answer, fail or watch one statement built with Drizzle. */
 let sqlGate: Intercept;
 /** Lets a test refuse or react to one Discord request. */
@@ -289,15 +286,7 @@ beforeAll(async () => {
   db = createDbClient({
     url: TEST_ORIGIN,
     secretKey: TEST_SECRET_KEY,
-    fetch: (input, init) => {
-      const url =
-        typeof input === "string" || input instanceof URL
-          ? String(input)
-          : input.url;
-      return Promise.resolve(dbGate(url, init)).then(
-        (answer) => answer ?? shim(input, init),
-      );
-    },
+    fetch: shim,
     sql: pgliteSql(database, (call) => sqlGate(call)),
   });
 });
@@ -305,7 +294,6 @@ beforeAll(async () => {
 afterAll(() => database.close());
 
 beforeEach(async () => {
-  dbGate = () => undefined;
   sqlGate = () => undefined;
   discordGate = () => undefined;
   requests = [];
@@ -500,12 +488,11 @@ describe("a crash between send and mark", () => {
       }
       return undefined;
     };
-    dbGate = () =>
-      crashed ? Response.json({ code: "XX000" }, { status: 500 }) : undefined;
+    sqlGate = () => (crashed ? serverError("XX000") : undefined);
     return () => {
       crashed = false;
       discordGate = () => undefined;
-      dbGate = () => undefined;
+      sqlGate = () => undefined;
     };
   };
 
@@ -1392,10 +1379,8 @@ describe("a failed morning and the recovery cron", () => {
     const guild = await guildInZone();
     const { eventId } = await eventWithThread(guild);
     await task(guild, eventId, dateOffset(3));
-    dbGate = (url) =>
-      url.includes("rpc/claim_reminders")
-        ? new Response("{}", { status: 503 })
-        : undefined;
+    sqlGate = (call) =>
+      callsFunction(call, "claim_reminders") ? unavailable() : undefined;
     expect(await run({ guilds: [guild] })).toMatchObject({
       error: "reminders_incomplete",
     });
@@ -1704,9 +1689,9 @@ describe("what counts as a send that may have landed", () => {
       method === "POST"
         ? Response.json({ code: 50013 }, { status: 403 })
         : undefined;
-    dbGate = (url) =>
-      url.includes("rpc/record_reminder_refused")
-        ? new Response("{}", { status: 503 })
+    sqlGate = (call) =>
+      callsFunction(call, "record_reminder_refused")
+        ? unavailable()
         : undefined;
 
     await run({ guilds: [guild] });
@@ -1971,10 +1956,8 @@ describe("a thread that refuses the bot", () => {
       method === "POST"
         ? Response.json({ code: 50001 }, { status: 403 })
         : undefined;
-    dbGate = (url) =>
-      url.includes("rpc/record_thread_refusal")
-        ? new Response("{}", { status: 503 })
-        : undefined;
+    sqlGate = (call) =>
+      callsFunction(call, "record_thread_refusal") ? unavailable() : undefined;
 
     expect((await run({ guilds: [guild] })).status).toBe("failed");
     expect((await jobRow()).results).toMatchObject({ thread_check_failed: 1 });
@@ -2498,8 +2481,8 @@ describe("stale claims on tasks the plan left out", () => {
       [eventId],
     );
     let reclaims = 0;
-    dbGate = (url) => {
-      reclaims += url.includes("rpc/reclaim_reminder") ? 1 : 0;
+    sqlGate = (call) => {
+      reclaims += callsFunction(call, "reclaim_reminder") ? 1 : 0;
       return undefined;
     };
 
@@ -2564,11 +2547,10 @@ describe("the worst case for time", () => {
         if (readsFrom(call, "reminder_log")) {
           elapsed = Math.max(elapsed, startsAt);
         }
-        return undefined;
-      };
-      dbGate = (url) => {
-        elapsed += url.includes("rpc/") ? DATABASE_CALL_MS / 8 : 0;
-        if (url.includes("rpc/finish_job_run")) {
+        elapsed += sqlTarget(call.sql).startsWith("call ")
+          ? DATABASE_CALL_MS / 8
+          : 0;
+        if (callsFunction(call, "finish_job_run")) {
           elapsed += DATABASE_CALL_MS;
           finishedAt = elapsed;
         }
@@ -2623,8 +2605,8 @@ describe("the worst case for time", () => {
     }
     const start = Date.now();
     let elapsed = 0;
-    dbGate = (url) => {
-      if (url.includes("rpc/claim_reminders")) {
+    sqlGate = (call) => {
+      if (callsFunction(call, "claim_reminders")) {
         elapsed = 60_000;
       }
       return undefined;
@@ -2799,9 +2781,9 @@ describe("what a failure leaves behind", () => {
     const guild = await guildInZone();
     const { eventId } = await eventWithThread(guild);
     await task(guild, eventId, dateOffset(3));
-    dbGate = (url) =>
-      url.includes("rpc/claim_reminders")
-        ? Response.json({ code: "XX000", message: CANARY }, { status: 500 })
+    sqlGate = (call) =>
+      callsFunction(call, "claim_reminders")
+        ? serverError("XX000", CANARY)
         : undefined;
 
     await run({ guilds: [guild] });
@@ -2816,10 +2798,8 @@ describe("what a failure leaves behind", () => {
       const { eventId } = await eventWithThread(guild);
       await task(guild, eventId, dateOffset(3));
     }
-    dbGate = (url) =>
-      url.includes("rpc/claim_reminders")
-        ? Response.json({ code: "XX000" }, { status: 500 })
-        : undefined;
+    sqlGate = (call) =>
+      callsFunction(call, "claim_reminders") ? serverError("XX000") : undefined;
 
     await run({ guilds: [guild] });
 
@@ -2833,9 +2813,9 @@ describe("what a failure leaves behind", () => {
     const guild = await guildInZone();
     const { eventId } = await eventWithThread(guild);
     const taskId = await task(guild, eventId, dateOffset(3));
-    dbGate = (url) =>
-      url.includes("rpc/mark_reminders_sent")
-        ? Response.json({ code: "XX000" }, { status: 500 })
+    sqlGate = (call) =>
+      callsFunction(call, "mark_reminders_sent")
+        ? serverError("XX000")
         : undefined;
 
     const result = await run({ guilds: [guild] });
@@ -2848,9 +2828,9 @@ describe("what a failure leaves behind", () => {
 
   it("reports a failed lock without touching Discord", async () => {
     const guild = await guildInZone();
-    dbGate = (url) =>
-      url.includes("rpc/begin_job_run")
-        ? Response.json({ code: "XX000", message: CANARY }, { status: 500 })
+    sqlGate = (call) =>
+      callsFunction(call, "begin_job_run")
+        ? serverError("XX000", CANARY)
         : undefined;
     const result = await run({ guilds: [guild] });
     expect(result).toEqual({
@@ -2872,10 +2852,6 @@ describe("round trips", () => {
       taskIds.push(await task(guild, eventId, dateOffset(3)));
     }
     const database: string[] = [];
-    dbGate = (url, init) => {
-      database.push(`${init?.method ?? "GET"} ${new URL(url).pathname}`);
-      return undefined;
-    };
     sqlGate = (call) => {
       database.push(
         readsFrom(call, "events") ? "read events" : sqlTarget(call.sql),
@@ -2892,8 +2868,8 @@ describe("round trips", () => {
       database.filter((each) => each === line).length;
     // Four messages of five, each with one claim call, one check and one mark call.
     expect(sent).toHaveLength(4);
-    expect(count("POST /rest/v1/rpc/claim_reminders")).toBe(4);
-    expect(count("POST /rest/v1/rpc/mark_reminders_sent")).toBe(4);
+    expect(count("call claim_reminders")).toBe(4);
+    expect(count("call mark_reminders_sent")).toBe(4);
     expect(database.filter((line) => line === "read events")).toHaveLength(
       // The four checks, and the event reminders' own read.
       5,

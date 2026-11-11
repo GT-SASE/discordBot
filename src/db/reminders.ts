@@ -2,12 +2,7 @@ import type { DateOnly } from "../lib/dates.ts";
 import { isSnowflake } from "../lib/snowflake.ts";
 import { REMINDER_KINDS } from "../reminders/plan.ts";
 import type { DbClient } from "./client.ts";
-import {
-  failure,
-  failureFromResponse,
-  refused,
-  type DbResult,
-} from "./errors.ts";
+import { failure, refused, type DbResult } from "./errors.ts";
 import {
   and,
   asc,
@@ -20,7 +15,7 @@ import {
   sql as fragment,
 } from "drizzle-orm";
 import { selected } from "./columns.ts";
-import { rest, run } from "./internal.ts";
+import { callFunction, run } from "./internal.ts";
 import {
   events,
   guildConfig,
@@ -35,7 +30,6 @@ import {
   nullableUuidValue,
   oneOrNone,
   rowList,
-  type ApiResponse,
   type CappedList,
 } from "./result.ts";
 import {
@@ -246,13 +240,10 @@ export async function claimReminder(
     return refused();
   }
   return nullableUuidValue(
-    await rest(db).rpc("claim_reminder", {
-      p_task_id: key.taskId,
-      p_kind: key.kind,
-      p_due_date: key.dueDate,
-      p_assignee_id: key.asRead?.assigneeId ?? null,
-      p_updated_at: key.asRead?.updatedAt ?? null,
-    }),
+    await callFunction(
+      db,
+      fragment`public.claim_reminder(p_task_id => ${key.taskId}, p_kind => ${key.kind}, p_due_date => ${key.dueDate}, p_assignee_id => ${key.asRead?.assigneeId ?? null}, p_updated_at => ${key.asRead?.updatedAt ?? null})`,
+    ),
   );
 }
 
@@ -299,16 +290,16 @@ async function perItem<K, T>(
 
 /** A JSON array with exactly one element per item, each read by `read`. */
 function batchAnswers<T>(
-  response: ApiResponse,
+  result: DbResult<unknown>,
   count: number,
   read: (element: unknown) => DbResult<T>,
 ): DbResult<readonly DbResult<T>[]> {
-  if (response.error !== null) {
-    return failureFromResponse(response.error, response.status);
+  if (!result.ok) {
+    return result;
   }
-  const { data } = response;
-  return Array.isArray(data) && data.length === count
-    ? { ok: true, value: data.map(read) }
+  const { value } = result;
+  return Array.isArray(value) && value.length === count
+    ? { ok: true, value: (value as unknown[]).map(read) }
     : failure("bad_row");
 }
 
@@ -339,13 +330,10 @@ export async function claimReminders(
     (key) => isReminderKey(key) && isTaskAsRead(key.asRead),
     async (valid) =>
       batchAnswers(
-        await rest(db).rpc("claim_reminders", {
-          p_task_ids: valid.map((key) => key.taskId),
-          p_kinds: valid.map((key) => key.kind),
-          p_due_dates: valid.map((key) => key.dueDate),
-          p_assignee_ids: valid.map((key) => key.asRead?.assigneeId ?? null),
-          p_updated_ats: valid.map((key) => key.asRead?.updatedAt ?? null),
-        }),
+        await callFunction(
+          db,
+          fragment`public.claim_reminders(p_task_ids => ${fragment.param(valid.map((key) => key.taskId))}::text[]::uuid[], p_kinds => ${fragment.param(valid.map((key) => key.kind))}::text[]::public.reminder_kind[], p_due_dates => ${fragment.param(valid.map((key) => key.dueDate))}::text[]::date[], p_assignee_ids => ${fragment.param(valid.map((key) => key.asRead?.assigneeId ?? null))}::text[]::text[], p_updated_ats => ${fragment.param(valid.map((key) => key.asRead?.updatedAt ?? null))}::text[]::timestamp with time zone[])`,
+        ),
         valid.length,
         claimAnswer,
       ),
@@ -365,14 +353,10 @@ export async function reclaimReminder(
     return refused();
   }
   return nullableUuidValue(
-    await rest(db).rpc("reclaim_reminder", {
-      p_task_id: key.taskId,
-      p_kind: key.kind,
-      p_due_date: key.dueDate,
-      p_claim_token: key.claimToken,
-      p_assignee_id: key.asRead?.assigneeId ?? null,
-      p_updated_at: key.asRead?.updatedAt ?? null,
-    }),
+    await callFunction(
+      db,
+      fragment`public.reclaim_reminder(p_task_id => ${key.taskId}, p_kind => ${key.kind}, p_due_date => ${key.dueDate}, p_claim_token => ${key.claimToken}, p_assignee_id => ${key.asRead?.assigneeId ?? null}, p_updated_at => ${key.asRead?.updatedAt ?? null})`,
+    ),
   );
 }
 
@@ -495,13 +479,10 @@ export async function markReminderSent(
     return refused();
   }
   return booleanValue(
-    await rest(db).rpc("mark_reminder_sent", {
-      p_task_id: key.taskId,
-      p_kind: key.kind,
-      p_due_date: key.dueDate,
-      p_claim_token: key.claimToken,
-      p_message_id: key.messageId,
-    }),
+    await callFunction(
+      db,
+      fragment`public.mark_reminder_sent(p_task_id => ${key.taskId}, p_kind => ${key.kind}, p_due_date => ${key.dueDate}, p_claim_token => ${key.claimToken}, p_message_id => ${key.messageId})`,
+    ),
   );
 }
 
@@ -525,13 +506,10 @@ export async function markRemindersSent(
       isReminderKey(key) && isUuid(key.claimToken) && isSnowflake(messageId),
     async (valid) =>
       batchAnswers(
-        await rest(db).rpc("mark_reminders_sent", {
-          p_task_ids: valid.map((key) => key.taskId),
-          p_kinds: valid.map((key) => key.kind),
-          p_due_dates: valid.map((key) => key.dueDate),
-          p_claim_tokens: valid.map((key) => key.claimToken),
-          p_message_id: messageId,
-        }),
+        await callFunction(
+          db,
+          fragment`public.mark_reminders_sent(p_task_ids => ${fragment.param(valid.map((key) => key.taskId))}::text[]::uuid[], p_kinds => ${fragment.param(valid.map((key) => key.kind))}::text[]::public.reminder_kind[], p_due_dates => ${fragment.param(valid.map((key) => key.dueDate))}::text[]::date[], p_claim_tokens => ${fragment.param(valid.map((key) => key.claimToken))}::text[]::uuid[], p_message_id => ${messageId})`,
+        ),
         valid.length,
         (element) =>
           typeof element === "boolean"
@@ -550,12 +528,10 @@ export async function markReminderSkipped(
     return refused();
   }
   return booleanValue(
-    await rest(db).rpc("mark_reminder_skipped", {
-      p_task_id: key.taskId,
-      p_kind: key.kind,
-      p_due_date: key.dueDate,
-      p_claim_token: key.claimToken,
-    }),
+    await callFunction(
+      db,
+      fragment`public.mark_reminder_skipped(p_task_id => ${key.taskId}, p_kind => ${key.kind}, p_due_date => ${key.dueDate}, p_claim_token => ${key.claimToken})`,
+    ),
   );
 }
 
@@ -572,12 +548,10 @@ export async function recordReminderRefused(
     return refused();
   }
   return booleanValue(
-    await rest(db).rpc("record_reminder_refused", {
-      p_task_id: key.taskId,
-      p_kind: key.kind,
-      p_due_date: key.dueDate,
-      p_claim_token: key.claimToken,
-    }),
+    await callFunction(
+      db,
+      fragment`public.record_reminder_refused(p_task_id => ${key.taskId}, p_kind => ${key.kind}, p_due_date => ${key.dueDate}, p_claim_token => ${key.claimToken})`,
+    ),
   );
 }
 
@@ -598,12 +572,12 @@ export async function recordThreadRefusal(
   if (!isThreadRefusalKey(key)) {
     return refused();
   }
-  const response = await rest(db).rpc("record_thread_refusal", {
-    p_event_id: key.eventId,
-    p_guild_id: key.guildId,
-  });
+  const response = await callFunction(
+    db,
+    fragment`public.record_thread_refusal(p_event_id => ${key.eventId}, p_guild_id => ${key.guildId})`,
+  );
   // The function returns null when there is no live event with that ID in that guild.
-  if (response.error === null && response.data === null) {
+  if (response.ok && response.value === null) {
     return failure("not_found");
   }
   return integerValue(response);
@@ -618,9 +592,9 @@ export async function clearThreadRefusals(
     return refused();
   }
   return booleanValue(
-    await rest(db).rpc("clear_thread_refusals", {
-      p_event_id: key.eventId,
-      p_guild_id: key.guildId,
-    }),
+    await callFunction(
+      db,
+      fragment`public.clear_thread_refusals(p_event_id => ${key.eventId}, p_guild_id => ${key.guildId})`,
+    ),
   );
 }

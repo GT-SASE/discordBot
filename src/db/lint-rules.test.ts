@@ -142,6 +142,14 @@ describe("database lint rules", () => {
       expect(problems("db.execute(sql`SELECT public.f(${x})`);")).toEqual([]);
     });
 
+    it("calls a database function only through a template written in place", () => {
+      refused(`callFunction(db, call);`);
+      refused("callFunction(db, `public.f(${x})`);");
+      expect(
+        problems("callFunction(db, fragment`public.f(p_x => ${x})`);"),
+      ).toEqual([]);
+    });
+
     it("refuses selecting or returning every column", () => {
       refused(`sql.select().from(events);`);
       refused(`sql.update(tasks).set({ name }).returning();`);

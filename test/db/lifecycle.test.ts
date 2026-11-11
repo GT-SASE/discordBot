@@ -255,7 +255,7 @@ describe("task lifecycle", () => {
       const moved = "2030-03-01";
       await queryAs(
         db,
-        "bot_app",
+        MIGRATION_OWNER,
         `UPDATE public.tasks SET due_date = $2 WHERE id = $1`,
         [taskId, moved],
       );
@@ -272,7 +272,7 @@ describe("task lifecycle", () => {
       const taskId = await newTask();
       await queryAs(
         db,
-        "bot_app",
+        MIGRATION_OWNER,
         `UPDATE public.tasks SET due_date = '2030-03-01' WHERE id = $1`,
         [taskId],
       );

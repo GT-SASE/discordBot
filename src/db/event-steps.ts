@@ -24,7 +24,7 @@ import {
   sql as fragment,
 } from "drizzle-orm";
 import { selected } from "./columns.ts";
-import { rest, run } from "./internal.ts";
+import { callFunction, run } from "./internal.ts";
 import {
   eventReminderLog,
   eventStepAssignees,
@@ -38,7 +38,6 @@ import {
   cappedList,
   nullableUuidValue,
   rowList,
-  type ApiResponse,
   type CappedList,
   type RowList,
 } from "./result.ts";
@@ -130,11 +129,11 @@ function isCompletable(kind: unknown): kind is CompletableStepKind {
 }
 
 /** The step functions return null when there is no live event with that ID in that guild. */
-function liveEventBoolean(response: ApiResponse): DbResult<boolean> {
-  if (response.error === null && response.data === null) {
+function liveEventBoolean(result: DbResult<unknown>): DbResult<boolean> {
+  if (result.ok && result.value === null) {
     return failure("not_found");
   }
-  return booleanValue(response);
+  return booleanValue(result);
 }
 
 /**
@@ -231,13 +230,10 @@ export async function assignEventStep(
     return refused();
   }
   return liveEventBoolean(
-    await rest(db).rpc("assign_event_step", {
-      p_event_id: input.eventId,
-      p_guild_id: input.guildId,
-      p_kind: input.kind,
-      p_user_id: input.userId,
-      p_actor_id: input.actorId,
-    }),
+    await callFunction(
+      db,
+      fragment`public.assign_event_step(p_event_id => ${input.eventId}, p_guild_id => ${input.guildId}, p_kind => ${input.kind}, p_user_id => ${input.userId}, p_actor_id => ${input.actorId})`,
+    ),
   );
 }
 
@@ -254,13 +250,10 @@ export async function unassignEventStep(
     return refused();
   }
   return liveEventBoolean(
-    await rest(db).rpc("unassign_event_step", {
-      p_event_id: input.eventId,
-      p_guild_id: input.guildId,
-      p_kind: input.kind,
-      p_user_id: input.userId,
-      p_actor_id: input.actorId,
-    }),
+    await callFunction(
+      db,
+      fragment`public.unassign_event_step(p_event_id => ${input.eventId}, p_guild_id => ${input.guildId}, p_kind => ${input.kind}, p_user_id => ${input.userId}, p_actor_id => ${input.actorId})`,
+    ),
   );
 }
 
@@ -280,12 +273,10 @@ export async function completeEventStep(
     return refused();
   }
   return liveEventBoolean(
-    await rest(db).rpc("complete_event_step", {
-      p_event_id: input.eventId,
-      p_guild_id: input.guildId,
-      p_kind: input.kind,
-      p_actor_id: input.actorId,
-    }),
+    await callFunction(
+      db,
+      fragment`public.complete_event_step(p_event_id => ${input.eventId}, p_guild_id => ${input.guildId}, p_kind => ${input.kind}, p_actor_id => ${input.actorId})`,
+    ),
   );
 }
 
@@ -309,11 +300,10 @@ export async function claimStepHandoff(
     return refused();
   }
   return booleanValue(
-    await rest(db).rpc("claim_step_handoff", {
-      p_event_id: key.eventId,
-      p_guild_id: key.guildId,
-      p_kind: key.kind,
-    }),
+    await callFunction(
+      db,
+      fragment`public.claim_step_handoff(p_event_id => ${key.eventId}, p_guild_id => ${key.guildId}, p_kind => ${key.kind})`,
+    ),
   );
 }
 
@@ -326,11 +316,10 @@ export async function markStepHandoffSent(
     return refused();
   }
   return booleanValue(
-    await rest(db).rpc("mark_step_handoff_sent", {
-      p_event_id: key.eventId,
-      p_guild_id: key.guildId,
-      p_kind: key.kind,
-    }),
+    await callFunction(
+      db,
+      fragment`public.mark_step_handoff_sent(p_event_id => ${key.eventId}, p_guild_id => ${key.guildId}, p_kind => ${key.kind})`,
+    ),
   );
 }
 
@@ -351,12 +340,10 @@ export async function setEventPickupTime(
     return refused();
   }
   return liveEventBoolean(
-    await rest(db).rpc("set_event_pickup_time", {
-      p_event_id: input.eventId,
-      p_guild_id: input.guildId,
-      p_pickup_time: input.pickupTime,
-      p_actor_id: input.actorId,
-    }),
+    await callFunction(
+      db,
+      fragment`public.set_event_pickup_time(p_event_id => ${input.eventId}, p_guild_id => ${input.guildId}, p_pickup_time => ${input.pickupTime}, p_actor_id => ${input.actorId})`,
+    ),
   );
 }
 
@@ -592,11 +579,10 @@ export async function claimEventReminder(
     return refused();
   }
   return nullableUuidValue(
-    await rest(db).rpc("claim_event_reminder", {
-      p_event_id: key.eventId,
-      p_kind: key.kind,
-      p_reminder_date: key.reminderDate,
-    }),
+    await callFunction(
+      db,
+      fragment`public.claim_event_reminder(p_event_id => ${key.eventId}, p_kind => ${key.kind}, p_reminder_date => ${key.reminderDate})`,
+    ),
   );
 }
 
@@ -609,12 +595,10 @@ export async function reclaimEventReminder(
     return refused();
   }
   return nullableUuidValue(
-    await rest(db).rpc("reclaim_event_reminder", {
-      p_event_id: key.eventId,
-      p_kind: key.kind,
-      p_reminder_date: key.reminderDate,
-      p_claim_token: key.claimToken,
-    }),
+    await callFunction(
+      db,
+      fragment`public.reclaim_event_reminder(p_event_id => ${key.eventId}, p_kind => ${key.kind}, p_reminder_date => ${key.reminderDate}, p_claim_token => ${key.claimToken})`,
+    ),
   );
 }
 
@@ -631,13 +615,10 @@ export async function markEventReminderSent(
     return refused();
   }
   return booleanValue(
-    await rest(db).rpc("mark_event_reminder_sent", {
-      p_event_id: key.eventId,
-      p_kind: key.kind,
-      p_reminder_date: key.reminderDate,
-      p_claim_token: key.claimToken,
-      p_message_id: key.messageId,
-    }),
+    await callFunction(
+      db,
+      fragment`public.mark_event_reminder_sent(p_event_id => ${key.eventId}, p_kind => ${key.kind}, p_reminder_date => ${key.reminderDate}, p_claim_token => ${key.claimToken}, p_message_id => ${key.messageId})`,
+    ),
   );
 }
 
@@ -650,11 +631,9 @@ export async function markEventReminderSkipped(
     return refused();
   }
   return booleanValue(
-    await rest(db).rpc("mark_event_reminder_skipped", {
-      p_event_id: key.eventId,
-      p_kind: key.kind,
-      p_reminder_date: key.reminderDate,
-      p_claim_token: key.claimToken,
-    }),
+    await callFunction(
+      db,
+      fragment`public.mark_event_reminder_skipped(p_event_id => ${key.eventId}, p_kind => ${key.kind}, p_reminder_date => ${key.reminderDate}, p_claim_token => ${key.claimToken})`,
+    ),
   );
 }

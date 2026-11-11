@@ -7,7 +7,12 @@
 import type { PGlite } from "@electric-sql/pglite";
 import { getTableConfig } from "drizzle-orm/pg-core";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { ENUMS, TABLES, isoTimestamp } from "../../src/db/schema.ts";
+import {
+  ENUMS,
+  INSERT_TABLES,
+  TABLES,
+  isoTimestamp,
+} from "../../src/db/schema.ts";
 import { createMigratedDb } from "./harness.ts";
 
 /** Tables the schema leaves out on purpose. See the note at the top of schema.ts. */
@@ -100,6 +105,35 @@ describe("the drizzle schema", () => {
         [name],
       );
       expect(drizzlePrimaryKey(table)).toEqual(rows.map((row) => row.column));
+    },
+  );
+
+  it.each(
+    INSERT_TABLES.map((table) => [getTableConfig(table).name, table] as const),
+  )(
+    "inserts into %s only the columns bot_app may insert, with their types",
+    async (name, table) => {
+      const { rows } = await db.query<{ column: string }>(
+        `SELECT column_name AS column FROM information_schema.column_privileges
+         WHERE grantee = 'bot_app' AND privilege_type = 'INSERT'
+           AND table_schema = 'public' AND table_name = $1
+         ORDER BY 1`,
+        [name],
+      );
+      const insertable = getTableConfig(table).columns;
+      expect(insertable.map((column) => column.name).sort()).toEqual(
+        rows.map((row) => row.column),
+      );
+      const full = TABLES.find((each) => getTableConfig(each).name === name);
+      const types = new Map(
+        (full === undefined ? [] : drizzleColumns(full)).map((column) => [
+          column.column,
+          column.type,
+        ]),
+      );
+      for (const column of insertable) {
+        expect(column.getSQLType()).toBe(types.get(column.name));
+      }
     },
   );
 

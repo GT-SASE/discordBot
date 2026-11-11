@@ -1,7 +1,7 @@
 import type { DbClient } from "./client.ts";
-import { and, desc, eq } from "drizzle-orm";
+import { and, desc, eq, sql as fragment } from "drizzle-orm";
 import { JOB_RUN_COLUMNS } from "./columns.ts";
-import { rest, run } from "./internal.ts";
+import { callFunction, run } from "./internal.ts";
 import { jobRuns } from "./schema.ts";
 import {
   errorSummary,
@@ -9,7 +9,12 @@ import {
   type DbError,
   type DbResult,
 } from "./errors.ts";
-import { exactlyOne, nullableUuidValue, oneOrNone } from "./result.ts";
+import {
+  exactlyOne,
+  jsonRows,
+  nullableUuidValue,
+  oneOrNone,
+} from "./result.ts";
 import { parseJobRun, type JobRun } from "./types.ts";
 import { isInstant, isUuid } from "./validate.ts";
 
@@ -89,10 +94,10 @@ export async function beginJobRun(
     return refused();
   }
   return nullableUuidValue(
-    await rest(db).rpc("begin_job_run", {
-      p_job_name: jobName,
-      p_stale_after_seconds: staleAfterSeconds,
-    }),
+    await callFunction(
+      db,
+      fragment`public.begin_job_run(p_job_name => ${jobName}, p_stale_after_seconds => ${staleAfterSeconds})`,
+    ),
   );
 }
 
@@ -121,12 +126,12 @@ export async function finishJobRun(
     return refused();
   }
   return exactlyOne(
-    await rest(db).rpc("finish_job_run", {
-      p_id: id,
-      p_finished_at: now.toISOString(),
-      p_results: results,
-      p_error: error === null ? null : errorSummary(error),
-    }),
+    jsonRows(
+      await callFunction(
+        db,
+        fragment`public.finish_job_run(p_id => ${id}, p_finished_at => ${now.toISOString()}, p_results => ${JSON.stringify(results)}::text::jsonb, p_error => ${error === null ? null : errorSummary(error)})`,
+      ),
+    ),
     parseJobRun,
   );
 }

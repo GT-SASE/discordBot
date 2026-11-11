@@ -701,6 +701,55 @@ BEGIN
 END;
 $$;
 
+-- The one way to change a task's text, date or person. A new person counts against the
+-- officer's daily limit in the same transaction as the change, so the limit can be
+-- neither skipped nor spent on an edit that did not land. NULL when no open, live task
+-- with that ID in that guild is at the version the caller read.
+CREATE FUNCTION public.edit_task(p_task_id uuid, p_guild_id text, p_expected_updated_at timestamp with time zone, p_description text, p_due_date date, p_assignee_id text, p_actor_id text) RETURNS jsonb
+    LANGUAGE plpgsql SECURITY DEFINER
+    SET search_path TO ''
+    AS $$
+DECLARE
+  v_assignee text;
+  v_task jsonb;
+BEGIN
+  SELECT task.assignee_id INTO v_assignee
+  FROM public.tasks AS task
+  WHERE task.id = p_task_id
+    AND task.guild_id = p_guild_id
+    AND task.updated_at = p_expected_updated_at
+    AND task.status = 'open'
+    AND task.deleted_at IS NULL
+  FOR UPDATE;
+  IF NOT FOUND THEN
+    RETURN NULL;
+  END IF;
+
+  IF v_assignee IS DISTINCT FROM p_assignee_id THEN
+    INSERT INTO public.task_reassignments (guild_id, actor_id, task_id)
+    VALUES (p_guild_id, p_actor_id, p_task_id);
+  END IF;
+
+  UPDATE public.tasks AS task
+  SET description = p_description, due_date = p_due_date, assignee_id = p_assignee_id
+  WHERE task.id = p_task_id
+  RETURNING pg_catalog.jsonb_build_object(
+    'id', task.id,
+    'event_id', task.event_id,
+    'guild_id', task.guild_id,
+    'assignee_id', task.assignee_id,
+    'description', task.description,
+    'due_date', task.due_date,
+    'status', task.status,
+    'completed_at', task.completed_at,
+    'created_by', task.created_by,
+    'deleted_at', task.deleted_at,
+    'updated_at', task.updated_at
+  ) INTO v_task;
+  RETURN v_task;
+END;
+$$;
+
 CREATE FUNCTION public.enforce_reassignment_quota() RETURNS trigger
     LANGUAGE plpgsql SECURITY DEFINER
     SET search_path TO ''
@@ -1955,10 +2004,10 @@ GRANT UPDATE (name, event_date, thread_id, overview_message_id, status, thread_s
   ON TABLE public.events TO bot_app;
 GRANT INSERT (event_id, guild_id, assignee_id, description, due_date, created_by)
   ON TABLE public.tasks TO bot_app;
-GRANT UPDATE (assignee_id, description, due_date, status, completed_at, deleted_at)
+-- Text, date and person change only through edit_task, which counts a new person
+-- against the officer's limit.
+GRANT UPDATE (status, completed_at, deleted_at)
   ON TABLE public.tasks TO bot_app;
--- Counted against the officer's limit by a trigger. The bot never reads it back.
-GRANT INSERT (guild_id, actor_id, task_id) ON TABLE public.task_reassignments TO bot_app;
 
 GRANT EXECUTE ON FUNCTION
   public.apply_config_change(text, integer, text, boolean, text[], text[], text),
@@ -1973,6 +2022,7 @@ GRANT EXECUTE ON FUNCTION
   public.claim_step_handoff(uuid, text, public.event_step_kind),
   public.clear_thread_refusals(uuid, text),
   public.complete_event_step(uuid, text, public.event_step_kind, text),
+  public.edit_task(uuid, text, timestamptz, text, date, text, text),
   public.expire_interaction_claims(),
   public.finish_job_run(uuid, timestamptz, jsonb, text),
   public.mark_channel_unavailable(text, text),
@@ -2011,7 +2061,6 @@ CREATE POLICY bot_app_read ON public.setup_drafts FOR SELECT TO bot_app USING (t
 CREATE POLICY bot_app_read ON public.tasks FOR SELECT TO bot_app USING (true);
 CREATE POLICY bot_app_insert ON public.events FOR INSERT TO bot_app WITH CHECK (true);
 CREATE POLICY bot_app_insert ON public.tasks FOR INSERT TO bot_app WITH CHECK (true);
-CREATE POLICY bot_app_insert ON public.task_reassignments FOR INSERT TO bot_app WITH CHECK (true);
 CREATE POLICY bot_app_update ON public.events FOR UPDATE TO bot_app USING (true) WITH CHECK (true);
 CREATE POLICY bot_app_update ON public.tasks FOR UPDATE TO bot_app USING (true) WITH CHECK (true);
 

@@ -36,7 +36,6 @@ const TOKEN = ["unit", "test", "token"].join("-");
 
 let database: PGlite;
 let db: DbClient;
-let dbGate: (url: string) => Response | undefined;
 /** Lets a test answer or fail one statement built with Drizzle. */
 let sqlGate: Intercept;
 let requests: { method: string; path: string }[];
@@ -105,10 +104,7 @@ beforeAll(async () => {
   db = createDbClient({
     url: TEST_ORIGIN,
     secretKey: TEST_SECRET_KEY,
-    fetch: (input, init) => {
-      const answer = dbGate(input as string);
-      return answer === undefined ? shim(input, init) : Promise.resolve(answer);
-    },
+    fetch: shim,
     sql: pgliteSql(database, (call) => sqlGate(call)),
   });
 });
@@ -116,7 +112,6 @@ beforeAll(async () => {
 afterAll(() => database.close());
 
 beforeEach(async () => {
-  dbGate = () => undefined;
   sqlGate = () => undefined;
   requests = [];
   answers = new Map();

@@ -1,8 +1,16 @@
 import { isSnowflake } from "../lib/snowflake.ts";
 import type { DbClient } from "./client.ts";
-import { and, asc, desc, eq, inArray, isNull } from "drizzle-orm";
+import {
+  and,
+  asc,
+  desc,
+  eq,
+  inArray,
+  isNull,
+  sql as fragment,
+} from "drizzle-orm";
 import { EVENT_COLUMNS, MANAGED_CHANNEL_COLUMNS } from "./columns.ts";
-import { rest, run } from "./internal.ts";
+import { callFunction, run } from "./internal.ts";
 import { events, managedChannels } from "./schema.ts";
 import { refused, type DbResult } from "./errors.ts";
 import {
@@ -193,9 +201,9 @@ export async function markChannelUnavailable(
     return refused();
   }
   return booleanValue(
-    await rest(db).rpc("mark_channel_unavailable", {
-      p_guild_id: guildId,
-      p_channel_id: channelId,
-    }),
+    await callFunction(
+      db,
+      fragment`public.mark_channel_unavailable(p_guild_id => ${guildId}, p_channel_id => ${channelId})`,
+    ),
   );
 }

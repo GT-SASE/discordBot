@@ -10,19 +10,28 @@
 import type { DateOnly } from "../lib/dates.ts";
 import { isSnowflake } from "../lib/snowflake.ts";
 import type { DbClient } from "./client.ts";
-import { and, asc, eq, gte, ilike, isNull, lte } from "drizzle-orm";
+import {
+  and,
+  asc,
+  eq,
+  gte,
+  ilike,
+  isNull,
+  lte,
+  sql as fragment,
+} from "drizzle-orm";
 import {
   LIVE_TASK_CHOICE_COLUMNS,
   TASK_CHOICE_COLUMNS,
   TASK_COLUMNS,
 } from "./columns.ts";
-import { rest, run } from "./internal.ts";
-import { events, tasks } from "./schema.ts";
-import { refused, type DbResult } from "./errors.ts";
+import { callFunction, run } from "./internal.ts";
+import { events, taskInserts, tasks } from "./schema.ts";
+import { failure, refused, type DbResult } from "./errors.ts";
 import {
   cappedList,
   exactlyOne,
-  noRows,
+  jsonRows,
   oneOrNone,
   rowList,
   type CappedList,
@@ -126,19 +135,19 @@ export async function createTask(
     return refused();
   }
   return exactlyOne(
-    await rest(db)
-      .from("tasks")
-      .insert({
-        event_id: eventId,
-        guild_id: guildId,
-        assignee_id: assigneeId,
-        description,
-        due_date: dueDate,
-        created_by: actorId,
-      })
-      .select(
-        "id,event_id,guild_id,assignee_id,description,due_date,status,completed_at,created_by,deleted_at,updated_at",
-      ),
+    await run(db, (sql) =>
+      sql
+        .insert(taskInserts)
+        .values({
+          eventId: eventId,
+          guildId: guildId,
+          assigneeId: assigneeId,
+          description: description,
+          dueDate: dueDate,
+          createdBy: actorId,
+        })
+        .returning(TASK_COLUMNS),
+    ),
     parseTask,
   );
 }
@@ -495,17 +504,21 @@ export async function markOwnTaskDone(
     return refused();
   }
   return exactlyOne(
-    await rest(db)
-      .from("tasks")
-      .update({ status: "done", completed_at: key.now.toISOString() })
-      .eq("id", key.taskId)
-      .eq("guild_id", key.guildId)
-      .eq("assignee_id", key.assigneeId)
-      .eq("status", "open")
-      .is("deleted_at", null)
-      .select(
-        "id,event_id,guild_id,assignee_id,description,due_date,status,completed_at,created_by,deleted_at,updated_at",
-      ),
+    await run(db, (sql) =>
+      sql
+        .update(tasks)
+        .set({ status: "done", completedAt: key.now.toISOString() })
+        .where(
+          and(
+            eq(tasks.id, key.taskId),
+            eq(tasks.guildId, key.guildId),
+            eq(tasks.assigneeId, key.assigneeId),
+            eq(tasks.status, "open"),
+            isNull(tasks.deletedAt),
+          ),
+        )
+        .returning(TASK_COLUMNS),
+    ),
     parseTask,
   );
 }
@@ -519,65 +532,20 @@ export async function markTaskDoneAsOfficer(
     return refused();
   }
   return exactlyOne(
-    await rest(db)
-      .from("tasks")
-      .update({ status: "done", completed_at: key.now.toISOString() })
-      .eq("id", key.taskId)
-      .eq("guild_id", key.guildId)
-      .eq("status", "open")
-      .is("deleted_at", null)
-      .select(
-        "id,event_id,guild_id,assignee_id,description,due_date,status,completed_at,created_by,deleted_at,updated_at",
-      ),
-    parseTask,
-  );
-}
-
-export async function reassignTask(
-  db: DbClient,
-  key: TaskEditKey & { assigneeId: string },
-): Promise<DbResult<TaskRow>> {
-  if (!isTaskEditKey(key) || !isSnowflake(key.assigneeId)) {
-    return refused();
-  }
-  return exactlyOne(
-    await rest(db)
-      .from("tasks")
-      .update({ assignee_id: key.assigneeId })
-      .eq("id", key.taskId)
-      .eq("guild_id", key.guildId)
-      .eq("updated_at", key.expectedUpdatedAt)
-      .eq("status", "open")
-      .is("deleted_at", null)
-      .select(
-        "id,event_id,guild_id,assignee_id,description,due_date,status,completed_at,created_by,deleted_at,updated_at",
-      ),
-    parseTask,
-  );
-}
-
-export async function setTaskDescription(
-  db: DbClient,
-  key: TaskEditKey & { description: string },
-): Promise<DbResult<TaskRow>> {
-  if (
-    !isTaskEditKey(key) ||
-    !isStoredText(key.description, MAX_TASK_DESCRIPTION_LENGTH)
-  ) {
-    return refused();
-  }
-  return exactlyOne(
-    await rest(db)
-      .from("tasks")
-      .update({ description: key.description })
-      .eq("id", key.taskId)
-      .eq("guild_id", key.guildId)
-      .eq("updated_at", key.expectedUpdatedAt)
-      .eq("status", "open")
-      .is("deleted_at", null)
-      .select(
-        "id,event_id,guild_id,assignee_id,description,due_date,status,completed_at,created_by,deleted_at,updated_at",
-      ),
+    await run(db, (sql) =>
+      sql
+        .update(tasks)
+        .set({ status: "done", completedAt: key.now.toISOString() })
+        .where(
+          and(
+            eq(tasks.id, key.taskId),
+            eq(tasks.guildId, key.guildId),
+            eq(tasks.status, "open"),
+            isNull(tasks.deletedAt),
+          ),
+        )
+        .returning(TASK_COLUMNS),
+    ),
     parseTask,
   );
 }
@@ -585,7 +553,9 @@ export async function setTaskDescription(
 /**
  * Sets all three editable fields in one write, so an edit of several either lands
  * whole or not at all. The caller passes the values it read for any left unchanged,
- * which is safe because the write only matches that version of the row.
+ * which is safe because the write only matches that version of the row. A new person
+ * counts against the officer's daily limit in the same write: at the limit, nothing
+ * changes and the edit fails as `actor_task_limit`.
  */
 export async function editTask(
   db: DbClient,
@@ -593,79 +563,29 @@ export async function editTask(
     description: string;
     dueDate: DateOnly;
     assigneeId: string;
+    actorId: string;
   },
 ): Promise<DbResult<TaskRow>> {
   if (
     !isTaskEditKey(key) ||
     !isStoredText(key.description, MAX_TASK_DESCRIPTION_LENGTH) ||
     !isDbDate(key.dueDate) ||
-    !isSnowflake(key.assigneeId)
+    !isSnowflake(key.assigneeId) ||
+    !isSnowflake(key.actorId)
   ) {
     return refused();
   }
-  return exactlyOne(
-    await rest(db)
-      .from("tasks")
-      .update({
-        description: key.description,
-        due_date: key.dueDate,
-        assignee_id: key.assigneeId,
-      })
-      .eq("id", key.taskId)
-      .eq("guild_id", key.guildId)
-      .eq("updated_at", key.expectedUpdatedAt)
-      .eq("status", "open")
-      .is("deleted_at", null)
-      .select(
-        "id,event_id,guild_id,assignee_id,description,due_date,status,completed_at,created_by,deleted_at,updated_at",
-      ),
-    parseTask,
+  const edited = await callFunction(
+    db,
+    fragment`public.edit_task(p_task_id => ${key.taskId}, p_guild_id => ${key.guildId}, p_expected_updated_at => ${key.expectedUpdatedAt}, p_description => ${key.description}, p_due_date => ${key.dueDate}, p_assignee_id => ${key.assigneeId}, p_actor_id => ${key.actorId})`,
   );
-}
-
-/** Moving a due date re-arms the task's reminders, because the log is keyed by date. */
-export async function setTaskDueDate(
-  db: DbClient,
-  key: TaskEditKey & { dueDate: DateOnly },
-): Promise<DbResult<TaskRow>> {
-  if (!isTaskEditKey(key) || !isDbDate(key.dueDate)) {
-    return refused();
+  // Null when the task is not at the version read, or no longer open and live.
+  if (edited.ok && edited.value === null) {
+    return failure("not_found");
   }
   return exactlyOne(
-    await rest(db)
-      .from("tasks")
-      .update({ due_date: key.dueDate })
-      .eq("id", key.taskId)
-      .eq("guild_id", key.guildId)
-      .eq("updated_at", key.expectedUpdatedAt)
-      .eq("status", "open")
-      .is("deleted_at", null)
-      .select(
-        "id,event_id,guild_id,assignee_id,description,due_date,status,completed_at,created_by,deleted_at,updated_at",
-      ),
+    edited.ok ? jsonRows({ ok: true, value: [edited.value] }) : edited,
     parseTask,
-  );
-}
-
-/**
- * Counts a reassignment against the officer's limit, before the task changes. Fails as
- * `actor_task_limit` once the officer has used it up.
- */
-export async function recordReassignment(
-  db: DbClient,
-  {
-    guildId,
-    actorId,
-    taskId,
-  }: { guildId: string; actorId: string; taskId: string },
-): Promise<DbResult<null>> {
-  if (!isSnowflake(guildId) || !isSnowflake(actorId) || !isUuid(taskId)) {
-    return refused();
-  }
-  return noRows(
-    await rest(db)
-      .from("task_reassignments")
-      .insert({ guild_id: guildId, actor_id: actorId, task_id: taskId }),
   );
 }
 
@@ -681,16 +601,20 @@ export async function softDeleteTaskIfUnchanged(
     return refused();
   }
   return exactlyOne(
-    await rest(db)
-      .from("tasks")
-      .update({ deleted_at: key.now.toISOString() })
-      .eq("id", key.taskId)
-      .eq("guild_id", key.guildId)
-      .eq("updated_at", key.expectedUpdatedAt)
-      .is("deleted_at", null)
-      .select(
-        "id,event_id,guild_id,assignee_id,description,due_date,status,completed_at,created_by,deleted_at,updated_at",
-      ),
+    await run(db, (sql) =>
+      sql
+        .update(tasks)
+        .set({ deletedAt: key.now.toISOString() })
+        .where(
+          and(
+            eq(tasks.id, key.taskId),
+            eq(tasks.guildId, key.guildId),
+            eq(tasks.updatedAt, key.expectedUpdatedAt),
+            isNull(tasks.deletedAt),
+          ),
+        )
+        .returning(TASK_COLUMNS),
+    ),
     parseTask,
   );
 }
@@ -704,15 +628,19 @@ export async function softDeleteTask(
     return refused();
   }
   return exactlyOne(
-    await rest(db)
-      .from("tasks")
-      .update({ deleted_at: key.now.toISOString() })
-      .eq("id", key.taskId)
-      .eq("guild_id", key.guildId)
-      .is("deleted_at", null)
-      .select(
-        "id,event_id,guild_id,assignee_id,description,due_date,status,completed_at,created_by,deleted_at,updated_at",
-      ),
+    await run(db, (sql) =>
+      sql
+        .update(tasks)
+        .set({ deletedAt: key.now.toISOString() })
+        .where(
+          and(
+            eq(tasks.id, key.taskId),
+            eq(tasks.guildId, key.guildId),
+            isNull(tasks.deletedAt),
+          ),
+        )
+        .returning(TASK_COLUMNS),
+    ),
     parseTask,
   );
 }

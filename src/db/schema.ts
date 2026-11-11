@@ -297,3 +297,31 @@ export const ENUMS = [
   taskStatus,
   threadStatus,
 ] as const;
+
+/*
+ * What the bot's role may insert, as tables of their own. Drizzle names every column of a
+ * table in an insert, writing DEFAULT for the ones not given, and Postgres needs the
+ * INSERT grant on every column named. So an insert goes through one of these, which name
+ * only the granted columns. They also stop code from writing any other column at all.
+ */
+
+export const eventInserts = pgTable("events", {
+  guildId: discordId("guild_id").notNull(),
+  channelId: discordId("channel_id").notNull(),
+  name: text("name").notNull(),
+  eventDate: date("event_date", { mode: "string" }).notNull(),
+  createdBy: discordId("created_by").notNull(),
+  threadId: discordId("thread_id"),
+  threadStatus: threadStatus("thread_status"),
+});
+
+export const taskInserts = pgTable("tasks", {
+  eventId: uuid("event_id").notNull(),
+  guildId: discordId("guild_id").notNull(),
+  assigneeId: discordId("assignee_id").notNull(),
+  description: text("description").notNull(),
+  dueDate: date("due_date", { mode: "string" }).notNull(),
+  createdBy: discordId("created_by").notNull(),
+});
+
+export const INSERT_TABLES = [eventInserts, taskInserts] as const;

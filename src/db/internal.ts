@@ -5,8 +5,10 @@
  */
 
 import type { PostgrestClient } from "@supabase/postgrest-js";
+import { sql as fragment, type SQL } from "drizzle-orm";
 import type { PgDatabase, PgQueryResultHKT } from "drizzle-orm/pg-core";
 import { failure, failureFromError, type DbResult } from "./errors.ts";
+import { functionValue } from "./result.ts";
 import type { Database } from "./types.ts";
 
 declare const dbClientBrand: unique symbol;
@@ -89,4 +91,18 @@ export async function run<T>(
   } finally {
     clearTimeout(timer);
   }
+}
+
+/**
+ * Calls one database function and returns what it returned. Pass the call as a sql
+ * template, such as fragment`public.claim_interaction(${id})`, so every argument is a
+ * parameter. Lint refuses anything else.
+ */
+export async function callFunction(
+  db: DbClient,
+  call: SQL,
+): Promise<DbResult<unknown>> {
+  return functionValue(
+    await run(db, (sql) => sql.execute(fragment`select ${call} as value`)),
+  );
 }

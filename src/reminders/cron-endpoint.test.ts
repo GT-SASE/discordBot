@@ -60,6 +60,8 @@ vi.mock("../discord/client.ts", async (original) => {
 /** What the database answers the reads built with Drizzle. Each test may replace it. */
 const sqlReads = vi.hoisted(() => ({
   answer: (call: { sql: string }): unknown => ({ rows: [], sql: call.sql }),
+  /** What each statement did, as `select <table>` or `call <function>`. */
+  targets: [] as string[],
 }));
 
 vi.mock("../db/pool.ts", async () => {
@@ -134,13 +136,45 @@ function candidateValues(): unknown[] {
   ];
 }
 
-/** Answers the reads: one candidate task if asked, this forum, and a succeeded run. */
+/** The value each database function answers with, when the run gets the lock. */
+function functionAnswer(name: string, locked: boolean): unknown {
+  switch (name) {
+    case "begin_job_run":
+      return locked ? null : RUN_ID;
+    case "expire_interaction_claims":
+      return 0;
+    case "claim_reminders":
+      return CLAIMED_ONE;
+    case "finish_job_run":
+      return [jobRow("succeeded", null)];
+    case "mark_reminders_sent":
+      return [true];
+    default:
+      return name.startsWith("claim_") ? RUN_ID : true;
+  }
+}
+
+/**
+ * Answers the database: one candidate task if asked, this forum, a succeeded run, and
+ * each function's usual answer. With `locked`, another run holds the job's lock.
+ */
 function reads({
   candidate = false,
   forum,
-}: { candidate?: boolean; forum?: string | undefined } = {}) {
+  locked = false,
+}: {
+  candidate?: boolean;
+  forum?: string | undefined;
+  locked?: boolean;
+} = {}) {
   return ({ sql }: { sql: string }) => {
     const target = sqlTarget(sql);
+    sqlReads.targets.push(target);
+    if (target.startsWith("call ")) {
+      return {
+        rows: [{ value: functionAnswer(target.slice("call ".length), locked) }],
+      };
+    }
     const forumRows = forum === undefined ? [] : [[GUILD, FORUM, forum]];
     if (target === "select tasks") {
       return { rows: candidate ? [candidateValues()] : [] };
@@ -176,6 +210,7 @@ beforeEach(() => {
   clients.made = [];
   databases.made = [];
   sqlReads.answer = reads();
+  sqlReads.targets = [];
   vi.stubEnv("DATABASE_URL", testDatabaseUrl());
   fetchMock.mockReset();
   vi.stubGlobal("fetch", fetchMock);
@@ -289,44 +324,16 @@ describe("an authorized request", () => {
   const authorized = { authorization: `Bearer ${SECRET}` };
 
   it("returns a fixed body when another run holds the lock", async () => {
-    fetchMock.mockImplementation((input) =>
-      Promise.resolve(
-        Response.json(
-          (input as string).includes("rpc/expire_interaction_claims")
-            ? 0
-            : null,
-        ),
-      ),
-    );
+    sqlReads.answer = reads({ locked: true });
     const response = await get(authorized);
     expect(response.status).toBe(200);
     expect(await response.text()).toBe("ok");
     expect(response.headers.get("cache-control")).toBe("no-store");
-    const urls = fetchMock.mock.calls.map(([url]) => url as string);
-    expect(urls.some((url) => url.includes("rpc/begin_job_run"))).toBe(true);
-    expect(urls.some((url) => url.startsWith("https://discord.com"))).toBe(
-      false,
-    );
+    expect(sqlReads.targets).toContain("call begin_job_run");
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("returns the same fixed body after a real run", async () => {
-    fetchMock.mockImplementation((input) => {
-      const url = input as string;
-      if (url.includes("rpc/begin_job_run")) {
-        return Promise.resolve(Response.json(RUN_ID));
-      }
-      if (url.includes("rpc/expire_interaction_claims")) {
-        return Promise.resolve(Response.json(0));
-      }
-      if (
-        url.includes("/tasks?") ||
-        url.includes("/reminder_log?") ||
-        url.includes("/managed_channels?")
-      ) {
-        return Promise.resolve(Response.json([]));
-      }
-      return Promise.resolve(Response.json([jobRow("succeeded", null)]));
-    });
     const response = await get(authorized);
     expect(response.status).toBe(200);
     expect(await response.text()).toBe("ok");
@@ -376,26 +383,7 @@ describe("an authorized request", () => {
           ),
         );
       }
-      if (url.includes("rpc/claim_reminders")) {
-        return Promise.resolve(Response.json(CLAIMED_ONE));
-      }
-      if (url.includes("rpc/begin_job_run") || url.includes("rpc/claim")) {
-        return Promise.resolve(Response.json(RUN_ID));
-      }
-      if (url.includes("/tasks?")) {
-        return Promise.resolve(Response.json([candidateRow()]));
-      }
-      if (url.includes("/managed_channels?")) {
-        return Promise.resolve(
-          Response.json([
-            { guild_id: GUILD, channel_id: FORUM, status: "active" },
-          ]),
-        );
-      }
-      if (url.includes("/events?") || url.includes("/reminder_log?")) {
-        return Promise.resolve(Response.json([]));
-      }
-      return Promise.resolve(Response.json([jobRow("succeeded", null)]));
+      return Promise.reject(new Error("only Discord is reached over HTTP"));
     });
     vi.spyOn(console, "warn").mockImplementation(() => undefined);
     const discordCalls = () =>
@@ -442,32 +430,7 @@ describe("the Discord client the function builds", () => {
           ),
         );
       }
-      if (url.includes("rpc/claim_reminders")) {
-        return Promise.resolve(Response.json(CLAIMED_ONE));
-      }
-      if (url.includes("rpc/begin_job_run") || url.includes("rpc/claim")) {
-        return Promise.resolve(Response.json(RUN_ID));
-      }
-      if (url.includes("/tasks?")) {
-        return Promise.resolve(Response.json([candidateRow()]));
-      }
-      const forum =
-        status === undefined
-          ? []
-          : [{ guild_id: GUILD, channel_id: FORUM, status }];
-      if (url.includes("/managed_channels?")) {
-        return Promise.resolve(Response.json(forum));
-      }
-      // The thread's event, with its forum's row.
-      if (url.includes("/events?select=managed_channels")) {
-        return Promise.resolve(
-          Response.json(forum.map((row) => ({ managed_channels: row }))),
-        );
-      }
-      if (url.includes("/reminder_log?")) {
-        return Promise.resolve(Response.json([]));
-      }
-      return Promise.resolve(Response.json([jobRow("succeeded", null)]));
+      return Promise.reject(new Error("only Discord is reached over HTTP"));
     });
     vi.spyOn(console, "warn").mockImplementation(() => undefined);
   }

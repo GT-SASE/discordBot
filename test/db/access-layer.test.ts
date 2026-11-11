@@ -81,7 +81,6 @@ import {
   MAX_TASKS_PER_EVENT,
   createTask,
   editTask,
-  recordReassignment,
   searchOpenTasksByIdPrefix,
   searchOwnOpenTasksByIdPrefix,
   softDeleteTaskIfUnchanged,
@@ -90,11 +89,8 @@ import {
   listOpenTasksForAssignee,
   markOwnTaskDone,
   markTaskDoneAsOfficer,
-  reassignTask,
   searchOpenTasks,
   searchOwnOpenTasks,
-  setTaskDescription,
-  setTaskDueDate,
   softDeleteTask,
 } from "../../src/db/tasks.ts";
 import type { Actor } from "../../src/lib/actor.ts";
@@ -119,6 +115,12 @@ import {
   queryAs,
   type Connection,
 } from "./harness.ts";
+import {
+  reassignAs,
+  reassignTask,
+  setTaskDescription,
+  setTaskDueDate,
+} from "./task-edits.ts";
 
 function date(value: string): DateOnly {
   const parsed = parseIsoDate(value);
@@ -2199,6 +2201,7 @@ describe("database layer against the real schema", () => {
         await new Promise((resolve) => setTimeout(resolve, 5));
         const edited = unwrap(
           await editTask(db, {
+            actorId: fakeId(),
             guildId: own.guildId,
             taskId: task.id,
             expectedUpdatedAt: task.updated_at,
@@ -2246,6 +2249,7 @@ describe("database layer against the real schema", () => {
 
         expect(
           await editTask(db, {
+            actorId: fakeId(),
             ...key,
             expectedUpdatedAt: task.updated_at,
             description: "Changed",
@@ -2290,7 +2294,7 @@ describe("database layer against the real schema", () => {
         await expect(
           queryAs(
             pg,
-            "bot_app",
+            MIGRATION_OWNER,
             `UPDATE public.tasks SET description = 'Changed' WHERE id = $1`,
             [task.id],
           ),
@@ -2306,6 +2310,7 @@ describe("database layer against the real schema", () => {
 
         const edited = unwrap(
           await editTask(db, {
+            actorId: fakeId(),
             guildId: own.guildId,
             taskId: task.id,
             expectedUpdatedAt: task.updated_at,
@@ -2330,6 +2335,7 @@ describe("database layer against the real schema", () => {
         const task = unwrap(await newTaskOn(eventId, fakeId(), fakeId()));
 
         const edited = await editTask(db, {
+          actorId: fakeId(),
           guildId: own.guildId,
           taskId: task.id,
           expectedUpdatedAt,
@@ -2346,6 +2352,7 @@ describe("database layer against the real schema", () => {
         const eventId = await insertEvent(pg, own);
         const edit = (taskId: string, updated: string, guildId = own.guildId) =>
           editTask(db, {
+            actorId: fakeId(),
             guildId,
             taskId,
             expectedUpdatedAt: updated,
@@ -2450,7 +2457,7 @@ describe("database layer against the real schema", () => {
         const eventId = await insertEvent(pg, own);
         const task = unwrap(await newTaskOn(eventId, fakeId(), actorId));
         const reassign = () =>
-          recordReassignment(db, {
+          reassignAs(db, {
             guildId: own.guildId,
             actorId,
             taskId: task.id,
@@ -2469,7 +2476,7 @@ describe("database layer against the real schema", () => {
         const eventId = await insertEvent(pg, own);
         const task = unwrap(await newTaskOn(eventId, fakeId(), fakeId()));
         const reassign = () =>
-          recordReassignment(db, {
+          reassignAs(db, {
             guildId: own.guildId,
             actorId,
             taskId: task.id,
@@ -2488,7 +2495,7 @@ describe("database layer against the real schema", () => {
       });
 
       it("refuses a reassignment naming a task that does not exist", async () => {
-        const refused = await recordReassignment(db, {
+        const refused = await reassignAs(db, {
           guildId: own.guildId,
           actorId: fakeId(),
           taskId: UNKNOWN_ID,

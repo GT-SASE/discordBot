@@ -565,7 +565,7 @@ describe("assigning, editing and deleting tasks, on the real schema", () => {
         await run(
           world.router,
           assignPayload({}, { member: officer(), ...inThread(threadId) }),
-          world.racing(client, "POST", async () => {
+          world.racing(client, "insert", async () => {
             unwrap(
               await closeEvent(world.db(), { guildId: GUILD_ID, eventId }),
             );
@@ -1132,7 +1132,7 @@ describe("assigning, editing and deleting tasks, on the real schema", () => {
           { member: officer() },
           testSnowflake(),
         ),
-        world.racing(client, "PATCH", async () => {
+        world.racing(client, "edit", async () => {
           unwrap(await closeEvent(world.db(), { guildId: GUILD_ID, eventId }));
         }),
       );
@@ -1155,9 +1155,10 @@ describe("assigning, editing and deleting tasks, on the real schema", () => {
           { member: officer() },
           testSnowflake(),
         ),
-        world.racing(client, "PATCH", async () => {
+        world.racing(client, "edit", async () => {
           unwrap(
             await editTask(world.db(), {
+              actorId: testSnowflake(),
               guildId: GUILD_ID,
               taskId: task.id,
               expectedUpdatedAt: task.updated_at,
@@ -1452,6 +1453,7 @@ describe("assigning, editing and deleting tasks, on the real schema", () => {
       await new Promise((resolve) => setTimeout(resolve, 5));
       unwrap(
         await editTask(world.db(), {
+          actorId: testSnowflake(),
           guildId: GUILD_ID,
           taskId: task.id,
           expectedUpdatedAt: task.updated_at,
@@ -1483,9 +1485,10 @@ describe("assigning, editing and deleting tasks, on the real schema", () => {
       await run(
         world.router,
         componentPayload(confirmId(task), { member: officer() }),
-        world.racing(client, "PATCH", async () => {
+        world.racing(client, "update", async () => {
           unwrap(
             await editTask(world.db(), {
+              actorId: testSnowflake(),
               guildId: GUILD_ID,
               taskId: task.id,
               expectedUpdatedAt: task.updated_at,

@@ -447,10 +447,7 @@ export function fakeDb(fields: Partial<DbState> = {}): {
   }
 
   const { db, requests } = mockPostgrest((request) => {
-    const path =
-      request.method === "SQL"
-        ? sqlTarget(request.target)
-        : (request.target.split("?")[0] ?? "");
+    const path = sqlTarget(request.target);
     if (state.failing !== undefined && path.includes(state.failing.path)) {
       return {
         status: state.failing.status,
@@ -460,26 +457,27 @@ export function fakeDb(fields: Partial<DbState> = {}): {
         },
       };
     }
-    if (request.method === "SQL") {
+    const fn = path.startsWith("call ") ? path.slice("call ".length) : null;
+    if (fn === null) {
       return read({
         sql: request.target,
         params: request.body as unknown[],
       });
     }
     const args = (request.body ?? {}) as Record<string, unknown>;
-    if (path.endsWith("/rpc/claim_interaction")) {
+    if (fn === "claim_interaction") {
       const id = args.p_interaction_id as string;
       const first = !state.claimed.has(id);
       state.claimed.add(id);
       return { body: first };
     }
-    if (path.endsWith("/rpc/apply_role_bindings")) {
+    if (fn === "apply_role_bindings") {
       return roleBindings(args);
     }
-    if (path.endsWith("/rpc/save_setup_draft")) {
+    if (fn === "save_setup_draft") {
       return saveDraft(args);
     }
-    if (path.endsWith("/rpc/apply_config_change")) {
+    if (fn === "apply_config_change") {
       return configChange(args);
     }
     return { status: 500, body: { message: "unexpected test request" } };
@@ -491,7 +489,7 @@ export function fakeDb(fields: Partial<DbState> = {}): {
     requests,
     rpcBodies: (name) =>
       requests
-        .filter((request) => request.target.startsWith(`/rest/v1/rpc/${name}`))
+        .filter((request) => sqlTarget(request.target) === `call ${name}`)
         .map((request) => request.body as Record<string, unknown>),
   };
 }

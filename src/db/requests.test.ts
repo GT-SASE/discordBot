@@ -1,7 +1,7 @@
 /**
- * The exact requests sent by the database layer, for ordinary and hostile inputs. A
- * write sent to PostgREST is checked as its whole request. A read built with Drizzle is
- * checked for keeping every value out of the statement's text.
+ * The statements the database layer sends, for ordinary and hostile inputs. A write is
+ * checked for its table, its filters and the values it writes, a function call for its
+ * arguments, and a read for keeping every value out of the statement's text.
  */
 
 import { describe, expect, it } from "vitest";
@@ -72,7 +72,6 @@ import {
 import {
   createTask,
   editTask,
-  recordReassignment,
   searchOpenTasksByIdPrefix,
   searchOwnOpenTasksByIdPrefix,
   softDeleteTaskIfUnchanged,
@@ -81,13 +80,10 @@ import {
   listOpenTasksForAssignee,
   markOwnTaskDone,
   markTaskDoneAsOfficer,
-  reassignTask,
   searchLiveTasks,
   searchLiveTasksByIdPrefix,
   searchOpenTasks,
   searchOwnOpenTasks,
-  setTaskDescription,
-  setTaskDueDate,
   softDeleteTask,
 } from "./tasks.ts";
 
@@ -100,10 +96,58 @@ const DATE = "2030-01-10" as DateOnly;
 const NOW = new Date("2030-01-01T12:00:00.000Z");
 const VERSION = "2030-01-01T11:00:00.123456+00:00";
 
-const TASK_COLUMNS =
-  "id,event_id,guild_id,assignee_id,description,due_date,status,completed_at,created_by,deleted_at,updated_at";
-const EVENT_COLUMNS =
-  "id,guild_id,channel_id,name,event_date,thread_id,overview_message_id,status,thread_status,created_by,deleted_at,created_at";
+/**
+ * An update as recorded: the columns it sets, and a statement that filters on each of
+ * the old PostgREST-style filters given, `column=eq.value` or `column=is.null`, and
+ * returns the row.
+ */
+function update(table: string, body: unknown, filters: string) {
+  const conditions = filters.split("&").map((filter) => {
+    const [column = "", test = ""] = filter.split("=");
+    const operator = test.startsWith("is.null")
+      ? " is null"
+      : test.startsWith("neq.")
+        ? " <> \\$"
+        : " = \\$";
+    return `(?=.*"${table}"\\."${column}"${operator})`;
+  });
+  return {
+    method: "SQL",
+    target: expect.stringMatching(
+      new RegExp(
+        `^update "${table}" set .* where ${conditions.join("")}.* returning `,
+      ),
+    ) as string,
+    body,
+  };
+}
+
+/** An edit of the text or the date alone, with the rest as some task might hold them. */
+const editText = (
+  db: Parameters<typeof editTask>[0],
+  key: { guildId: string; taskId: string; expectedUpdatedAt: string },
+  fields: { description?: string; dueDate?: DateOnly; assigneeId?: string },
+) =>
+  editTask(db, {
+    ...key,
+    description: "Book the room",
+    dueDate: DATE,
+    assigneeId: OTHER,
+    actorId: ACTOR,
+    ...fields,
+  });
+
+/** Rows as a statement built with Drizzle returns them: each one's values, in order. */
+function asRows(response: MockResponse): MockResponse {
+  return Array.isArray(response.body)
+    ? {
+        ...response,
+        body: response.body.map((row: unknown) =>
+          typeof row === "object" && row !== null ? Object.values(row) : row,
+        ),
+      }
+    : response;
+}
 
 function taskRow() {
   return {
@@ -139,19 +183,15 @@ function eventRow() {
 }
 
 describe("exact requests", () => {
-  const taskWrite = (body: unknown, filters: string) => ({
-    method: "PATCH",
-    target: `/rest/v1/tasks?${filters}&select=${TASK_COLUMNS}`,
-    body,
-  });
-  const eventWrite = (body: unknown, filters: string) => ({
-    method: "PATCH",
-    target: `/rest/v1/events?${filters}&select=${EVENT_COLUMNS}`,
-    body,
-  });
+  const taskWrite = (body: unknown, filters: string) =>
+    update("tasks", body, filters);
+  const eventWrite = (body: unknown, filters: string) =>
+    update("events", body, filters);
   const rpc = (name: string, body: unknown) => ({
-    method: "POST",
-    target: `/rest/v1/rpc/${name}?`,
+    method: "SQL",
+    target: expect.stringMatching(
+      new RegExp(`^select public\\.${name}\\(`),
+    ) as string,
     body,
   });
 
@@ -201,15 +241,21 @@ describe("exact requests", () => {
           guildId: GUILD,
           taskId: ID,
           expectedUpdatedAt: VERSION,
-          description: "Book it",
+          description: 'a,b).c"*%',
           dueDate: DATE,
           assigneeId: OTHER,
+          actorId: ACTOR,
         }),
-      { body: [taskRow()] },
-      taskWrite(
-        { description: "Book it", due_date: DATE, assignee_id: OTHER },
-        `${scopedTask}&updated_at=eq.${VERSION}&status=eq.open&deleted_at=is.null`,
-      ),
+      { body: taskRow() },
+      rpc("edit_task", {
+        p_task_id: ID,
+        p_guild_id: GUILD,
+        p_expected_updated_at: VERSION,
+        p_description: 'a,b).c"*%',
+        p_due_date: DATE,
+        p_assignee_id: OTHER,
+        p_actor_id: ACTOR,
+      }),
     ],
     [
       "softDeleteTaskIfUnchanged",
@@ -224,51 +270,6 @@ describe("exact requests", () => {
       taskWrite(
         { deleted_at: NOW.toISOString() },
         `${scopedTask}&updated_at=eq.${VERSION}&deleted_at=is.null`,
-      ),
-    ],
-    [
-      "reassignTask",
-      (db) =>
-        reassignTask(db, {
-          guildId: GUILD,
-          taskId: ID,
-          expectedUpdatedAt: VERSION,
-          assigneeId: OTHER,
-        }),
-      { body: [taskRow()] },
-      taskWrite(
-        { assignee_id: OTHER },
-        `${scopedTask}&updated_at=eq.${VERSION}&status=eq.open&deleted_at=is.null`,
-      ),
-    ],
-    [
-      "setTaskDescription",
-      (db) =>
-        setTaskDescription(db, {
-          guildId: GUILD,
-          taskId: ID,
-          expectedUpdatedAt: VERSION,
-          description: 'a,b).c"*%',
-        }),
-      { body: [taskRow()] },
-      taskWrite(
-        { description: 'a,b).c"*%' },
-        `${scopedTask}&updated_at=eq.${VERSION}&status=eq.open&deleted_at=is.null`,
-      ),
-    ],
-    [
-      "setTaskDueDate",
-      (db) =>
-        setTaskDueDate(db, {
-          guildId: GUILD,
-          taskId: ID,
-          expectedUpdatedAt: VERSION,
-          dueDate: DATE,
-        }),
-      { body: [taskRow()] },
-      taskWrite(
-        { due_date: DATE },
-        `${scopedTask}&updated_at=eq.${VERSION}&status=eq.open&deleted_at=is.null`,
       ),
     ],
     [
@@ -293,8 +294,10 @@ describe("exact requests", () => {
         }),
       { status: 201, body: [taskRow()] },
       {
-        method: "POST",
-        target: `/rest/v1/tasks?select=${TASK_COLUMNS}`,
+        method: "SQL",
+        target: expect.stringMatching(
+          /^insert into "tasks" .* returning /,
+        ) as string,
         body: {
           event_id: ID,
           guild_id: GUILD,
@@ -317,8 +320,10 @@ describe("exact requests", () => {
         }),
       { status: 201, body: [eventRow()] },
       {
-        method: "POST",
-        target: `/rest/v1/events?select=${EVENT_COLUMNS}`,
+        method: "SQL",
+        target: expect.stringMatching(
+          /^insert into "events" .* returning /,
+        ) as string,
         body: {
           guild_id: GUILD,
           channel_id: OTHER,
@@ -341,8 +346,10 @@ describe("exact requests", () => {
         }),
       { status: 201, body: [eventRow()] },
       {
-        method: "POST",
-        target: `/rest/v1/events?select=${EVENT_COLUMNS}`,
+        method: "SQL",
+        target: expect.stringMatching(
+          /^insert into "events" .* returning /,
+        ) as string,
         body: {
           guild_id: GUILD,
           channel_id: OTHER,
@@ -624,7 +631,9 @@ describe("exact requests", () => {
   ];
 
   it.each(cases)("%s", async (_name, call, response, expected) => {
-    const { db, requests } = mockPostgrest(() => response);
+    const { db, requests } = mockPostgrest((request) =>
+      request.target.startsWith("select public.") ? response : asRows(response),
+    );
     const result = await call(db);
     expect(result.ok).toBe(true);
     expect(requests).toHaveLength(1);
@@ -636,14 +645,9 @@ describe("exact requests", () => {
   });
 
   it("asks for the changed row back on every write, so the count can be checked", async () => {
-    const { db, requests } = mockPostgrest(() => ({ body: [taskRow()] }));
-    await reassignTask(db, {
-      guildId: GUILD,
-      taskId: ID,
-      expectedUpdatedAt: VERSION,
-      assigneeId: OTHER,
-    });
-    expect(requests[0]?.headers.get("prefer")).toBe("return=representation");
+    const { db, requests } = mockPostgrest(() => asRows({ body: [taskRow()] }));
+    await markTaskDoneAsOfficer(db, { guildId: GUILD, taskId: ID, now: NOW });
+    expect(requests[0]?.target).toMatch(/ returning "id", "event_id", /);
   });
 
   /** A planner row as the read returns it: the selected values, in order. */
@@ -1150,14 +1154,13 @@ describe("refusals before any query", () => {
         }),
     ],
     [
-      "setTaskDescription",
+      "editTask",
       (c, t) =>
-        setTaskDescription(c, {
-          guildId: GUILD,
-          taskId: ID,
-          expectedUpdatedAt: VERSION,
-          description: t,
-        }),
+        editText(
+          c,
+          { guildId: GUILD, taskId: ID, expectedUpdatedAt: VERSION },
+          { description: t },
+        ),
     ],
     [
       "applyConfigChange timezone",
@@ -1194,12 +1197,11 @@ describe("refusals before any query", () => {
       name: "x".repeat(101),
       eventDate: DATE,
     });
-    const description = await setTaskDescription(client, {
-      guildId: GUILD,
-      taskId: ID,
-      expectedUpdatedAt: VERSION,
-      description: "x".repeat(1001),
-    });
+    const description = await editText(
+      client,
+      { guildId: GUILD, taskId: ID, expectedUpdatedAt: VERSION },
+      { description: "x".repeat(1001) },
+    );
     expect([name.ok, description.ok]).toEqual([false, false]);
     expect(requests).toEqual([]);
   });
@@ -1209,12 +1211,11 @@ describe("refusals before any query", () => {
     async (date) => {
       const { db: client, requests } = db();
       const results = await Promise.all([
-        setTaskDueDate(client, {
-          guildId: GUILD,
-          taskId: ID,
-          expectedUpdatedAt: VERSION,
-          dueDate: date as DateOnly,
-        }),
+        editText(
+          client,
+          { guildId: GUILD, taskId: ID, expectedUpdatedAt: VERSION },
+          { dueDate: date as DateOnly },
+        ),
         listReminderCandidates(client, { lastDueDate: date as DateOnly }),
         claimReminder(client, {
           taskId: ID,
@@ -1379,7 +1380,9 @@ describe("row counts on writes", () => {
   });
 
   it("treats two changed rows as a failure", async () => {
-    const { db } = mockPostgrest(() => ({ body: [taskRow(), taskRow()] }));
+    const { db } = mockPostgrest(() =>
+      asRows({ body: [taskRow(), taskRow()] }),
+    );
     expect(await write(db)).toEqual({
       ok: false,
       error: { category: "unexpected", code: null },
@@ -1387,9 +1390,9 @@ describe("row counts on writes", () => {
   });
 
   it("treats a changed row it cannot read as a failure", async () => {
-    const { db } = mockPostgrest(() => ({
-      body: [{ ...taskRow(), due_date: "bad" }],
-    }));
+    const { db } = mockPostgrest(() =>
+      asRows({ body: [{ ...taskRow(), due_date: "bad" }] }),
+    );
     expect(await write(db)).toEqual({
       ok: false,
       error: { category: "bad_row", code: null },
@@ -1511,12 +1514,15 @@ describe("database errors", () => {
     ["42501", "forbidden"],
   ])("reports %s as %s with no text", async (code, category) => {
     const { db } = failing(code);
-    const result = await reassignTask(db, {
-      guildId: GUILD,
-      taskId: ID,
-      expectedUpdatedAt: VERSION,
-      assigneeId: OTHER,
-    });
+    const result = await editText(
+      db,
+      {
+        guildId: GUILD,
+        taskId: ID,
+        expectedUpdatedAt: VERSION,
+      },
+      {},
+    );
     expect(result).toEqual({ ok: false, error: { category, code } });
     expect(JSON.stringify(result)).not.toContain(canary);
   });
@@ -1541,7 +1547,7 @@ describe("job runs", () => {
       staleAfterSeconds: 120,
     });
     expect(result).toEqual({ ok: true, value: ID });
-    expect(requests[0]?.target).toBe("/rest/v1/rpc/begin_job_run?");
+    expect(requests[0]?.target).toMatch(/^select public\.begin_job_run\(/);
     expect(requests[0]?.body).toEqual({
       p_job_name: "reminders",
       p_stale_after_seconds: 120,
@@ -1579,7 +1585,7 @@ describe("job runs", () => {
       results: { sent: 3 },
       error: { category: "constraint", code: "23514" },
     });
-    expect(requests[0]?.target).toBe("/rest/v1/rpc/finish_job_run?");
+    expect(requests[0]?.target).toMatch(/^select public\.finish_job_run\(/);
     expect(requests[0]?.body).toEqual({
       p_id: ID,
       p_finished_at: NOW.toISOString(),
@@ -1622,51 +1628,47 @@ describe("job runs", () => {
   });
 });
 
-describe("recordReassignment", () => {
-  it("writes the three named columns and no more", async () => {
-    const { db, requests } = mockPostgrest(() => ({ status: 201, body: null }));
+describe("editTask and the officer's limit", () => {
+  const key = { guildId: GUILD, taskId: ID, expectedUpdatedAt: VERSION };
 
-    const result = await recordReassignment(db, {
-      guildId: GUILD,
-      actorId: ACTOR,
-      taskId: ID,
-    });
-
-    expect(result).toEqual({ ok: true, value: null });
-    expect(requests[0]?.method).toBe("POST");
-    expect(requests[0]?.body).toEqual({
-      guild_id: GUILD,
-      actor_id: ACTOR,
-      task_id: ID,
-    });
-  });
-
-  it("reports the officer limit", async () => {
+  it("reports the officer limit, which the database checks in the same call", async () => {
     const { db } = mockPostgrest(() => ({
       status: 400,
       body: { code: "CF430", message: "row text" },
     }));
 
-    expect(
-      await recordReassignment(db, {
-        guildId: GUILD,
-        actorId: ACTOR,
-        taskId: ID,
-      }),
-    ).toEqual({
+    expect(await editText(db, key, {})).toEqual({
       ok: false,
       error: { category: "actor_task_limit", code: "CF430" },
     });
   });
 
+  it("reports a task no longer at the version read as not found", async () => {
+    const { db } = mockPostgrest(() => ({ body: null }));
+    expect(await editText(db, key, {})).toEqual({
+      ok: false,
+      error: { category: "not_found", code: null },
+    });
+  });
+
   it.each([
-    ["a bad guild", { guildId: "x", actorId: ACTOR, taskId: ID }],
-    ["a bad actor", { guildId: GUILD, actorId: "x", taskId: ID }],
-    ["a bad task", { guildId: GUILD, actorId: ACTOR, taskId: "x" }],
-  ])("sends nothing for %s", async (_name, key) => {
+    ["a bad actor", { actorId: "x" }],
+    ["a bad person", { assigneeId: "x" }],
+  ])("sends nothing for %s", async (_name, fields) => {
     const { db, requests } = mockPostgrest();
 
-    expect((await recordReassignment(db, key)).ok).toBe(false);
+    expect(
+      (
+        await editTask(db, {
+          ...key,
+          description: "Book it",
+          dueDate: DATE,
+          assigneeId: OTHER,
+          actorId: ACTOR,
+          ...fields,
+        })
+      ).ok,
+    ).toBe(false);
     expect(requests).toEqual([]);
   });
 });

@@ -171,7 +171,7 @@ export interface TaskWorld {
   /** Dependencies whose work after the reply runs `stage` once, just before that write. */
   racing: (
     client: DiscordClient,
-    method: "POST" | "PATCH",
+    write: "insert" | "update" | "edit",
     stage: () => Promise<void>,
   ) => RouterDependencies;
   eventWithPost: () => Promise<{ eventId: string; threadId: string }>;
@@ -229,10 +229,16 @@ export function useTaskWorld(): TaskWorld {
 
   world.db = () => world.backend.db;
   world.today = () => todayInZone(new Date(), TIMEZONE);
-  world.racing = (client, method, stage) => {
+  world.racing = (client, write, stage) => {
     let staged = false;
-    const db = world.backend.dbWith(async (sent, path) => {
-      if (!staged && sent === method && path.endsWith("/tasks")) {
+    const statement = {
+      insert: /^insert into "tasks"/,
+      update: /^update "tasks"/,
+      // A change of text, date or person goes through this one function.
+      edit: /^select public\.edit_task\(/,
+    }[write];
+    const db = world.backend.dbWith(async (sent, text) => {
+      if (!staged && sent === "SQL" && statement.test(text)) {
         staged = true;
         // PGlite's clock can repeat within a millisecond, and real timestamps do not.
         await new Promise((resolve) => setTimeout(resolve, 5));

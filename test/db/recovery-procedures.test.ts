@@ -223,7 +223,7 @@ describe("undoing a change", () => {
     const before = await taskRow(taskId);
     await queryAs(
       db,
-      "bot_app",
+      MIGRATION_OWNER,
       `UPDATE public.tasks SET assignee_id = $1, description = 'Overwritten' WHERE id = $2`,
       [fakeId(), taskId],
     );

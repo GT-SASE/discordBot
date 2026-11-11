@@ -60,11 +60,11 @@ describe("row history", () => {
     expect(versions[0]?.old_row.name).toBe("General meeting");
   });
 
-  it("records the old task row when bot_app updates it", async () => {
+  it("records the old task row when it is updated", async () => {
     const taskId = await insertTask(db, guild, await insertEvent(db, guild));
     await queryAs(
       db,
-      "bot_app",
+      MIGRATION_OWNER,
       `UPDATE public.tasks SET description = 'Changed' WHERE id = $1`,
       [taskId],
     );
@@ -80,7 +80,7 @@ describe("row history", () => {
     for (const description of ["Second", "Third"]) {
       await queryAs(
         db,
-        "bot_app",
+        MIGRATION_OWNER,
         `UPDATE public.tasks SET description = $2 WHERE id = $1`,
         [taskId, description],
       );
@@ -157,7 +157,7 @@ describe("row history", () => {
   );
 
   it.each([
-    ["task", "tasks", "description = description"],
+    ["task", "tasks", "status = status"],
     ["event", "events", "name = name"],
   ])(
     "records nothing for a %s update that changes nothing",
@@ -192,7 +192,7 @@ describe("row history", () => {
     for (const description of ["Changed", "Book the room"]) {
       await queryAs(
         db,
-        "bot_app",
+        MIGRATION_OWNER,
         `UPDATE public.tasks SET description = $2 WHERE id = $1`,
         [taskId, description],
       );

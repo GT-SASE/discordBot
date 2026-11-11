@@ -30,7 +30,7 @@ const READ_ONLY_TABLES = [
   "setup_drafts",
 ];
 const ALL_TABLES = [...READ_ONLY_TABLES, "events", "job_runs", "tasks"].sort();
-/** Reached only through a function, so bot_app has no grant on it. */
+/** Reached only through functions, so bot_app has no grant on it. */
 const NO_GRANT_TABLES = ["interaction_claims", "task_reassignments"];
 /** Kept by scripts/migrate.ts for its own use. */
 const LEDGER_TABLES = ["schema_migrations"];
@@ -70,16 +70,9 @@ const EXPECTED_COLUMN_GRANTS = [
     "thread_id",
     "thread_status",
   ].map((column) => `bot_app events.${column} UPDATE`),
-  ...[
-    "assignee_id",
-    "completed_at",
-    "deleted_at",
-    "description",
-    "due_date",
-    "status",
-  ].map((column) => `bot_app tasks.${column} UPDATE`),
-  ...["actor_id", "guild_id", "task_id"].map(
-    (column) => `bot_app task_reassignments.${column} INSERT`,
+  // The text, date and person change only through edit_task.
+  ...["completed_at", "deleted_at", "status"].map(
+    (column) => `bot_app tasks.${column} UPDATE`,
   ),
 ].sort();
 
@@ -97,6 +90,7 @@ const EXPECTED_ROUTINE_GRANTS = [
   "bot_app claim_step_handoff EXECUTE",
   "bot_app clear_thread_refusals EXECUTE",
   "bot_app complete_event_step EXECUTE",
+  "bot_app edit_task EXECUTE",
   "bot_app expire_interaction_claims EXECUTE",
   "bot_app finish_job_run EXECUTE",
   "bot_app mark_channel_unavailable EXECUTE",
@@ -175,7 +169,7 @@ const DISCORD_ID_COLUMNS = [
 /** One policy per table and command bot_app is granted. */
 const EXPECTED_POLICIES = [
   ...ALL_TABLES.map((table) => `${table} bot_app_read SELECT {bot_app}`),
-  ...["events", "task_reassignments", "tasks"].map(
+  ...["events", "tasks"].map(
     (table) => `${table} bot_app_insert INSERT {bot_app}`,
   ),
   ...["events", "tasks"].map(
