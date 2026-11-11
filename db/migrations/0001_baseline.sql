@@ -337,6 +337,9 @@ BEGIN
 END;
 $$;
 
+-- Adds a person to a step. True if this call added them, false if they were already on
+-- it. Raises 22023 for Budget approved, CF428 for Food pickup before the budget is
+-- approved, and CF431 once the step has its most people: 10, or 15 for Food pickup.
 CREATE FUNCTION public.assign_event_step(p_event_id uuid, p_guild_id text, p_kind public.event_step_kind, p_user_id text, p_actor_id text) RETURNS boolean
     LANGUAGE plpgsql SECURITY DEFINER
     SET search_path TO ''
@@ -366,6 +369,13 @@ BEGIN
   END IF;
   IF v_event.status = 'closed' THEN
     RAISE EXCEPTION 'event is closed' USING ERRCODE = 'CF410';
+  END IF;
+
+  IF p_kind = 'food_pickup' AND NOT EXISTS (
+    SELECT 1 FROM public.event_steps
+    WHERE event_id = p_event_id AND kind = 'budget_approved' AND status = 'done'
+  ) THEN
+    RAISE EXCEPTION 'budget is not approved' USING ERRCODE = 'CF428';
   END IF;
 
   IF EXISTS (
@@ -1315,6 +1325,8 @@ BEGIN
 END;
 $$;
 
+-- Sets the time of the food pickup. Raises CF428 before the budget is approved. Returns
+-- whether Food pickup is now done, which also needs at least one person on it.
 CREATE FUNCTION public.set_event_pickup_time(p_event_id uuid, p_guild_id text, p_pickup_time time without time zone, p_actor_id text) RETURNS boolean
     LANGUAGE plpgsql SECURITY DEFINER
     SET search_path TO ''
@@ -1343,6 +1355,13 @@ BEGIN
   END IF;
   IF v_event.status = 'closed' THEN
     RAISE EXCEPTION 'event is closed' USING ERRCODE = 'CF410';
+  END IF;
+
+  IF NOT EXISTS (
+    SELECT 1 FROM public.event_steps
+    WHERE event_id = p_event_id AND kind = 'budget_approved' AND status = 'done'
+  ) THEN
+    RAISE EXCEPTION 'budget is not approved' USING ERRCODE = 'CF428';
   END IF;
 
   UPDATE public.events

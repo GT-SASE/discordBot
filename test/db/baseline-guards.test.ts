@@ -229,10 +229,36 @@ describe("the baseline's guards", () => {
     ).toBe("CF410");
   });
 
-  it("sets up Food pickup and its reminders without waiting for the budget", async () => {
+  it("sets up Food pickup and its reminders once the budget is approved", async () => {
     const guild = await insertGuild(db);
     const eventId = await insertEvent(db, guild);
     const actor = fakeId();
+    expect(
+      await errorCodeOf(
+        queryAs(
+          db,
+          BOT_APP,
+          "SELECT public.assign_event_step($1, $2, 'food_pickup', $3, $3)",
+          [eventId, guild.guildId, actor],
+        ),
+      ),
+    ).toBe("CF428");
+    expect(
+      await errorCodeOf(
+        queryAs(
+          db,
+          BOT_APP,
+          "SELECT public.set_event_pickup_time($1, $2, '17:30', $3)",
+          [eventId, guild.guildId, actor],
+        ),
+      ),
+    ).toBe("CF428");
+    await queryAs(
+      db,
+      BOT_APP,
+      "SELECT public.complete_event_step($1, $2, 'budget_approved', $3)",
+      [eventId, guild.guildId, actor],
+    );
     await queryAs(
       db,
       BOT_APP,

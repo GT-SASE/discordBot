@@ -676,6 +676,7 @@ describe("reading answers", () => {
   });
 
   it.each([
+    ["CF428", "step_not_ready"],
     ["CF431", "step_assignee_limit"],
     ["CF410", "parent_unavailable"],
   ])("reports %s as %s", async (code, category) => {

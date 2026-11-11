@@ -3307,8 +3307,13 @@ describe("the event workflow against the real schema", () => {
       });
     });
 
-    it(`allows ${String(MAX_FOOD_PICKUP_ASSIGNEES)} on Food pickup, whether or not the budget is approved`, async () => {
+    it(`allows ${String(MAX_FOOD_PICKUP_ASSIGNEES)} on Food pickup, and only once the budget is approved`, async () => {
       const eventId = await insertEvent(pg, guild);
+      expect(await assign(eventId, "food_pickup")).toEqual({
+        ok: false,
+        error: { category: "step_not_ready", code: "CF428" },
+      });
+      unwrap(await approve(eventId));
       for (let index = 0; index < MAX_FOOD_PICKUP_ASSIGNEES; index += 1) {
         unwrap(await assign(eventId, "food_pickup"));
       }
@@ -3418,7 +3423,12 @@ describe("the event workflow against the real schema", () => {
       const actor = fakeId();
       const setTime = (pickupTime: string) =>
         setEventPickupTime(db, { ...key(eventId), pickupTime, actorId: actor });
-      // The budget need not be approved first.
+      expect(await setTime("17:30")).toEqual({
+        ok: false,
+        error: { category: "step_not_ready", code: "CF428" },
+      });
+
+      unwrap(await approve(eventId));
       expect(await setTime("17:30")).toEqual({ ok: true, value: false });
       const user = fakeId();
       unwrap(await assign(eventId, "food_pickup", user));
