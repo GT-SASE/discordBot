@@ -100,14 +100,14 @@ export default defineConfig([
     rules: {
       "no-restricted-globals": [
         "error",
-        ...["fetch", "globalThis", "window", "self"].map((name) => ({
+        ...["fetch", "globalThis", "global", "window", "self"].map((name) => ({
           name,
           message: SEND_THROUGH_CLIENT,
         })),
       ],
       "no-restricted-properties": [
         "error",
-        ...["globalThis", "window", "self"].map((object) => ({
+        ...["globalThis", "global", "window", "self"].map((object) => ({
           object,
           property: "fetch",
           message: SEND_THROUGH_CLIENT,

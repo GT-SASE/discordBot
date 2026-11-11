@@ -48,7 +48,7 @@ describe("one send path lint rule", () => {
     refused(`await fetch("https://example.test");`);
   });
 
-  it.each(["globalThis", "window", "self"])(
+  it.each(["globalThis", "global", "window", "self"])(
     "refuses fetch reached through %s",
     (object) => {
       refused(`await ${object}.fetch("https://example.test");`);
