@@ -29,6 +29,7 @@ import {
   type RunLimits,
   type RunResult,
 } from "../../src/reminders/run.ts";
+import { messageBody } from "../support/json.ts";
 import { TEST_ORIGIN, TEST_SECRET_KEY } from "../support/mock-postgrest.ts";
 import {
   finishEventSteps,
@@ -103,21 +104,17 @@ function mockDiscord(): void {
     let message: Sent | undefined;
     const threadId = /^\/channels\/([0-9]+)/.exec(path)?.[1] ?? "";
     if (method === "POST") {
-      const body = JSON.parse(init?.body as string) as {
-        content: string;
-        flags: number;
-        allowed_mentions: { users: string[]; parse: string[] };
-        components?: { components: { custom_id: string }[] }[];
-      };
+      const body = messageBody(init?.body);
+      if (body.flags === undefined) {
+        throw new Error("a reminder must set its flags");
+      }
       message = {
         threadId,
         content: body.content,
-        users: body.allowed_mentions.users,
-        parse: body.allowed_mentions.parse,
+        users: body.users,
+        parse: body.parse,
         flags: body.flags,
-        buttons: (body.components ?? []).flatMap((row) =>
-          row.components.map((button) => button.custom_id),
-        ),
+        buttons: body.buttons,
       };
     }
     const answer = await discordGate(method, path, message);

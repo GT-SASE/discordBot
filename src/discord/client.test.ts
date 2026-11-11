@@ -1,6 +1,7 @@
 import { generateKeyPairSync, sign } from "node:crypto";
 import { inspect } from "node:util";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { jsonObject } from "../../test/support/json.ts";
 import { ConfigError } from "../lib/config-error.ts";
 import {
   actionForFailure,
@@ -190,10 +191,7 @@ function requests(): SentRequest[] {
     url: url as string,
     method: init?.method,
     headers: init?.headers as Record<string, string>,
-    body: JSON.parse((init?.body as string | undefined) ?? "{}") as Record<
-      string,
-      unknown
-    >,
+    body: jsonObject(init?.body ?? "{}", "the request body"),
   }));
 }
 

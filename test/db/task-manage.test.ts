@@ -32,6 +32,7 @@ import {
   run,
 } from "../support/interactions.ts";
 import { testSnowflake } from "../support/mock-postgrest.ts";
+import { vercelConfig } from "../support/json.ts";
 import { insertEvent } from "./fixtures.ts";
 import { queryAs } from "./harness.ts";
 import {
@@ -127,12 +128,12 @@ describe("assigning, editing and deleting tasks, on the real schema", () => {
   }
 
   it("sends the interactions function's limit to Vercel, so finish has its time", () => {
-    const config = JSON.parse(
+    const config = vercelConfig(
       readFileSync(
         join(import.meta.dirname, "..", "..", "vercel.json"),
         "utf8",
       ),
-    ) as { functions: Record<string, { maxDuration: number }> };
+    );
     expect(config.functions["api/interactions.ts"]?.maxDuration).toBe(60);
   });
 

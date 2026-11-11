@@ -33,6 +33,7 @@ import {
   type RunLimits,
   type RunResult,
 } from "../../src/reminders/run.ts";
+import { messageBody } from "../support/json.ts";
 import { TEST_ORIGIN, TEST_SECRET_KEY } from "../support/mock-postgrest.ts";
 import {
   finishEventSteps,
@@ -84,20 +85,13 @@ function mockDiscord(): void {
       return answer;
     }
     if (method === "POST") {
-      const body = JSON.parse(init?.body as string) as {
-        content: string;
-        allowed_mentions: {
-          users: string[];
-          roles?: string[];
-          parse: string[];
-        };
-      };
+      const body = messageBody(init?.body);
       sent.push({
         threadId: channelId,
         content: body.content,
-        users: body.allowed_mentions.users,
-        roles: body.allowed_mentions.roles ?? [],
-        parse: body.allowed_mentions.parse,
+        users: body.users,
+        roles: body.roles,
+        parse: body.parse,
       });
       return Response.json({ id: fakeId() });
     }

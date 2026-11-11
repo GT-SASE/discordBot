@@ -4,6 +4,7 @@
  * armed per route, so a test can break any one step of a flow.
  */
 
+import { jsonObject } from "./json.ts";
 import { testSnowflake } from "./mock-postgrest.ts";
 
 const THREAD_TYPE = 11;
@@ -246,7 +247,7 @@ export function discordServer(appId: string): DiscordServer {
       const path = url.pathname.replace(/^\/api\/v[0-9]+/, "");
       const body =
         typeof init?.body === "string"
-          ? (JSON.parse(init.body) as Record<string, unknown>)
+          ? jsonObject(init.body, `the body of ${method} ${path}`)
           : undefined;
       requests.push({ method, path, body });
       const failure = failureFor(method, path);

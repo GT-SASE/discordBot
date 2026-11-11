@@ -5,6 +5,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as endpoint from "../../api/cron/reminders.ts";
+import { vercelConfig } from "../../test/support/json.ts";
 import { STALE_CLAIM_MS } from "./plan.ts";
 import {
   DATABASE_CALL_MS,
@@ -399,12 +400,7 @@ describe("the Discord client the function builds", () => {
 });
 
 describe("deployment settings", () => {
-  const vercel = JSON.parse(
-    readFileSync(join(ROOT, "vercel.json"), "utf8"),
-  ) as {
-    crons: { path: string; schedule: string }[];
-    functions: Record<string, { maxDuration: number }>;
-  };
+  const vercel = vercelConfig(readFileSync(join(ROOT, "vercel.json"), "utf8"));
   const maxSeconds =
     vercel.functions["api/cron/reminders.ts"]?.maxDuration ?? 0;
 
