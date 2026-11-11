@@ -24,20 +24,20 @@
   },
   "type": "module",
   "devDependencies": {
-    "@electric-sql/pglite": "0.5.11",
+    "@electric-sql/pglite": "0.5.15",
     "@eslint/js": "10.0.1",
     "@types/node": "24.19.2",
     "@types/pg": "8.23.1",
-    "eslint": "10.13.0",
+    "eslint": "10.14.0",
     "pg": "8.23.1",
     "prettier": "3.9.10",
     "typescript": "6.0.3",
     "typescript-eslint": "8.72.1",
-    "vitest": "5.0.5"
+    "vitest": "5.1.0"
   },
   "dependencies": {
     "@supabase/postgrest-js": "2.118.0",
-    "@vercel/functions": "2.2.4",
+    "@vercel/functions": "2.2.13",
     "discord-api-types": "0.38.57"
   }
 }
