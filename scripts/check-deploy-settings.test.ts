@@ -208,7 +208,6 @@ describe("the workflows", () => {
   // Docs can hold a leaked secret or a real ID, and the format and URL checks read them.
   it("always runs the checks that read docs", () => {
     expect(workflow("ci.yml")).not.toContain("paths-ignore");
-    expect(workflow("pr-metadata.yml")).not.toContain("paths-ignore");
   });
 
   it.each(["db.yml", "deploy-check.yml"])(

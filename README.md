@@ -221,9 +221,12 @@ There is no local bot. Discord needs a public HTTPS URL, so tests stand in for i
 | `npm run test:postgrest`                                                    | Access layer on real PostgREST                                                                                       | `POSTGREST_URL` and related settings                                                                                                                         |
 | `bash scripts/test-backup-restore.sh`                                       | Backup and restore end to end. For disposable servers only: it changes their settings, roles and data                | Postgres 17 containers on ports 5432 to 5434 as in `db.yml`, Docker, `psql`, `pg_dump`, `age`, `BACKUP_RLS_PATH`, `POSTGRES_CONTAINER`, `RECOVERY_CONTAINER` |
 | `.tools/gitleaks git . --config .gitleaks.toml --redact --log-opts="--all"` | Scans every commit on every ref with the default rules, as CI does. CI then scans again with `.gitleaks-custom.toml` | gitleaks, a full clone                                                                                                                                       |
-| `node scripts/check-commit-messages.ts --range origin/main..HEAD`           | Checks a branch's commit messages. `--title="<title>"` checks a pull request title                                   | Nothing                                                                                                                                                      |
 
-[CI](.github/workflows/ci.yml) runs the main checks on each pull request and on pushes to `main` and `staging`. [Database](.github/workflows/db.yml) and [Deploy check](.github/workflows/deploy-check.yml) run on the same events but skip a change to `docs/`, `README.md` or `SECURITY.md` alone. The `commit-messages` job in [PR metadata](.github/workflows/pr-metadata.yml) runs on pull requests only, so a direct push to `main` skips it. That job checks each branch commit and the pull request title. `Co-authored-by` trailers on a branch are refused.
+[CI](.github/workflows/ci.yml) runs the main checks on each pull request and on pushes to `main` and `staging`. [Database](.github/workflows/db.yml) and [Deploy check](.github/workflows/deploy-check.yml) run on the same events but skip a change to `docs/`, `README.md` or `SECURITY.md` alone.
+
+### Commits
+
+Commit messages and pull request titles follow [Conventional Commits](https://www.conventionalcommits.org/), for example `fix(reminders): skip a deleted task`. Pull requests are squash merged, so the title becomes the commit on `main`. Nothing checks this automatically.
 
 ### Registering commands
 

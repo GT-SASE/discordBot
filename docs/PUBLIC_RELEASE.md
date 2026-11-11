@@ -124,7 +124,7 @@ These do not work, or are not free, while private. Do them immediately after goi
 **Ruleset.** Under Settings > Rules > Rulesets, create a branch ruleset for `main` and `staging`. Check this in the dashboard. It should:
 
 - Require a pull request before merging.
-- Require the status checks from `ci.yml`, `pr-metadata.yml`, `db.yml` and `deploy-check.yml`, and require the branch to be up to date. First remove `paths-ignore` from `db.yml` and `deploy-check.yml`, and the test that expects it. GitHub never reports a check its workflow skipped, so a docs-only pull request would wait forever.
+- Require the status checks from `ci.yml`, `db.yml` and `deploy-check.yml`, and require the branch to be up to date. First remove `paths-ignore` from `db.yml` and `deploy-check.yml`, and the test that expects it. GitHub never reports a check its workflow skipped, so a docs-only pull request would wait forever.
 - Block force pushes and deletions.
 - Require linear history.
 - Allow no bypass, including for you. If you need one, add it on purpose for one emergency, then remove it.

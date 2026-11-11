@@ -96,7 +96,7 @@ describe("Git isolation in tests", () => {
 
     const result = spawnSync(
       process.execPath,
-      [VITEST, "run", "scripts/check-commit-messages.test.ts"],
+      [VITEST, "run", "scripts/check-deploy-settings.test.ts"],
       {
         cwd: REPO_ROOT,
         env: { ...isolatedGitEnv(), GIT_DIR: shared },

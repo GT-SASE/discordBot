@@ -1,6 +1,6 @@
 version: 2
 
-# Commit prefixes keep these updates within the Conventional Commits check in CI.
+# Commit prefixes keep these updates in the Conventional Commits format.
 updates:
   - package-ecosystem: npm
     directory: /
