@@ -11,7 +11,7 @@
 # A package.json in a subdirectory makes the install run from there, with its own
 # scripts and dependencies, and another lockfile takes over from package-lock.json or
 # picks another package manager. Either would step around these checks and the checks
-# on the lockfile in scripts/direct-dependencies.test.ts.
+# on the lockfile by lockfile-lint (npm run lint:lockfile).
 #
 # Vercel does run a buildCommand from vercel.json, which could turn install scripts back
 # on or run anything else with the project's variables. The project builds without one,
