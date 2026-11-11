@@ -58,14 +58,11 @@ import {
 } from "../discord/client.ts";
 import { channelMessage, type Part } from "../discord/outbound.ts";
 import type { Chunk, ChunkLine, SafeText } from "../discord/safe-text.ts";
-import {
-  isUsableTimeZone,
-  parseIsoDate,
-  todayInZone,
-  type DateOnly,
-} from "../lib/dates.ts";
+import { isUsableTimeZone, parseIsoDate, type DateOnly } from "../lib/dates.ts";
 import { EventReminderStep, type EventRunContext } from "./event-run.ts";
 import {
+  slotStart,
+  slotToday,
   STALE_CLAIM_MS,
   planReminders,
   type EventReminders,
@@ -92,8 +89,6 @@ export const DISCORD_OPERATION_MS = 6_000;
 export const DATABASE_CALL_MS = 4_000;
 /** Longer than the function can live, so a 'running' row this old is a killed run. */
 export const LOCK_STALE_SECONDS = 120;
-/** When a schedule slot starts. Must match `begin_job_run`. */
-const SLOT_START_HOUR_UTC = 15;
 /**
  * A reminder goes out without notifying anyone once this many sends, counting the one about
  * to start, may have reached Discord. A send known to have been refused does not count.
@@ -361,17 +356,6 @@ function knownNotSent(failure: DiscordFailure): boolean {
   return failure.kind !== "api" || failure.status < 500;
 }
 
-/** The start of the current schedule slot, as in the `begin_job_run` function. */
-function slotStart(now: Date): number {
-  const today = Date.UTC(
-    now.getUTCFullYear(),
-    now.getUTCMonth(),
-    now.getUTCDate(),
-    SLOT_START_HOUR_UTC,
-  );
-  return today <= now.getTime() ? today : today - MS_PER_DAY;
-}
-
 /** One event's messages, and how far through them a run has got. */
 interface EventCursor {
   readonly event: EventReminders;
@@ -599,7 +583,9 @@ class Run {
     this.counts.add("stale_found", stale.value.rows.length);
     this.counts.add("excluded_rows", stale.value.excluded.length);
     if (stale.value.truncated) {
-      this.counts.add("stale_truncated");
+      // The oldest are read first, and those beyond the cap wait for the next run. Closing
+      // or sending these makes room, so the recovery run is asked to go on with them.
+      this.#countIncomplete("stale_truncated");
     }
     for (const claim of stale.value.rows) {
       this.#staleClaims.set(
@@ -669,7 +655,7 @@ class Run {
       if (!isUsableTimeZone(timezone)) {
         throw new RangeError("unusable time zone");
       }
-      today = todayInZone(now, timezone);
+      today = slotToday(now, timezone);
       plan = planReminders({
         today,
         now,
@@ -958,6 +944,10 @@ class Run {
       return null;
     }
     this.counts.add(`stale_${resolved.value.outcome}`);
+    if (resolved.value.outcome === "left" && asRead !== undefined) {
+      // The plan meant to send it, and it could not be taken over, so it is not sent.
+      this.#countIncomplete("stale_claim_lost");
+    }
     return resolved.value.outcome === "reclaimed"
       ? {
           claimToken: resolved.value.claimToken,

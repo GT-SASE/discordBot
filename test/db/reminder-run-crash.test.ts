@@ -18,6 +18,7 @@ import { pgliteSql } from "../support/sql-client.ts";
 import { createDbClient, type DbClient } from "../../src/db/client.ts";
 import { createDiscordClient } from "../../src/discord/client.ts";
 import { managedChannelCheck, runReminders } from "../../src/reminders/run.ts";
+import { slotStart } from "../../src/reminders/plan.ts";
 import {
   finishEventSteps,
   insertEvent,
@@ -106,7 +107,10 @@ beforeEach(async () => {
     `UPDATE public.events SET thread_id = $2, thread_status = 'active' WHERE id = $1`,
     [eventId, threadId],
   );
-  const dueDate = new Date(Date.now() + 86_400_000).toISOString().slice(0, 10);
+  // A day after the date the run plans for, which is that of its slot's start.
+  const dueDate = new Date(slotStart(new Date()) + 86_400_000)
+    .toISOString()
+    .slice(0, 10);
   await queryAs(
     database,
     "bot_app",

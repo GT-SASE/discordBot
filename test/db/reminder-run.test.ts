@@ -27,7 +27,7 @@ import {
 import { createDbClient, type DbClient } from "../../src/db/client.ts";
 import { getLatestSucceededJobRun } from "../../src/db/job-runs.ts";
 import { createDiscordClient } from "../../src/discord/client.ts";
-import { STALE_CLAIM_MS } from "../../src/reminders/plan.ts";
+import { slotStart, STALE_CLAIM_MS } from "../../src/reminders/plan.ts";
 import {
   DATABASE_CALL_MS,
   DISCORD_OPERATION_MS,
@@ -168,12 +168,13 @@ function run({ guilds, now, limits }: RunOptions): Promise<RunResult> {
   });
 }
 
+/** The date a run plans for in a UTC guild: that of its slot's start, not of the run. */
 function todayUtc(): string {
-  return new Date().toISOString().slice(0, 10);
+  return dateOffset(0);
 }
 
 function dateOffset(days: number, from = new Date()): string {
-  return new Date(from.getTime() + days * 86_400_000)
+  return new Date(slotStart(from) + days * 86_400_000)
     .toISOString()
     .slice(0, 10);
 }
@@ -2463,7 +2464,7 @@ describe("stale claims on tasks the plan left out", () => {
     );
   };
 
-  it("makes no takeover and no rise in attempts for a missing thread", async () => {
+  it("closes the claim on a missing thread, with no takeover and no rise in attempts", async () => {
     const guild = await guildInZone();
     const { eventId } = await eventWithThread(guild);
     const taskId = await task(guild, eventId, dateOffset(3));
@@ -2485,7 +2486,7 @@ describe("stale claims on tasks the plan left out", () => {
 
     expect(reclaims).toBe(0);
     expect(await logRows(taskId)).toMatchObject([
-      { state: "claimed", attempts: 1 },
+      { state: "skipped", attempts: 1 },
     ]);
     expect(posts()).toEqual([]);
   });
@@ -2499,6 +2500,58 @@ describe("stale claims on tasks the plan left out", () => {
     expect(await logRows(taskId)).toMatchObject([
       { state: "claimed", attempts: 1 },
     ]);
+  });
+
+  it.each([
+    [
+      "its event is closed",
+      `UPDATE public.events SET status = 'closed' WHERE id = $1`,
+    ],
+    [
+      "its event is deleted",
+      `UPDATE public.events SET deleted_at = now() WHERE id = $1`,
+    ],
+    [
+      "its forum is no longer managed",
+      `UPDATE public.managed_channels SET status = 'removed'
+       WHERE (guild_id, channel_id) = (SELECT guild_id, channel_id FROM public.events WHERE id = $1)`,
+    ],
+  ])("closes the claim as skipped when %s", async (_label, change) => {
+    const guild = await guildInZone();
+    const { eventId } = await eventWithThread(guild);
+    const taskId = await task(guild, eventId, dateOffset(3));
+    await staleClaimOn(taskId, dateOffset(3));
+    await database.query(change, [eventId]);
+
+    const result = await run({ guilds: [guild] });
+
+    expect(result.status).toBe("succeeded");
+    expect(await logRows(taskId)).toMatchObject([
+      { state: "skipped", attempts: 1 },
+    ]);
+    expect(posts()).toEqual([]);
+  });
+
+  it("counts a cut-short read of stale claims as incomplete, so the recovery run goes on", async () => {
+    const guild = await guildInZone();
+    // Rows come back as the values of the selected columns, in order, and these fail
+    // their checks, so only their number matters.
+    const page = Array.from({ length: 501 }, () => [
+      "not-a-uuid",
+      ...Array.from({ length: 6 }, () => null),
+    ]);
+    sqlGate = (call) =>
+      readsFrom(call, "reminder_log") && call.sql.includes("order by")
+        ? { rows: page }
+        : undefined;
+
+    const result = await run({ guilds: [guild] });
+
+    expect(result).toMatchObject({
+      status: "failed",
+      error: "reminders_incomplete",
+    });
+    expect((await jobRow()).results).toMatchObject({ stale_truncated: 1 });
   });
 
   it("closes the claim once the task is finished", async () => {
@@ -2698,19 +2751,23 @@ describe("days around a change of clocks", () => {
   const NEW_YORK = "America/New_York";
 
   it.each([
-    // Spring forward: 2026-03-08, with the run at its usual hour.
-    ["2026-03-08T14:00:00Z", "2026-03-08", "due today"],
-    ["2026-03-08T14:00:00Z", "2026-03-09", "1 day left"],
-    ["2026-03-08T14:00:00Z", "2026-03-11", "3 days left"],
-    // The night before: still the 7th in New York though the 8th in UTC.
+    // Spring forward: 2026-03-08. Both crons of the slot plan for the 8th.
+    ["2026-03-08T15:00:00Z", "2026-03-08", "due today"],
+    ["2026-03-08T17:00:00Z", "2026-03-08", "due today"],
+    ["2026-03-08T15:00:00Z", "2026-03-09", "1 day left"],
+    ["2026-03-08T17:00:00Z", "2026-03-11", "3 days left"],
+    // A run by hand before 15:00 UTC belongs to the slot that began the day before.
     ["2026-03-08T04:30:00Z", "2026-03-08", "1 day left"],
+    ["2026-03-08T14:00:00Z", "2026-03-08", "1 day left"],
     // Fall back: 2026-11-01, including the repeated hour.
-    ["2026-11-01T14:00:00Z", "2026-11-01", "due today"],
-    ["2026-11-01T14:00:00Z", "2026-11-02", "1 day left"],
-    ["2026-11-01T14:00:00Z", "2026-10-31", "1 day ago"],
-    ["2026-11-01T05:30:00Z", "2026-11-01", "due today"],
-    ["2026-11-01T06:30:00Z", "2026-11-01", "due today"],
-    ["2026-11-01T03:30:00Z", "2026-11-01", "1 day left"],
+    ["2026-11-01T15:00:00Z", "2026-11-01", "due today"],
+    ["2026-11-01T17:00:00Z", "2026-11-01", "due today"],
+    ["2026-11-01T15:00:00Z", "2026-11-02", "1 day left"],
+    ["2026-11-01T17:00:00Z", "2026-10-31", "1 day ago"],
+    ["2026-11-01T05:30:00Z", "2026-11-01", "1 day left"],
+    ["2026-11-01T06:30:00Z", "2026-11-01", "1 day left"],
+    ["2026-11-02T15:00:00Z", "2026-11-02", "due today"],
+    ["2026-11-02T17:00:00Z", "2026-11-02", "due today"],
   ])("at %s a task due %s reads %s", async (instant, dueDate, expected) => {
     const guild = await guildInZone(NEW_YORK);
     const { eventId } = await eventWithThread(guild);
@@ -2721,6 +2778,21 @@ describe("days around a change of clocks", () => {
     expect(sent).toHaveLength(1);
     expect(present(sent[0]).content).toContain(expected);
   });
+
+  // Midnight in Singapore falls between the two crons: 23:00 and then 01:00 there.
+  it.each(["2026-11-04T15:00:00Z", "2026-11-04T17:00:00Z"])(
+    "plans the same Singapore day at %s",
+    async (instant) => {
+      const guild = await guildInZone("Asia/Singapore");
+      const { eventId } = await eventWithThread(guild);
+      await task(guild, eventId, "2026-11-05");
+
+      await run({ guilds: [guild], now: new Date(instant) });
+
+      expect(sent).toHaveLength(1);
+      expect(present(sent[0]).content).toContain("1 day left");
+    },
+  );
 
   it("uses each guild's own date", async () => {
     const auckland = await guildInZone("Pacific/Auckland");
@@ -2733,7 +2805,7 @@ describe("days around a change of clocks", () => {
 
     await run({
       guilds: [auckland, newYork],
-      now: new Date("2026-11-04T14:00:00Z"),
+      now: new Date("2026-11-04T15:00:00Z"),
     });
 
     const byThread = new Map(

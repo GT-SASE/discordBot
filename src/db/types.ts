@@ -500,6 +500,7 @@ export const parseClaimState = rowParser(
   }),
 );
 
+/** A task, with whether its event and forum still let its reminders go out. */
 export const parseTaskLiveness = rowParser(
   "tasks",
   "id",
@@ -507,6 +508,10 @@ export const parseTaskLiveness = rowParser(
     due_date: taskColumns.dueDate,
     status: taskColumns.status,
     deleted_at: taskColumns.deletedAt,
+    event_status: eventColumns.status.nullable(),
+    event_deleted_at: eventColumns.deletedAt,
+    thread_status: eventColumns.threadStatus.nullable(),
+    forum_status: managedChannelColumns.status.nullable(),
   }),
 );
 
@@ -880,6 +885,24 @@ export interface EventReminderStaleClaim {
   attempts: number;
   claimed_at: string;
 }
+
+/**
+ * An event reminder claim read again with its event and guild, to decide whether
+ * a stale claim no plan named can still go out.
+ */
+export const parseEventClaimLiveness = rowParser(
+  "event_reminder_log",
+  "event_id",
+  z.object({
+    state: eventReminderLogColumns.state,
+    claim_token: eventReminderLogColumns.claimToken,
+    event_status: eventColumns.status.nullable(),
+    event_deleted_at: eventColumns.deletedAt,
+    event_date: eventColumns.eventDate.nullable(),
+    thread_status: eventColumns.threadStatus.nullable(),
+    reminders_enabled: guildConfigColumns.remindersEnabled.nullable(),
+  }),
+);
 
 export const parseEventReminderStaleClaim: RowParser<EventReminderStaleClaim> =
   rowParser(

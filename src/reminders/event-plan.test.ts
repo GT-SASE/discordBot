@@ -291,6 +291,23 @@ describe("planEventReminders", () => {
     ).toEqual([]);
   });
 
+  it("skips the stale claims of an event whose post is gone, and no fresh one", () => {
+    const result = plan([
+      candidate({
+        thread_status: "missing",
+        thread_id: null,
+        log: [
+          logRow("daily_steps", "claimed", STALE),
+          logRow("pickup_day", "claimed", FRESH),
+        ],
+      }),
+    ]);
+    expect(result.sends).toEqual([]);
+    expect(result.skips).toEqual([
+      { eventId: EVENT_ID, kind: "daily_steps", reminderDate: TODAY },
+    ]);
+  });
+
   it("sends nothing to an event whose post is not made yet", () => {
     const result = plan([
       candidate({ thread_status: "pending", thread_id: null }),

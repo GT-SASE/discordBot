@@ -363,16 +363,19 @@ export async function reclaimReminder(
 export type StaleClaimOutcome =
   /** Taken over. Send the reminder and mark it with this token. */
   | { readonly outcome: "reclaimed"; readonly claimToken: string }
-  /** The task is done, deleted or moved, so the claim was recorded as skipped. */
+  /**
+   * The task is done, deleted or moved, or its event is closed or deleted, its forum no
+   * longer managed or its post gone, so the claim was recorded as skipped.
+   */
   | { readonly outcome: "closed" }
   /** Left alone and may come back: fresh, reminders paused, or someone else's now. */
   | { readonly outcome: "left" };
 
 /**
  * Deals with one claim from `listStaleClaims`. Without this, a claim on a finished
- * task would stay listed forever, since a reclaim refuses it. A claim is closed only
- * when its task is finished, not when reminders are merely paused, because a closed
- * claim would not go out if they were turned back on.
+ * task would stay listed forever, since a reclaim refuses it. A claim is closed when its
+ * task is finished or can no longer be reminded where it is, not when reminders are
+ * merely paused, because a closed claim would not go out if they were turned back on.
  */
 export async function resolveStaleClaim(
   db: DbClient,
@@ -393,9 +396,11 @@ export async function resolveStaleClaim(
 }
 
 /**
- * Closes a stale claim if its task is finished, and otherwise leaves it exactly as it
- * is, with no takeover and no rise in `attempts`. For a claim the run has no intention
- * of sending, such as one on a task the plan left out.
+ * Closes a stale claim if its task is finished, deleted or moved to another date, or its
+ * event is closed or deleted, its forum is no longer managed or its post is gone, and
+ * otherwise leaves it exactly as it is, with no takeover and no rise in `attempts`. For
+ * a claim the run has no intention of sending, such as one on a task the plan left out.
+ * Left open, such a claim is listed as stale by every run for good.
  */
 export async function closeStaleClaim(
   db: DbClient,
@@ -440,8 +445,23 @@ export async function closeStaleClaim(
           due_date: tasks.dueDate,
           status: tasks.status,
           deleted_at: tasks.deletedAt,
+          event_status: events.status,
+          event_deleted_at: events.deletedAt,
+          thread_status: events.threadStatus,
+          forum_status: managedChannels.status,
         })
         .from(tasks)
+        .leftJoin(
+          events,
+          and(eq(events.id, tasks.eventId), eq(events.guildId, tasks.guildId)),
+        )
+        .leftJoin(
+          managedChannels,
+          and(
+            eq(managedChannels.guildId, events.guildId),
+            eq(managedChannels.channelId, events.channelId),
+          ),
+        )
         .where(eq(tasks.id, key.taskId))
         .limit(1),
     ),
@@ -450,11 +470,16 @@ export async function closeStaleClaim(
   if (!task.ok) {
     return task;
   }
+  const live = task.value;
   const stillDue =
-    task.value !== null &&
-    task.value.status === "open" &&
-    task.value.deleted_at === null &&
-    task.value.due_date === key.dueDate;
+    live !== null &&
+    live.status === "open" &&
+    live.deleted_at === null &&
+    live.due_date === key.dueDate &&
+    live.event_status === "active" &&
+    live.event_deleted_at === null &&
+    live.thread_status !== "missing" &&
+    live.forum_status === "active";
   if (stillDue) {
     return { ok: true, value: { outcome: "left" } };
   }

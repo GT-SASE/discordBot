@@ -15,7 +15,12 @@ import {
   it,
   vi,
 } from "vitest";
-import { pgliteSql } from "../support/sql-client.ts";
+import {
+  callsFunction,
+  pgliteSql,
+  readsFrom,
+  type Intercept,
+} from "../support/sql-client.ts";
 import { createDbClient, type DbClient } from "../../src/db/client.ts";
 import {
   assignEventStep,
@@ -34,6 +39,7 @@ import {
   type RunLimits,
   type RunResult,
 } from "../../src/reminders/run.ts";
+import { slotStart } from "../../src/reminders/plan.ts";
 import { messageBody } from "../support/json.ts";
 import {
   finishEventSteps,
@@ -65,6 +71,7 @@ let requests: { method: string; path: string }[];
 let sent: Sent[];
 let threadParents: Map<string, { guildId: string; parentId: string }>;
 let logLines: string[];
+let sqlGate: Intercept = () => undefined;
 
 function posts() {
   return requests.filter((request) => request.method === "POST");
@@ -109,6 +116,7 @@ function mockDiscord(): void {
 function run(
   guilds: readonly WorkflowGuildFixture[],
   limits?: Partial<RunLimits>,
+  now?: Date,
 ): Promise<RunResult> {
   return runReminders({
     db,
@@ -120,11 +128,15 @@ function run(
     allowedGuildIds: new Set(guilds.map((guild) => guild.guildId)),
     log: (line) => logLines.push(line),
     ...(limits === undefined ? {} : { limits }),
+    ...(now === undefined ? {} : { now: () => now }),
   });
 }
 
+/** Days from the date a run plans for in a UTC guild: that of its slot's start. */
 function dateOffset(days: number): string {
-  return new Date(Date.now() + days * 86_400_000).toISOString().slice(0, 10);
+  return new Date(slotStart(new Date()) + days * 86_400_000)
+    .toISOString()
+    .slice(0, 10);
 }
 
 /** A guild whose zone is UTC, so test dates and "today" agree. */
@@ -269,7 +281,7 @@ async function claimAgo(
 
 beforeAll(async () => {
   database = await createMigratedDb();
-  db = createDbClient(pgliteSql(database));
+  db = createDbClient(pgliteSql(database, (call) => sqlGate(call)));
 });
 
 afterAll(() => database.close());
@@ -280,6 +292,7 @@ beforeEach(async () => {
   sent = [];
   threadParents = new Map();
   logLines = [];
+  sqlGate = () => undefined;
   mockDiscord();
   // Events from earlier tests stay, but in guilds no later test allows.
   await database.exec(`
@@ -429,6 +442,33 @@ describe("the daily step list", () => {
 });
 
 describe("Food pickup reminders", () => {
+  it("plans the 17:00 UTC recovery run for the same Singapore day as the 15:00 run", async () => {
+    // The latest 17:00 UTC that has passed: 01:00 the next day in Singapore, where the
+    // slot began at 23:00. The pickup is two days after the slot's date.
+    const latest = slotStart(new Date()) + 2 * 3_600_000;
+    const recovery = latest <= Date.now() ? latest : latest - 86_400_000;
+    const slotDay = new Date(slotStart(new Date(recovery)))
+      .toISOString()
+      .slice(0, 10);
+    const guild = await guildInUtc();
+    await database.query(
+      `UPDATE public.guild_config SET timezone = 'Asia/Singapore' WHERE guild_id = $1`,
+      [guild.guildId],
+    );
+    const made = await event(guild, 2 - (slotDay === dateOffset(0) ? 0 : 1));
+    const people = await readyForPickup(guild, made);
+
+    await run([guild], undefined, new Date(recovery));
+
+    const pickup = sent.find((message) =>
+      message.content.includes("you are on food pickup"),
+    );
+    expect(present(pickup).users).toEqual(people);
+    expect(await logRows(made.eventId)).toMatchObject([
+      { kind: "pickup_two_days", reminder_date: slotDay, state: "sent" },
+    ]);
+  });
+
   it("pings every pickup person two days before, with the time", async () => {
     const guild = await guildInUtc();
     const made = await event(guild, 2, "Movie night");
@@ -660,6 +700,201 @@ describe("claims left by a crashed run", () => {
     expect(posts()).toEqual([]);
     expect((await jobRow()).results).toMatchObject({
       event_fresh_claims_waiting: 1,
+    });
+  });
+
+  it.each([
+    ["is closed", `UPDATE public.events SET status = 'closed' WHERE id = $1`],
+    ["is deleted", `UPDATE public.events SET deleted_at = now() WHERE id = $1`],
+    [
+      "has lost its post",
+      `UPDATE public.events SET thread_status = 'missing' WHERE id = $1`,
+    ],
+  ])(
+    "closes a stale claim as skipped when the event %s",
+    async (_label, change) => {
+      const guild = await guildInUtc();
+      const made = await event(guild, 4);
+      await claimAgo(made.eventId, "daily_steps", dateOffset(0), 90);
+      await database.query(change, [made.eventId]);
+
+      await run([guild]);
+
+      expect(posts()).toEqual([]);
+      expect(await logRows(made.eventId)).toMatchObject([
+        { state: "skipped", attempts: 1 },
+      ]);
+      expect((await jobRow()).results).toMatchObject({
+        event_skips_recorded: 1,
+      });
+    },
+  );
+
+  /** Turns the guild's reminders on or off, as /config does. */
+  async function setReminders(
+    guild: WorkflowGuildFixture,
+    on: boolean,
+  ): Promise<void> {
+    await queryAs(
+      database,
+      "bot_app",
+      `SELECT public.apply_config_change($1,
+         (SELECT version FROM public.guild_config WHERE guild_id = $1), $1, $2)`,
+      [guild.guildId, on],
+    );
+  }
+
+  /** Removes the guild's forum from the managed list, or adds it back, as /config does. */
+  async function setForum(
+    guild: WorkflowGuildFixture,
+    managed: boolean,
+  ): Promise<void> {
+    const [add, remove] = managed
+      ? [[guild.channelId], []]
+      : [[], [guild.channelId]];
+    await queryAs(
+      database,
+      "bot_app",
+      `SELECT public.apply_config_change($1,
+         (SELECT version FROM public.guild_config WHERE guild_id = $1), $1, NULL,
+         $2::text[], $3::text[])`,
+      [guild.guildId, add, remove],
+    );
+  }
+
+  /** Lets another run start in this slot, as the recovery cron does after a failed run. */
+  async function allowAnotherRun(): Promise<void> {
+    await database.query(
+      `UPDATE public.job_runs SET status = 'failed', error = 'test' WHERE job_name = 'reminders'`,
+    );
+  }
+
+  it("keeps today's claim through a pause, and sends it once reminders are back on", async () => {
+    const guild = await guildInUtc();
+    const made = await event(guild, 4);
+    // A run crashed holding today's claim.
+    await claimAgo(made.eventId, "daily_steps", dateOffset(0), 90);
+    await setReminders(guild, false);
+
+    const paused = await run([guild]);
+
+    expect(paused.status).toBe("succeeded");
+    expect(posts()).toEqual([]);
+    expect(await logRows(made.eventId)).toMatchObject([
+      { state: "claimed", attempts: 1 },
+    ]);
+    expect((await jobRow()).results).toMatchObject({ event_stale_left: 1 });
+
+    await setReminders(guild, true);
+    await allowAnotherRun();
+    const resumed = await run([guild]);
+
+    expect(resumed.status).toBe("succeeded");
+    expect(sent).toHaveLength(1);
+    expect(await logRows(made.eventId)).toMatchObject([
+      { state: "sent", attempts: 2 },
+    ]);
+  });
+
+  it("leaves a paused guild's claims alone, even on a closed event", async () => {
+    const guild = await guildInUtc();
+    const made = await event(guild, 4);
+    await claimAgo(made.eventId, "daily_steps", dateOffset(0), 90);
+    await database.query(
+      `UPDATE public.events SET status = 'closed' WHERE id = $1`,
+      [made.eventId],
+    );
+    await setReminders(guild, false);
+
+    await run([guild]);
+
+    expect(await logRows(made.eventId)).toMatchObject([{ state: "claimed" }]);
+  });
+
+  it("keeps a claim while its forum is unmanaged, and sends it once the forum is back", async () => {
+    const guild = await guildInUtc();
+    const made = await event(guild, 4);
+    await claimAgo(made.eventId, "daily_steps", dateOffset(0), 90);
+    await setForum(guild, false);
+
+    await run([guild]);
+
+    expect(posts()).toEqual([]);
+    expect(await logRows(made.eventId)).toMatchObject([{ state: "claimed" }]);
+
+    await setForum(guild, true);
+    await allowAnotherRun();
+    await run([guild]);
+
+    expect(sent).toHaveLength(1);
+    expect(await logRows(made.eventId)).toMatchObject([{ state: "sent" }]);
+  });
+
+  it("closes an unplanned claim on an event already past", async () => {
+    const guild = await guildInUtc();
+    const made = await event(guild, -3);
+    await claimAgo(made.eventId, "daily_steps", dateOffset(-3), 3 * 24 * 60);
+
+    const result = await run([guild]);
+
+    expect(result.status).toBe("succeeded");
+    expect(await logRows(made.eventId)).toMatchObject([{ state: "skipped" }]);
+  });
+
+  it("closes a stale claim from days ago on a live event", async () => {
+    const guild = await guildInUtc();
+    const made = await event(guild, 4);
+    await claimAgo(made.eventId, "daily_steps", dateOffset(-3), 3 * 24 * 60);
+
+    const result = await run([guild]);
+
+    expect(result.status).toBe("succeeded");
+    expect(await logRows(made.eventId)).toEqual([
+      expect.objectContaining({
+        reminder_date: dateOffset(-3),
+        state: "skipped",
+      }),
+      expect.objectContaining({ reminder_date: dateOffset(0), state: "sent" }),
+    ]);
+  });
+
+  it("counts a cut-short read of stale claims as incomplete", async () => {
+    const guild = await guildInUtc();
+    // Rows come back as the values of the selected columns, in order, and these fail
+    // their checks, so only their number matters.
+    const page = Array.from({ length: 501 }, () => [
+      "not-a-uuid",
+      ...Array.from({ length: 5 }, () => null),
+    ]);
+    sqlGate = (call) =>
+      readsFrom(call, "event_reminder_log") && call.sql.includes("order by")
+        ? { rows: page }
+        : undefined;
+
+    const result = await run([guild]);
+
+    expect(result).toMatchObject({ error: "reminders_incomplete" });
+    expect((await jobRow()).results).toMatchObject({
+      event_stale_truncated: 1,
+    });
+  });
+
+  it("counts a stale claim it could not take over as incomplete", async () => {
+    const guild = await guildInUtc();
+    const made = await event(guild, 4);
+    await claimAgo(made.eventId, "daily_steps", dateOffset(0), 90);
+    sqlGate = (call) =>
+      callsFunction(call, "reclaim_event_reminder")
+        ? { rows: [{ value: null }] }
+        : undefined;
+
+    const result = await run([guild]);
+
+    expect(result).toMatchObject({ error: "reminders_incomplete" });
+    expect(posts()).toEqual([]);
+    expect((await jobRow()).results).toMatchObject({
+      event_claim_lost: 1,
+      event_stale_claim_lost: 1,
     });
   });
 

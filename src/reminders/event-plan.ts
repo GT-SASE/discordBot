@@ -35,7 +35,10 @@ export interface PlannedEventReminder {
 export interface EventReminderPlan {
   /** Reminders to claim and send today, soonest event first. */
   readonly sends: PlannedEventReminder[];
-  /** Stale claims on reminders that will not go out, to be recorded as skipped. */
+  /**
+   * Stale claims on reminders that will not go out, to be recorded as skipped: an earlier
+   * day's, one whose list has since been finished, or any on an event with no post.
+   */
   readonly skips: EventReminderRef[];
   /** Reminders due today held by a claim too recent to take over. */
   readonly freshClaims: EventReminderRef[];
@@ -146,6 +149,16 @@ export function planEventReminders(input: EventPlanInput): EventReminderPlan {
     if (threadId === null) {
       if (event.thread_status === "missing" && due.length > 0) {
         plan.missingThreadEventIds.push(event.id);
+      }
+      // With no post, nothing claimed can go out, and none of these is sent late.
+      for (const entry of event.log) {
+        if (entry.state === "claimed" && isStale(entry.claimed_at)) {
+          plan.skips.push({
+            eventId: event.id,
+            kind: entry.kind,
+            reminderDate: entry.reminder_date,
+          });
+        }
       }
       continue;
     }

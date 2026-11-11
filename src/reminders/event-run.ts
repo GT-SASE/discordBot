@@ -11,6 +11,7 @@
 import type { DbClient } from "../db/client.ts";
 import {
   claimEventReminder,
+  closeStaleEventClaim,
   listEventReminderCandidates,
   listStaleEventReminderClaims,
   markEventReminderSent,
@@ -21,12 +22,7 @@ import type {
   EventReminderCandidate,
   EventReminderStaleClaim,
 } from "../db/types.ts";
-import {
-  isUsableTimeZone,
-  parseIsoDate,
-  todayInZone,
-  type DateOnly,
-} from "../lib/dates.ts";
+import { isUsableTimeZone, parseIsoDate, type DateOnly } from "../lib/dates.ts";
 import {
   planEventReminders,
   type EventReminderPlan,
@@ -37,7 +33,7 @@ import {
   renderEventReminder,
   type RenderedEventReminder,
 } from "./event-render.ts";
-import { STALE_CLAIM_MS } from "./plan.ts";
+import { slotToday, STALE_CLAIM_MS } from "./plan.ts";
 import type { FailureOutcome, ThreadMessage, ThreadTarget } from "./run.ts";
 
 const MS_PER_DAY = 86_400_000;
@@ -150,6 +146,7 @@ export class EventReminderStep {
     for (const guild of guilds) {
       await this.#recordSkips(guild.plan.skips);
     }
+    await this.#closeDeadClaims(rows, fromDate, guilds);
   }
 
   async #readStaleClaims(now: Date): Promise<void> {
@@ -163,6 +160,11 @@ export class EventReminderStep {
     }
     this.#ctx.count("event_stale_found", stale.value.rows.length);
     this.#ctx.count("event_excluded_rows", stale.value.excluded.length);
+    if (stale.value.truncated) {
+      // The oldest are read first, and closing them makes room for the rest, so the
+      // recovery run is asked to go on with those beyond the cap.
+      this.#ctx.countIncomplete("event_stale_truncated");
+    }
     for (const claim of stale.value.rows) {
       this.#stale.set(
         keyOf({
@@ -210,7 +212,7 @@ export class EventReminderStep {
       if (!isUsableTimeZone(timezone)) {
         throw new RangeError("unusable time zone");
       }
-      today = todayInZone(now, timezone);
+      today = slotToday(now, timezone);
       plan = planEventReminders({ today, now, events });
     } catch {
       ctx.countIncomplete("event_guilds_invalid_zone");
@@ -448,6 +450,10 @@ export class EventReminderStep {
     }
     if (claim.value === null) {
       ctx.count("event_claim_lost");
+      if (stale !== undefined) {
+        // The plan meant to send it today, and it could not be taken over.
+        ctx.countIncomplete("event_stale_claim_lost");
+      }
       return null;
     }
     if (stale !== undefined) {
@@ -525,30 +531,104 @@ export class EventReminderStep {
       if (!ctx.mayContinue()) {
         return;
       }
-      const key = keyOf(ref);
-      const stale = this.#stale.get(key);
+      const stale = this.#stale.get(keyOf(ref));
       if (stale === undefined) {
         ctx.count("event_skips_not_claimed");
         continue;
       }
-      this.#stale.delete(key);
-      const claim = await reclaimEventReminder(ctx.db, {
-        ...ref,
-        claimToken: stale.claim_token,
-      });
-      if (!claim.ok || claim.value === null) {
-        ctx.count("event_skips_not_claimed");
+      await this.#closeStale(stale);
+    }
+  }
+
+  /**
+   * Closes a stale claim as skipped with the token it was left with. A takeover would be
+   * refused here, since the database no longer allows a reminder for a past day, a closed
+   * or deleted event or an unmanaged forum, and the claim would stay open for good. The
+   * token changes on any takeover, so a claim someone else took is left alone.
+   */
+  async #closeStale(stale: EventReminderStaleClaim): Promise<void> {
+    const ctx = this.#ctx;
+    const ref = {
+      eventId: stale.event_id,
+      kind: stale.kind,
+      reminderDate: stale.reminder_date,
+    };
+    const key = keyOf(ref);
+    this.#stale.delete(key);
+    const marked = await markEventReminderSkipped(ctx.db, {
+      ...ref,
+      claimToken: stale.claim_token,
+    });
+    if (!marked.ok) {
+      ctx.countIncomplete("mark_failed");
+    } else if (marked.value) {
+      ctx.count("event_skips_recorded");
+    } else {
+      ctx.count("event_skips_not_claimed");
+    }
+  }
+
+  /**
+   * Stale claims that no plan named. On an event the candidates hold, a claim for a day
+   * before the guild's today can never go out and is closed. Any other is closed only once
+   * its event, read again now, shows it never can: gone, deleted, closed, its post gone,
+   * or dated before every guild's today. A claim on a guild with reminders off, in a forum
+   * no longer managed or on a row the candidate read left out is left as it is, so it
+   * goes out if a later run plans it, such as after reminders are turned back on.
+   */
+  async #closeDeadClaims(
+    rows: readonly EventReminderCandidate[],
+    fromDate: DateOnly,
+    guilds: readonly GuildEvents[],
+  ): Promise<void> {
+    const candidateIds = new Set(rows.map((row) => row.id));
+    const todayOf = new Map<string, DateOnly>();
+    for (const guild of guilds) {
+      for (const eventId of guild.events.keys()) {
+        todayOf.set(eventId, guild.today);
+      }
+    }
+    for (const stale of [...this.#stale.values()]) {
+      if (!this.#ctx.mayContinue()) {
+        return;
+      }
+      if (candidateIds.has(stale.event_id)) {
+        const today = todayOf.get(stale.event_id);
+        if (today !== undefined && stale.reminder_date < today) {
+          this.#ctx.count("event_stale_unplanned");
+          await this.#closeStale(stale);
+        }
         continue;
       }
-      const marked = await markEventReminderSkipped(ctx.db, {
-        ...ref,
-        claimToken: claim.value,
-      });
-      if (marked.ok && marked.value) {
-        ctx.count("event_skips_recorded");
-      } else {
-        ctx.countIncomplete("mark_failed");
-      }
+      await this.#closeIfDead(stale, fromDate);
+    }
+  }
+
+  /** Reads an unplanned claim's event again, and closes the claim only if it is dead. */
+  async #closeIfDead(
+    stale: EventReminderStaleClaim,
+    fromDate: DateOnly,
+  ): Promise<void> {
+    const ctx = this.#ctx;
+    const ref = {
+      eventId: stale.event_id,
+      kind: stale.kind,
+      reminderDate: stale.reminder_date,
+    };
+    const key = keyOf(ref);
+    this.#stale.delete(key);
+    const closed = await closeStaleEventClaim(ctx.db, {
+      ...ref,
+      claimToken: stale.claim_token,
+      beforeDate: fromDate,
+    });
+    if (!closed.ok) {
+      ctx.countIncomplete("mark_failed");
+    } else if (closed.value === "closed") {
+      ctx.count("event_stale_unplanned");
+      ctx.count("event_skips_recorded");
+    } else {
+      ctx.count("event_stale_left");
     }
   }
 }

@@ -66,7 +66,7 @@ The same `reminders` run sends these after the task reminders, under the same lo
 - `pickup_two_days` and `pickup_day` go out two days before and on the event's date, only once Food pickup has a time and at least one person on it. The database refuses a claim for any other date. Neither these reminders nor setting up Food pickup wait for the budget to be approved.
 - None is sent late. After both crons of a day fail, that day's messages are not sent, and a claim left from that day is closed as `skipped` by a later run.
 
-Their counts in `results` start with `event_`: `event_candidates`, `event_planned`, `event_claimed`, `event_reminders_sent` and one `event_<kind>_sent` per kind, `event_skips_recorded`, `event_stale_reclaimed`, `event_fresh_claims_waiting`, `event_render_failed` and `event_items_refused`. They share `messages_sent`, `pings_withheld`, `deferred_cap`, `threads_held`, `held_reminders`, `events_stopped` and `channels_inaccessible` with task reminders, so the health check's attention counts cover both.
+Their counts in `results` start with `event_`: `event_candidates`, `event_planned`, `event_claimed`, `event_reminders_sent` and one `event_<kind>_sent` per kind, `event_skips_recorded`, `event_stale_reclaimed`, `event_stale_unplanned`, `event_fresh_claims_waiting`, `event_render_failed` and `event_items_refused`. They share `messages_sent`, `pings_withheld`, `deferred_cap`, `threads_held`, `held_reminders`, `events_stopped` and `channels_inaccessible` with task reminders, so the health check's attention counts cover both.
 
 - `deferred_event` with no task reminder failing for that event means the event's thread refused a task reminder earlier in the same run. Its step list waits for the next run, so one run counts one refusal.
 - `event_render_failed` means an event's reminder could not be written. Logs name the event. It does not fail the run.
@@ -81,7 +81,11 @@ WHERE event_id = '<event-id>'
 ORDER BY reminder_date, kind;
 ```
 
-A reminder whose claim never finishes and is no longer due, such as a pickup reminder after Food pickup was undone, stays `claimed`. It sends nothing and does no harm.
+A claim over an hour old on a reminder that will never go out is closed as `skipped` by the next run, so the list of stale claims does not grow. That covers a day that has passed, a pickup reminder after Food pickup was undone, a closed or deleted event and a post that is gone. An event reminder's claim is closed only after its event is read again, and one in a forum no longer managed is left alone, because the forum may be added back. Task reminders do the same for a task that is finished, deleted or moved to another date, or whose event or post is in one of those states, and also close a task's claim in a forum no longer managed. A claim on a guild with reminders switched off is left alone, so it goes out once they are back on.
+
+Each run reads at most 500 stale claims, oldest first. When there are more, `stale_truncated` or `event_stale_truncated` is counted and the run is marked incomplete, so the 17:00 run carries on with the rest. A stale claim the plan meant to send but could not take over counts `stale_claim_lost` or `event_stale_claim_lost` and marks the run incomplete too.
+
+Both crons of a day plan for the same local date: the guild's date at 15:00 UTC, when the slot begins. In zones where midnight falls between 15:00 and 17:00 UTC, such as Asia/Singapore, the 17:00 run would otherwise plan for the next day and the slot's reminders would not be sent. A run started by hand before 15:00 UTC belongs to the slot that began the day before, and plans for that day.
 
 ## A message refused before it was sent
 

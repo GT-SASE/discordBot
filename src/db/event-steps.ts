@@ -40,6 +40,7 @@ import {
   booleanValue,
   cappedList,
   nullableUuidValue,
+  oneOrNone,
   rowList,
   type CappedList,
   type RowList,
@@ -48,6 +49,7 @@ import {
   ASSIGNABLE_STEP_KINDS,
   COMPLETABLE_STEP_KINDS,
   EVENT_REMINDER_KINDS,
+  parseEventClaimLiveness,
   parseEventReminderCandidate,
   parseEventReminderStaleClaim,
   parseEventWorkflow,
@@ -679,4 +681,78 @@ export async function markEventReminderSkipped(
       fragment`public.mark_event_reminder_skipped(p_event_id => ${key.eventId}, p_kind => ${key.kind}, p_reminder_date => ${key.reminderDate}, p_claim_token => ${key.claimToken})`,
     ),
   );
+}
+
+/**
+ * Closes a stale event reminder claim that no plan named, once its event is read again
+ * and shows it can never go out: the event is gone, deleted or closed, its post is gone,
+ * or it was dated before `beforeDate`, a day already past in every guild. Anything else
+ * is left exactly as it is, with no takeover and no rise in `attempts`: a guild with
+ * reminders off, whatever its events, and a live event the candidate read left out, such
+ * as one in a forum no longer managed, which may be added back, or one whose row failed
+ * its checks. "closed" only when this call recorded it skipped.
+ */
+export async function closeStaleEventClaim(
+  db: DbClient,
+  key: EventReminderKey & { claimToken: string; beforeDate: DateOnly },
+): Promise<DbResult<"closed" | "left">> {
+  if (
+    !isEventReminderKey(key) ||
+    !isUuid(key.claimToken) ||
+    !isDbDate(key.beforeDate)
+  ) {
+    return refused();
+  }
+  const read = oneOrNone(
+    await run(db, (sql) =>
+      sql
+        .select({
+          state: eventReminderLog.state,
+          claim_token: eventReminderLog.claimToken,
+          event_status: events.status,
+          event_deleted_at: events.deletedAt,
+          event_date: events.eventDate,
+          thread_status: events.threadStatus,
+          reminders_enabled: guildConfig.remindersEnabled,
+        })
+        .from(eventReminderLog)
+        .leftJoin(events, eq(events.id, eventReminderLog.eventId))
+        .leftJoin(guildConfig, eq(guildConfig.guildId, events.guildId))
+        .where(
+          and(
+            eq(eventReminderLog.eventId, key.eventId),
+            eq(eventReminderLog.kind, key.kind),
+            eq(eventReminderLog.reminderDate, key.reminderDate),
+          ),
+        )
+        .limit(1),
+    ),
+    parseEventClaimLiveness,
+  );
+  if (!read.ok) {
+    return read;
+  }
+  const live = read.value;
+  if (
+    live?.state !== "claimed" ||
+    live.claim_token !== key.claimToken ||
+    // Paused for now: closing would keep it from going out once they are back on.
+    live.reminders_enabled === false
+  ) {
+    return { ok: true, value: "left" };
+  }
+  const dead =
+    live.event_status !== "active" ||
+    live.event_deleted_at !== null ||
+    live.thread_status === "missing" ||
+    live.event_date === null ||
+    live.event_date < key.beforeDate;
+  if (!dead) {
+    return { ok: true, value: "left" };
+  }
+  const marked = await markEventReminderSkipped(db, key);
+  if (!marked.ok) {
+    return marked;
+  }
+  return { ok: true, value: marked.value ? "closed" : "left" };
 }
