@@ -166,7 +166,7 @@ No system is unhackable, and this one makes no such claim. The aim is to keep th
 **Secrets and supply chain**
 
 - Nothing logs a request body or interaction token. Logs hold fixed text, IDs and error codes.
-- Gitleaks scans every commit in CI and unpushed commits in a pre-push hook, in two passes: the default rules in `.gitleaks.toml`, which holds nothing else, and the project's own rules in `.gitleaks-custom.toml`. `pnpm-lock.yaml` is committed and checked so every package comes from the registry with a sha512 hash, install scripts are off, Actions are pinned by SHA, and Dependabot has a 7-day cooldown with no auto-merge.
+- Gitleaks scans every commit in CI and the pushed commits in a pre-push hook, in two passes: the default rules in `.gitleaks.toml`, which holds nothing else, and the project's own rules in `.gitleaks-custom.toml`. `pnpm-lock.yaml` is committed and checked by our own script, so every package comes from the registry at its own name and version with a sha512 hash, install scripts are off, Actions are pinned by SHA, and Dependabot has a 7-day cooldown with no auto-merge.
 
 **Backups**
 
@@ -201,30 +201,31 @@ pnpm gitleaks:install
 pnpm hooks:install
 ```
 
-The committed `.npmrc` holds only `ignore-scripts=true`, which pnpm reads, so package install scripts stay off in every install, including Vercel's, and `node-linker=hoisted`, which gives a flat `node_modules` that Vercel's function tracing copies whole. pnpm 10 also runs no dependency's build script unless `pnpm.onlyBuiltDependencies` in `package.json` lists it, and that list is empty. `hooks:install` turns on a pre-push hook that runs gitleaks over the commits no remote has yet and blocks the push on a finding. [SECURITY.md](SECURITY.md) lists its limits.
+The committed `.npmrc` holds only `ignore-scripts=true`, which pnpm reads, so package install scripts stay off in every install, including Vercel's, and `node-linker=hoisted`, which gives a flat `node_modules` that Vercel's function tracing copies whole. pnpm 10 also runs no dependency's build script unless `pnpm.onlyBuiltDependencies` in `package.json` lists it, and that list is empty. `hooks:install` turns on a pre-push hook that runs gitleaks over the commits being pushed and blocks the push on a finding. [SECURITY.md](SECURITY.md) lists its limits.
 
 There is no local bot. Discord needs a public HTTPS URL, so tests stand in for it, and real runs happen on the test deployment. `.env.example` lists every setting. Copy it to `.env` only when you need to register commands.
 
 ### Tests and checks
 
-| Command                                 | What it does                                                                                        | Needs                                                                         |
-| --------------------------------------- | --------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
-| `pnpm typecheck`                        | Type check                                                                                          | Nothing                                                                       |
-| `pnpm lint`                             | ESLint (only the clients may call `fetch`), and a check that names no Discord host                  | Nothing                                                                       |
-| `pnpm lint:lockfile`                    | Every package in `pnpm-lock.yaml` from the registry, with a sha512 hash                             | Nothing                                                                       |
-| `pnpm format:check`                     | Prettier                                                                                            | Nothing                                                                       |
-| `pnpm test`                             | Unit tests                                                                                          | Nothing                                                                       |
-| `pnpm test:db`                          | Migrations, grants and access layer on PGlite, logged in as `bot_app`                               | Nothing                                                                       |
-| `pnpm test:db:concurrency`              | Races: double Done clicks, retried interactions, overlapping reminder runs, deletes against inserts | `CONCURRENCY_DATABASE_URL` to a Postgres 17 superuser, and `BOT_APP_PASSWORD` |
-| `node scripts/check-migration-sql.ts`   | Refuses dynamic `EXECUTE` and repeated versions in `db/migrations`                                  | Nothing                                                                       |
-| `bash scripts/check-deploy-settings.sh` | The settings that decide what Vercel installs and publishes                                         | Nothing                                                                       |
-| `pnpm db:migrate`                       | Applies new files in `db/migrations`, in order                                                      | `DATABASE_URL` for the database's owner role, never `bot_app`                 |
+| Command                                 | What it does                                                                                                                                                                            | Needs                                                                         |
+| --------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
+| `pnpm typecheck`                        | Type check                                                                                                                                                                              | Nothing                                                                       |
+| `pnpm lint`                             | ESLint (only the clients may call `fetch`), and a check that names no Discord host                                                                                                      | Nothing                                                                       |
+| `pnpm lint:lockfile`                    | Every package in `pnpm-lock.yaml` from the registry, at its own name and version, with a sha512 hash                                                                                    | Nothing                                                                       |
+| `pnpm format:check`                     | Prettier                                                                                                                                                                                | Nothing                                                                       |
+| `pnpm test`                             | Unit tests                                                                                                                                                                              | Nothing                                                                       |
+| `pnpm test:db`                          | Migrations, grants and access layer on PGlite, logged in as `bot_app`                                                                                                                   | Nothing                                                                       |
+| `pnpm test:db:concurrency`              | Races: double Done clicks, retried interactions, overlapping reminder runs, deletes against inserts, config saves and first setup, task quotas at their limit, task changes, lock order | `CONCURRENCY_DATABASE_URL` to a Postgres 17 superuser, and `BOT_APP_PASSWORD` |
+| `node scripts/check-migration-sql.ts`   | Refuses dynamic `EXECUTE` and repeated versions in `db/migrations`                                                                                                                      | Nothing                                                                       |
+| `bash scripts/check-deploy-settings.sh` | The settings that decide what Vercel installs and publishes                                                                                                                             | Nothing                                                                       |
+| `pnpm db:migrate`                       | Applies new files in `db/migrations`, in order                                                                                                                                          | `DATABASE_URL` for the database's owner role, never `bot_app`                 |
 
 The concurrency tests need real Postgres 17. CI's database workflow starts one with password logins, makes an owner and a database, runs `pnpm db:migrate` twice to show the second run applies nothing, sets `bot_app`'s password, then runs those tests and a test logged in as `bot_app`.
 
 Gitleaks scans every commit on every ref in two passes, as CI does. You need a full clone.
 
 ```sh
+test ! -e .gitleaksignore
 .tools/gitleaks git . --config .gitleaks.toml --redact --ignore-gitleaks-allow --no-banner --log-opts="--all -m --text --no-color"
 .tools/gitleaks git . --config .gitleaks-custom.toml --redact --ignore-gitleaks-allow --no-banner --log-opts="--all -m --text --no-color"
 ```

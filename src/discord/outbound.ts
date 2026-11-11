@@ -95,17 +95,22 @@ function isDirectPayload(payload: unknown): boolean {
   );
 }
 
+// A type-only mark that only the builders in this file set, so that a body or part
+// written by hand needs an explicit `as` to pass for one.
+declare const built: unique symbol;
+
 /** A body ready to send. `payload` is the JSON Discord receives. */
 export interface OutboundBody<K extends OutboundKind> {
   readonly kind: K;
   readonly payload: object;
+  readonly [built]: true;
 }
 
 function body<K extends OutboundKind>(
   kind: K,
   payload: object,
 ): OutboundBody<K> {
-  return { kind, payload };
+  return { kind, payload } as OutboundBody<K>;
 }
 
 /**
@@ -150,10 +155,11 @@ type PartKind = "button" | "select" | "row" | "modal-row";
 export interface Part<K extends PartKind> {
   readonly kind: K;
   readonly component: object;
+  readonly [built]: true;
 }
 
 function part<K extends PartKind>(kind: K, component: object): Part<K> {
-  return { kind, component };
+  return { kind, component } as Part<K>;
 }
 
 function componentId(value: string, limit: number): string {

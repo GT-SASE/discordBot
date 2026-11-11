@@ -20,7 +20,7 @@
 # A package.json in a subdirectory makes the install run from there, with its own
 # scripts and dependencies, and another lockfile, or a workspace file, picks another
 # package manager or adds packages. Either would step around these checks and the check
-# on the lockfile (pnpm lint:lockfile).
+# on the lockfile in scripts/check-lockfile.ts (pnpm lint:lockfile).
 #
 # Vercel does run a buildCommand from vercel.json, which could turn install scripts back
 # on or run anything else with the project's variables. The project builds without one,

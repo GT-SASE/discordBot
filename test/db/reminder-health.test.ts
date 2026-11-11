@@ -24,7 +24,7 @@ import {
   jobFreshness,
   runHealthCheck,
 } from "../../src/reminders/health.ts";
-import { managedChannelCheck } from "../../src/reminders/run.ts";
+import { managedChannelCheck } from "../../src/handlers/dependencies.ts";
 import { insertFinishedJobRun } from "../support/job-runs-fixture.ts";
 import { insertGuild, type GuildFixture } from "./fixtures.ts";
 import { createMigratedDb, fakeId, present } from "./harness.ts";

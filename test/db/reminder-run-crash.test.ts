@@ -17,7 +17,8 @@ import {
 import { pgliteSql } from "../support/sql-client.ts";
 import { createDbClient, type DbClient } from "../../src/db/client.ts";
 import { createDiscordClient } from "../../src/discord/client.ts";
-import { managedChannelCheck, runReminders } from "../../src/reminders/run.ts";
+import { managedChannelCheck } from "../../src/handlers/dependencies.ts";
+import { runReminders } from "../../src/reminders/run.ts";
 import {
   finishEventSteps,
   insertEvent,

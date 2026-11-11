@@ -54,6 +54,38 @@ describe("findLockfileProblems", () => {
     expect(findLockfileProblems(lockfile(packages))).not.toEqual([]);
   });
 
+  it.each([
+    ["a prerelease version", "a@1.0.0-rc.1"],
+    ["a scoped name", "'@s/a@1.0.0'"],
+    ["a name with dots and dashes", "a.b-c_d@1.0.0"],
+  ])("passes a package key with %s", (_name, key) => {
+    expect(
+      findLockfileProblems(
+        lockfile(`  ${key}:\n    resolution: {integrity: ${HASH}}\n`),
+      ),
+    ).toEqual([]);
+  });
+
+  it.each([
+    ["a tarball URL for its version", "a@https://example.test/a-1.0.0.tgz"],
+    ["a version range", "a@^1.0.0"],
+    ["a dist tag", "a@latest"],
+    ["no version", "a"],
+    ["a version that walks up the path", "a@1.0.0/../../evil"],
+    ["a name that walks up the path", "'../evil@1.0.0'"],
+    ["a scope that walks up the path", "'@s/../evil@1.0.0'"],
+    ["a git reference", "a@github:o/a#abc"],
+  ])(
+    "refuses a package key with %s, so its tarball is not its own version's file",
+    (_name, key) => {
+      expect(
+        findLockfileProblems(
+          lockfile(`  ${key}:\n    resolution: {integrity: ${HASH}}\n`),
+        ),
+      ).toEqual([expect.stringContaining("not its own version's file")]);
+    },
+  );
+
   const resolvedA = `  a@1.0.0:\n    resolution: {integrity: ${HASH}}\n`;
   const importing = (version: string, name = "a") =>
     `  .:\n    dependencies:\n      ${name}:\n        specifier: 1.0.0\n        version: ${version}\n`;

@@ -28,12 +28,12 @@ import { createDbClient, type DbClient } from "../../src/db/client.ts";
 import { getLatestSucceededJobRun } from "../../src/db/job-runs.ts";
 import { createDiscordClient } from "../../src/discord/client.ts";
 import { STALE_CLAIM_MS } from "../../src/reminders/plan.ts";
+import { managedChannelCheck } from "../../src/handlers/dependencies.ts";
 import {
   DATABASE_CALL_MS,
   DISCORD_OPERATION_MS,
   RUN_HARD_STOP_MS,
   THREAD_REFUSALS_BEFORE_HOLD,
-  managedChannelCheck,
   runReminders,
   type RunLimits,
   type RunResult,

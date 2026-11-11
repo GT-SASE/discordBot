@@ -9,6 +9,12 @@
  * weaker hash. `pnpm install --frozen-lockfile` then checks each download against its
  * hash, so the lockfile cannot be satisfied by other content.
  *
+ * pnpm writes no URL for a registry package: it fetches the tarball the registry serves
+ * for the entry's key, `<name>/-/<name>-<version>.tgz`. So each key must be a package
+ * name and an exact version, or the download would not be the entry's own version's file.
+ * A name starting with a letter or digit keeps "..", which a URL would resolve away, from
+ * standing in for one.
+ *
  * Each version the root importer asks for must also be one of those packages. A `link:`
  * or `file:` version points at a folder on the machine running the install, and a version
  * with no package entry has no resolution to check, so both fail.
@@ -25,6 +31,10 @@ const REGISTRY_RESOLUTION =
   /^ {4}resolution: \{integrity: sha512-[A-Za-z0-9+/]+={0,2}\}$/;
 
 const PACKAGE_KEY = /^ {2}'?([^']+?)'?:$/;
+const PACKAGE_NAME = String.raw`(?:@[a-z0-9][\w.~-]*\/)?[a-zA-Z0-9][\w.~-]*`;
+const PACKAGE_VERSION = String.raw`[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?`;
+/** A key the registry's own tarball is named after: a package name and exact version. */
+const REGISTRY_KEY = new RegExp(`^${PACKAGE_NAME}@${PACKAGE_VERSION}$`);
 const IMPORTER_DEPENDENCY = /^ {6}'?([^']+?)'?:$/;
 const IMPORTER_VERSION = /^ {8}version: '?([^']*?)'?$/;
 
@@ -103,6 +113,11 @@ export function findLockfileProblems(text: string): string[] {
       resolved = false;
       packageKey = PACKAGE_KEY.exec(line)?.[1] ?? line.trim();
       packages += 1;
+      if (!REGISTRY_KEY.test(packageKey)) {
+        problems.push(
+          `${String(number)}: a package key that is not a name and an exact version, so not its own version's file`,
+        );
+      }
       return;
     }
     if (line.startsWith("    resolution:")) {
