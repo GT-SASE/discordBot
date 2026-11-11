@@ -328,9 +328,30 @@ describe("review regressions", () => {
     expect(render("e​́")).toBe("é");
   });
 
-  it("strips an unassigned code point", () => {
-    expect(render("a\u{50000}b")).toBe("ab");
-    expect(() => escapeUserText("\u{50000}")).toThrow(SafeTextError);
+  it.each([
+    ["an unassigned code point", "a\u{50000}b", "ab"],
+    ["a null notehead", "a\u{1D159}b", "ab"],
+    ["an object replacement", "a\u{FFFC}b", "ab"],
+    ["a variation selector", "a\u{FE00}b", "ab"],
+    ["a combining grapheme joiner", "a\u{034F}b", "ab"],
+    ["a Mongolian vowel separator", "a\u{180E}b", "ab"],
+    ["a Hangul filler", "a\u{3164}b", "ab"],
+  ])("strips %s", (_label, raw, expected) => {
+    expect(render(raw)).toBe(expected);
+  });
+
+  it.each(["\u{1D159}", "\u{FFFC}", "\u{50000}", "\u{034F}", "\u{3164}"])(
+    "refuses %j, which has nothing visible",
+    (raw) => {
+      expect(() => escapeUserText(raw)).toThrow(SafeTextError);
+    },
+  );
+
+  it("keeps the joiner and VS16 inside an emoji", () => {
+    expect(render("\u{1F469}\u{200D}\u{1F4BB}")).toBe(
+      "\u{1F469}\u{200D}\u{1F4BB}",
+    );
+    expect(render("\u{2764}\u{FE0F}")).toBe("\u{2764}\u{FE0F}");
   });
 
   it.each([
@@ -411,8 +432,10 @@ describe("containsInviteOrMaskedLink", () => {
     "[log in](evil)",
     "[Portal login](https://evil.example)",
     "discord.\u200Bgg/abc",
+    "discord\uFE00.gg/x",
+    "discord.\u034Fgg/x",
     "[log in]\u200B(evil)",
-  ])("finds %s", (text) => {
+  ])("finds %j", (text) => {
     expect(containsInviteOrMaskedLink(text)).toBe(true);
   });
 
