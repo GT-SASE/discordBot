@@ -39,7 +39,7 @@ function packageKeyFor(name: string, version: string): string {
 
 /** Each problem found, as a line number and what is wrong there. */
 export function findLockfileProblems(text: string): string[] {
-  const lines = text.split("\n");
+  const lines = text.split(/\r?\n/);
   const problems: string[] = [];
   if (lines[0] !== "lockfileVersion: '9.0'") {
     problems.push("1: the lockfile must be version 9.0");

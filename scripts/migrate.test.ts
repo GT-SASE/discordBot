@@ -101,6 +101,17 @@ describe("migrate", () => {
     expect(migrationHash(sql)).toMatch(/^[0-9a-f]{64}$/);
   });
 
+  it("hashes a file with CRLF line endings as it does the same file with LF", async () => {
+    const lf =
+      "CREATE TABLE public.a (id int);\nCREATE TABLE public.b (id int);\n";
+    const crlf = lf.replaceAll("\n", "\r\n");
+    expect(migrationHash(crlf)).toBe(migrationHash(lf));
+    expect(migrationHash(lf)).not.toBe(migrationHash(lf.replace("b", "c")));
+
+    await migrate(db, [migration("0001", crlf)]);
+    expect(await migrate(db, [migration("0001", lf)])).toEqual([]);
+  });
+
   it("refuses an applied file whose contents have changed, and applies nothing", async () => {
     await migrate(db, [migration("0001", "CREATE TABLE public.a (id int);")]);
     const failure = await migrate(db, [

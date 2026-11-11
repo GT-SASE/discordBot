@@ -133,4 +133,19 @@ describe("findLockfileProblems", () => {
     );
     expect(findLockfileProblems(text)).toEqual([]);
   });
+
+  it("reads a checkout with CRLF line endings the same way", () => {
+    const text = readFileSync(
+      join(import.meta.dirname, "..", "pnpm-lock.yaml"),
+      "utf8",
+    );
+    expect(findLockfileProblems(text.replaceAll("\n", "\r\n"))).toEqual([]);
+    expect(
+      findLockfileProblems(
+        lockfile(
+          `  a@1.0.0:\n    resolution: {tarball: https://example.test/a.tgz}\n\n`,
+        ).replaceAll("\n", "\r\n"),
+      ),
+    ).not.toEqual([]);
+  });
 });

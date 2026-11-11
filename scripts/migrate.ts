@@ -102,9 +102,15 @@ async function inTransaction<T>(
   }
 }
 
-/** The hex sha256 of a migration's text, as the ledger records it. */
+/**
+ * The hex sha256 of a migration's text, as the ledger records it. Line endings are
+ * made LF first, so a checkout with CRLF endings, as Git gives on Windows by default,
+ * hashes the same as any other.
+ */
 export function migrationHash(sql: string): string {
-  return createHash("sha256").update(sql, "utf8").digest("hex");
+  return createHash("sha256")
+    .update(sql.replaceAll("\r\n", "\n"), "utf8")
+    .digest("hex");
 }
 
 /** Each applied version and the hash recorded for it. */
