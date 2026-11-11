@@ -39,6 +39,14 @@ pg_restore --list "bot-$(date +%Y-%m-%d).dump" | head
 
 Restoring an export is untested. Rehearse it on the staging project before relying on it: restore into a new, empty project with `pg_restore --no-owner --single-transaction`, record its migrations with `supabase migration repair`, then repoint `SUPABASE_URL` and `SUPABASE_SECRET_KEY` in Vercel. Write down what worked here.
 
+## If you ran the old backup job
+
+Earlier versions ran a daily job in a separate private repo that committed `age`-encrypted dumps. If that job was ever set up, clean it up once the migration that drops `backup_ro` has been applied:
+
+1. Disable the private repo's backup workflow, then delete the repo. Its encrypted dumps hold member IDs and task text.
+2. Rotate `BACKUP_PGPASSWORD`. If `backup_ro` still exists, the migration's notice said so: set a new random password with `\password backup_ro` as `postgres` and do not record it.
+3. Ask each key holder to delete their `age` identity file, including the password manager entry and the offline copy, so that no copy of a dump can be read again.
+
 ## Undoing a change
 
 No bot command reverses `/event close`, Mark done or `/event delete`, because nothing is really deleted and a mistake is rare. A maintainer does it by hand. Run these as `postgres`, in the Supabase SQL Editor or `psql`. Each one should report that it changed 1 row. `test/db/recovery-procedures.test.ts` runs this SQL, as the tables' owner on PGlite. It has not been run on hosted Supabase.
