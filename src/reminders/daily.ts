@@ -29,8 +29,9 @@ function log(line: string): void {
 }
 
 /**
- * Built on each call, database handle included, so a warm function cannot carry a
- * client's memory, such as a refused token, to the next run.
+ * Built on each call, so a warm function cannot carry the Discord client's memory, such
+ * as a refused token, to the next run. The database handle holds no state between runs.
+ * It is built here too only so that each run has its own.
  */
 function productionDependencies(): DailyDependencies {
   const db = createDbFromEnv();

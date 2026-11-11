@@ -295,7 +295,7 @@ describe("an authorized request", () => {
     expect(JSON.stringify(warn.mock.calls)).toContain("ALLOWED_GUILD_IDS");
   });
 
-  it("builds a new Discord client and database handle on each run", async () => {
+  it("builds a new Discord client on each run, so a refused token is not remembered", async () => {
     // The first run's token is refused. The second must ask Discord afresh, and send.
     let tokenRefused = true;
     fetchMock.mockImplementation((input, init) => {
@@ -353,6 +353,8 @@ describe("an authorized request", () => {
 
     expect(clients.made).toHaveLength(2);
     expect(clients.made[1]).not.toBe(clients.made[0]);
+    // The database handle holds no state between runs, so this is not what lets the
+    // second run send. It only pins that each run builds its own.
     expect(databases.made).toHaveLength(2);
     expect(databases.made[1]).not.toBe(databases.made[0]);
   });
