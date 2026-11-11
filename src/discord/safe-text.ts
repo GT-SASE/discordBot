@@ -119,10 +119,13 @@ export function plainTextValue(text: PlainText): string {
 const WHITESPACE = /[\s\u0085]+/gu;
 
 // Control, format (zero-width, bidi, tags), lone surrogate, private use and
-// unassigned characters, and the blank letters used for invisible names. The
-// zero-width joiner is a format character too, but emoji need it.
+// unassigned characters, and everything Unicode says to draw as nothing: variation
+// selectors, U+034F, the Hangul fillers and the Khmer and Mongolian invisibles. Also
+// the blank Braille pattern, the null notehead and the object replacement character,
+// which draw as blank space and are used for invisible names. The zero-width joiner
+// and VS16 are default ignorable too, but emoji need them.
 const INVISIBLE =
-  /[[\p{Cc}\p{Cf}\p{Cs}\p{Co}\p{Cn}\u{115F}\u{1160}\u{3164}\u{FFA0}\u{2800}]--[\u{200D}]]/gv;
+  /[[\p{Cc}\p{Cf}\p{Cs}\p{Co}\p{Cn}\p{Default_Ignorable_Code_Point}\u{2800}\u{1D159}\u{FFFC}]--[\u{200D}]--[\u{FE0F}]]/gv;
 
 // The joiner and VS16 are kept only inside an emoji sequence.
 const STRAY_JOINER =
