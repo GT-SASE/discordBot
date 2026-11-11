@@ -26,9 +26,9 @@ import type {
   CompletableStepKind,
 } from "../../src/db/types.ts";
 import { createDiscordClient } from "../../src/discord/client.ts";
+import { managedChannelCheck } from "../../src/handlers/dependencies.ts";
 import {
   THREAD_REFUSALS_BEFORE_HOLD,
-  managedChannelCheck,
   runReminders,
   type RunLimits,
   type RunResult,

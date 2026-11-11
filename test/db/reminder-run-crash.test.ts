@@ -16,7 +16,8 @@ import {
 } from "vitest";
 import { createDbClient, type DbClient } from "../../src/db/client.ts";
 import { createDiscordClient } from "../../src/discord/client.ts";
-import { managedChannelCheck, runReminders } from "../../src/reminders/run.ts";
+import { managedChannelCheck } from "../../src/handlers/dependencies.ts";
+import { runReminders } from "../../src/reminders/run.ts";
 import { TEST_ORIGIN, TEST_SECRET_KEY } from "../support/mock-postgrest.ts";
 import {
   finishEventSteps,

@@ -27,11 +27,7 @@ import {
   type JobResults,
   type JobRunError,
 } from "../db/job-runs.ts";
-import {
-  getEventThreadForum,
-  getManagedChannel,
-  markChannelUnavailable,
-} from "../db/managed-channels.ts";
+import { markChannelUnavailable } from "../db/managed-channels.ts";
 import {
   claimReminder,
   claimReminders,
@@ -54,7 +50,6 @@ import {
   actionForFailure,
   type DiscordClient,
   type DiscordFailure,
-  type ManagedChannelCheck,
 } from "../discord/client.ts";
 import { channelMessage, type Part } from "../discord/outbound.ts";
 import type { Chunk, ChunkLine, SafeText } from "../discord/safe-text.ts";
@@ -163,30 +158,6 @@ export type RunResult =
       readonly results: JobResults;
       readonly error: string | null;
     };
-
-/** The check the client runs before each send, from the live row. */
-export function managedChannelCheck(db: DbClient): ManagedChannelCheck {
-  return {
-    async isManaged(guildId, channelId) {
-      const row = await getManagedChannel(db, { guildId, channelId });
-      if (!row.ok) {
-        // The client turns this into a refused send. The error is not looked at.
-        throw new Error("managed channel check failed");
-      }
-      return row.value?.status === "active";
-    },
-    async isManagedEventThread(guildId, threadId) {
-      const forum = await getEventThreadForum(db, { guildId, threadId });
-      if (!forum.ok) {
-        // The client turns this into a refused send. The error is not looked at.
-        throw new Error("managed channel check failed");
-      }
-      return (
-        forum.value?.guild_id === guildId && forum.value.status === "active"
-      );
-    },
-  };
-}
 
 class Counts {
   readonly #values = new Map<string, number>();
