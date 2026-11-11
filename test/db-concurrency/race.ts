@@ -27,6 +27,16 @@ export interface RaceDatabase {
   readonly t1: pg.Client;
   readonly t2: pg.Client;
   /**
+   * Opens one more service_role connection for the current test, closed with T1 and T2.
+   * For races that need a third party, such as one holding a lock both others want.
+   */
+  connect(): Promise<pg.Client>;
+  /**
+   * Waits until the waiter is blocked by the blocker, T2 by T1 unless told otherwise, and
+   * fails if that never happens. Both must be connections this database opened.
+   */
+  waitUntilBlocked(waiter?: pg.Client, blocker?: pg.Client): Promise<void>;
+  /**
    * T1 runs its statement in an open transaction, T2 runs its statement and must block,
    * then T1 finishes. Returns what T2 got.
    */
@@ -37,7 +47,7 @@ export interface RaceDatabase {
   ): Promise<Outcome>;
 }
 
-function settled(query: Promise<pg.QueryResult>): Promise<Outcome> {
+export function settled(query: Promise<pg.QueryResult>): Promise<Outcome> {
   return query.then(
     (result) => ({ rows: result.rows as Record<string, unknown>[] }),
     (error: unknown) => ({ code: (error as { code?: string }).code }),
@@ -57,7 +67,8 @@ async function pidOf(client: pg.Client): Promise<number> {
 
 /**
  * Gives the calling file a database of its own, copied from the migrated template that
- * global-setup.ts made, and two fresh service_role connections for each test.
+ * global-setup.ts made, and two fresh service_role connections for each test, with more
+ * on request.
  */
 export function raceDatabase(): RaceDatabase {
   const adminUrl = inject("concurrencyAdminUrl");
@@ -68,8 +79,8 @@ export function raceDatabase(): RaceDatabase {
   let observer: pg.Client | undefined;
   let t1: pg.Client | undefined;
   let t2: pg.Client | undefined;
-  let t1Pid = 0;
-  let t2Pid = 0;
+  // Every connection open for the current test, with its backend pid.
+  const pids = new Map<pg.Client, number>();
   // Filled in as setup goes, so that a setup failure still cleans up what it made.
   const cleanups: (() => Promise<unknown>)[] = [];
 
@@ -100,38 +111,65 @@ export function raceDatabase(): RaceDatabase {
     }
   });
 
+  async function connect(): Promise<pg.Client> {
+    const client = new pg.Client({ connectionString: databaseUrl });
+    await client.connect();
+    try {
+      await client.query("SET ROLE service_role");
+      // Read here, while the connection is idle. A query on a client that is already
+      // blocked would queue behind the blocked statement and not return until the wait
+      // was over.
+      pids.set(client, await pidOf(client));
+    } catch (error) {
+      await client.end();
+      throw error;
+    }
+    return client;
+  }
+
   beforeEach(async () => {
-    t1 = new pg.Client({ connectionString: databaseUrl });
-    t2 = new pg.Client({ connectionString: databaseUrl });
-    await t1.connect();
-    await t2.connect();
-    await t1.query("SET ROLE service_role");
-    await t2.query("SET ROLE service_role");
-    // Read here, while both are idle. A query on a client that is already blocked would
-    // queue behind the blocked statement and not return until the wait was over.
-    t1Pid = await pidOf(t1);
-    t2Pid = await pidOf(t2);
+    t1 = await connect();
+    t2 = await connect();
   });
 
   afterEach(async () => {
-    await t1?.end();
-    await t2?.end();
+    const open = [...pids.keys()];
+    pids.clear();
+    t1 = undefined;
+    t2 = undefined;
+    for (const client of open) {
+      await client.end();
+    }
   });
 
-  /** Waits until T2 is blocked by T1, and fails if that never happens. */
-  async function waitUntilBlocked(): Promise<void> {
+  function pidFor(client: pg.Client): number {
+    const pid = pids.get(client);
+    if (pid === undefined) {
+      throw new Error("the connection is not one this race database opened");
+    }
+    return pid;
+  }
+
+  async function waitUntilBlocked(
+    waiter: pg.Client = ready(t2),
+    blocker: pg.Client = ready(t1),
+  ): Promise<void> {
+    const waiterPid = pidFor(waiter);
+    const blockerPid = pidFor(blocker);
     const deadline = Date.now() + BLOCK_TIMEOUT_MS;
     while (Date.now() < deadline) {
       const { rows } = await ready(observer).query<{ blockers: number[] }>(
         "SELECT pg_blocking_pids($1) AS blockers",
-        [t2Pid],
+        [waiterPid],
       );
-      if (rows[0]?.blockers.includes(t1Pid)) {
+      if (rows[0]?.blockers.includes(blockerPid)) {
         return;
       }
       await new Promise((resolve) => setTimeout(resolve, 25));
     }
-    throw new Error("T2 never blocked on T1");
+    throw new Error(
+      `connection ${String(waiterPid)} never blocked on ${String(blockerPid)}`,
+    );
   }
 
   return {
@@ -147,6 +185,8 @@ export function raceDatabase(): RaceDatabase {
     get t2() {
       return ready(t2);
     },
+    connect,
+    waitUntilBlocked,
     async race(first, second, finish = "COMMIT") {
       const one = ready(t1);
       const two = ready(t2);
