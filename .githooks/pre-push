@@ -1,10 +1,10 @@
 #!/bin/sh
 # Scans commits that no remote has yet for secrets, and blocks the push on a
-# finding. Activate with: npm run hooks:install
+# finding. Activate with: pnpm hooks:install
 repo_root="$(git rev-parse --show-toplevel)" || exit 1
 gitleaks="${repo_root}/.tools/gitleaks"
 if [ ! -x "${gitleaks}" ]; then
-  echo "pre-push: gitleaks is not installed. Run: npm run gitleaks:install" >&2
+  echo "pre-push: gitleaks is not installed. Run: pnpm gitleaks:install" >&2
   exit 1
 fi
 # Two passes: the default rules, then the project's own rules, which must not

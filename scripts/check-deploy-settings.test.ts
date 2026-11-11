@@ -15,7 +15,7 @@ import { isolatedGitEnv } from "../test/support/git-env.ts";
 const REPO_ROOT = fileURLToPath(new URL("..", import.meta.url));
 const SCRIPT = join(REPO_ROOT, "scripts/check-deploy-settings.sh");
 
-// An npm script passes its settings down as these, and they outrank .npmrc.
+// A package script passes its settings down as these, and they outrank .npmrc.
 function cleanEnv(): NodeJS.ProcessEnv {
   return Object.fromEntries(
     Object.entries(isolatedGitEnv()).filter(
@@ -23,6 +23,18 @@ function cleanEnv(): NodeJS.ProcessEnv {
     ),
   );
 }
+
+/** The repository's own pin, so Corepack runs the same pnpm here as in CI. */
+const GOOD_PACKAGE = {
+  name: "example",
+  private: true,
+  packageManager: (
+    JSON.parse(readFileSync(join(REPO_ROOT, "package.json"), "utf8")) as {
+      packageManager: string;
+    }
+  ).packageManager,
+  pnpm: { onlyBuiltDependencies: [] },
+};
 
 const GOOD_VERCEL = {
   git: { deploymentEnabled: { "**": false, main: true, staging: true } },
@@ -50,8 +62,8 @@ describe("check-deploy-settings.sh", () => {
   beforeEach(() => {
     repo = mkdtempSync(join(tmpdir(), "check-deploy-settings-"));
     spawnSync("git", ["init", "-q"], { cwd: repo, env });
-    write("package.json", '{ "name": "example", "private": true }\n');
-    write("package-lock.json", "{}\n");
+    write("package.json", `${JSON.stringify(GOOD_PACKAGE)}\n`);
+    write("pnpm-lock.yaml", "lockfileVersion: '9.0'\n");
     write(".npmrc", "ignore-scripts=true\n");
     write("vercel.json", JSON.stringify(GOOD_VERCEL));
   });
@@ -114,11 +126,30 @@ describe("check-deploy-settings.sh", () => {
     expect(run().status).toBe(1);
   });
 
-  it("asks npm as well as reading the file", () => {
+  it("asks pnpm as well as reading the file", () => {
     const result = run({ npm_config_ignore_scripts: "false" });
 
     expect(result.status).toBe(1);
-    expect(result.stderr).toContain("npm config get ignore-scripts");
+    expect(result.stderr).toContain("pnpm config get ignore-scripts");
+  });
+
+  it.each([
+    ["no pin", { ...GOOD_PACKAGE, packageManager: undefined }],
+    ["a range", { ...GOOD_PACKAGE, packageManager: "pnpm@10" }],
+    ["no hash", { ...GOOD_PACKAGE, packageManager: "pnpm@10.34.9" }],
+    ["npm", { ...GOOD_PACKAGE, packageManager: "npm@11.6.2" }],
+    [
+      "a dependency allowed to build",
+      { ...GOOD_PACKAGE, pnpm: { onlyBuiltDependencies: ["esbuild"] } },
+    ],
+    ["no build list", { ...GOOD_PACKAGE, pnpm: undefined }],
+  ])("refuses package.json with %s", (_label, content) => {
+    write("package.json", JSON.stringify(content));
+
+    const result = run();
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("must pin pnpm");
   });
 
   it.each([
@@ -127,7 +158,8 @@ describe("check-deploy-settings.sh", () => {
     "api/.npmrc",
     "npm-shrinkwrap.json",
     "yarn.lock",
-    "pnpm-lock.yaml",
+    "package-lock.json",
+    "api/pnpm-lock.yaml",
     "pnpm-workspace.yaml",
     "bun.lock",
     "bun.lockb",
@@ -176,7 +208,7 @@ describe("check-deploy-settings.sh", () => {
     (name) => {
       write(
         "vercel.json",
-        JSON.stringify({ ...GOOD_VERCEL, [name]: "npm run anything" }),
+        JSON.stringify({ ...GOOD_VERCEL, [name]: "pnpm run anything" }),
       );
 
       const result = run();

@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
-// Where each package comes from is checked by lockfile-lint, in `npm run lint:lockfile`.
+// Where each package comes from is checked by scripts/check-lockfile.ts, in `pnpm lint:lockfile`.
 
 const EXACT_VERSION = /^[0-9]+\.[0-9]+\.[0-9]+$/;
 
