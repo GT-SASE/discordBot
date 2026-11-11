@@ -240,7 +240,7 @@ Go to Settings > Environment Variables. Add each one below with **Production** a
 
 **Expect:** after saving, a Secret's value can no longer be read in the dashboard.
 
-`ENABLE_EXPERIMENTAL_COREPACK=1` makes Vercel install with exactly the pnpm that `packageManager` in `package.json` pins, from `pnpm-lock.yaml`. Install scripts stay off, because `.npmrc` holds only `ignore-scripts=true`, which pnpm reads. `bash scripts/check-deploy-settings.sh` checks the repo's side of this.
+`ENABLE_EXPERIMENTAL_COREPACK=1` makes Vercel install with exactly the pnpm that `packageManager` in `package.json` pins, from `pnpm-lock.yaml`. Install scripts stay off, because `.npmrc` sets `ignore-scripts=true`, which pnpm reads. It also sets `node-linker=hoisted`, since the functions' file tracing misses packages in pnpm's default symlinked layout. `bash scripts/check-deploy-settings.sh` checks the repo's side of this.
 
 Never put the owner's connection string here. The bot refuses any role but `bot_app` at startup, and the owner's would bypass every grant.
 

@@ -36,6 +36,8 @@ const GOOD_PACKAGE = {
   pnpm: { onlyBuiltDependencies: [] },
 };
 
+const GOOD_NPMRC = "ignore-scripts=true\nnode-linker=hoisted\n";
+
 const GOOD_VERCEL = {
   git: { deploymentEnabled: { "**": false, main: true, staging: true } },
 };
@@ -64,7 +66,7 @@ describe("check-deploy-settings.sh", () => {
     spawnSync("git", ["init", "-q"], { cwd: repo, env });
     write("package.json", `${JSON.stringify(GOOD_PACKAGE)}\n`);
     write("pnpm-lock.yaml", "lockfileVersion: '9.0'\n");
-    write(".npmrc", "ignore-scripts=true\n");
+    write(".npmrc", GOOD_NPMRC);
     write("vercel.json", JSON.stringify(GOOD_VERCEL));
   });
 
@@ -103,13 +105,20 @@ describe("check-deploy-settings.sh", () => {
   it.each([
     [
       "a later line that turns scripts back on",
-      "ignore-scripts=true\nignore-scripts=false\n",
+      `${GOOD_NPMRC}ignore-scripts=false\n`,
+    ],
+    ["another registry", `${GOOD_NPMRC}registry=https://example.test/\n`],
+    ["scripts on", "ignore-scripts=false\nnode-linker=hoisted\n"],
+    ["no node-linker", "ignore-scripts=true\n"],
+    ["no ignore-scripts", "node-linker=hoisted\n"],
+    [
+      "pnpm's default node-linker",
+      "ignore-scripts=true\nnode-linker=isolated\n",
     ],
     [
-      "another registry",
-      "ignore-scripts=true\nregistry=https://example.test/\n",
+      "a later line that puts the symlinked layout back",
+      `${GOOD_NPMRC}node-linker=isolated\n`,
     ],
-    ["scripts on", "ignore-scripts=false\n"],
     ["an empty file", ""],
   ])("refuses .npmrc with %s", (_label, content) => {
     write(".npmrc", content);
@@ -131,6 +140,13 @@ describe("check-deploy-settings.sh", () => {
 
     expect(result.status).toBe(1);
     expect(result.stderr).toContain("pnpm config get ignore-scripts");
+  });
+
+  it("asks pnpm for the node_modules layout", () => {
+    const result = run({ npm_config_node_linker: "isolated" });
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("pnpm config get node-linker");
   });
 
   it.each([

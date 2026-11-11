@@ -2,6 +2,11 @@
 # Fails if a setting that decides what a Vercel deployment installs or publishes has
 # changed. The deploy check runs this before it builds anything.
 #
+# .npmrc also sets node-linker=hoisted, so pnpm lays node_modules out flat, as npm
+# does. Vercel's file tracing copies a function's packages from there, and with pnpm's
+# default layout of symlinks into node_modules/.pnpm it leaves out the links, so the
+# deployed function cannot find a package such as @vercel/functions.
+#
 # Vercel's function build ignores installCommand, so .npmrc is what keeps package
 # install scripts away from the project's environment variables. pnpm reads .npmrc as
 # npm does, uses the last value in it, and reads other settings there too, such as the
@@ -34,18 +39,24 @@ fail() {
   status=1
 }
 
-if [ ! -f .npmrc ] || [ "$(cat .npmrc)" != "ignore-scripts=true" ]; then
-  fail ".npmrc must hold only the line ignore-scripts=true"
+expected_npmrc="$(printf '%s\n' ignore-scripts=true node-linker=hoisted)"
+if [ ! -f .npmrc ] || [ "$(cat .npmrc)" != "${expected_npmrc}" ]; then
+  fail ".npmrc must hold only the lines ignore-scripts=true and node-linker=hoisted"
 fi
 
 # The pinned pnpm, through Corepack, where pnpm itself is not installed.
-if command -v pnpm > /dev/null; then
-  pnpm_answer="$(pnpm config get ignore-scripts 2> /dev/null || true)"
-else
-  pnpm_answer="$(COREPACK_ENABLE_DOWNLOAD_PROMPT=0 corepack pnpm config get ignore-scripts 2> /dev/null || true)"
-fi
-if [ "${pnpm_answer}" != "true" ]; then
+pnpm_config() {
+  if command -v pnpm > /dev/null; then
+    pnpm config get "$1" 2> /dev/null || true
+  else
+    COREPACK_ENABLE_DOWNLOAD_PROMPT=0 corepack pnpm config get "$1" 2> /dev/null || true
+  fi
+}
+if [ "$(pnpm_config ignore-scripts)" != "true" ]; then
   fail "pnpm config get ignore-scripts must print true"
+fi
+if [ "$(pnpm_config node-linker)" != "hoisted" ]; then
+  fail "pnpm config get node-linker must print hoisted"
 fi
 
 if ! node --input-type=module --eval '

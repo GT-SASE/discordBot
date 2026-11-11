@@ -202,7 +202,7 @@ pnpm gitleaks:install
 pnpm hooks:install
 ```
 
-The committed `.npmrc` holds only `ignore-scripts=true`, which pnpm reads, so package install scripts stay off in every install, including Vercel's. pnpm 10 also runs no dependency's build script unless `pnpm.onlyBuiltDependencies` in `package.json` lists it, and that list is empty. `hooks:install` turns on a pre-push hook that runs gitleaks over the commits no remote has yet and blocks the push on a finding. [SECURITY.md](SECURITY.md) lists its limits.
+The committed `.npmrc` holds only `ignore-scripts=true`, which pnpm reads, so package install scripts stay off in every install, including Vercel's, and `node-linker=hoisted`, which gives a flat `node_modules` that Vercel's function tracing copies whole. pnpm 10 also runs no dependency's build script unless `pnpm.onlyBuiltDependencies` in `package.json` lists it, and that list is empty. `hooks:install` turns on a pre-push hook that runs gitleaks over the commits no remote has yet and blocks the push on a finding. [SECURITY.md](SECURITY.md) lists its limits.
 
 There is no local bot. Discord needs a public HTTPS URL, so tests stand in for it, and real runs happen on the test deployment. `.env.example` lists every setting. Copy it to `.env` only when you need to register commands.
 
