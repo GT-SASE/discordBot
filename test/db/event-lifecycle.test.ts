@@ -225,7 +225,9 @@ describe("the event picker", () => {
 
       expect(world.discord.requests).toEqual([]);
       const made = world.dbRequests().slice(before);
-      expect(made.filter((request) => !request.startsWith("GET "))).toEqual([]);
+      expect(
+        made.filter((request) => !/^(GET |SQL select )/.test(request)),
+      ).toEqual([]);
       // The config read, and one search.
       expect(made).toHaveLength(2);
     });
@@ -240,7 +242,7 @@ describe("the event picker", () => {
         world
           .dbRequests()
           .slice(before)
-          .filter((request) => request.includes("/events")),
+          .filter((request) => /\/events|"events"/.test(request)),
       ).toEqual([]);
     });
 
@@ -372,7 +374,7 @@ describe("the event picker", () => {
         world
           .dbRequests()
           .slice(before)
-          .filter((request) => request.includes("/events")),
+          .filter((request) => /\/events|"events"/.test(request)),
       ).toEqual([]);
     });
   });
@@ -421,7 +423,7 @@ describe("the event picker", () => {
 
   it("reports a database failure as no choices, with no detail", async () => {
     await seed();
-    world.failDb(/GET .*\/events/);
+    world.failDb(/^SQL select .* from "events"/);
 
     expect(await choices("status", "")).toEqual([]);
     expect(JSON.stringify(world.errors.mock.calls)).not.toContain("canary");
@@ -467,7 +469,7 @@ describe.each(["status", "close", "delete"])(
           .slice(before)
           .filter(
             (request) =>
-              !request.startsWith("GET ") &&
+              !/^(GET |SQL select )/.test(request) &&
               !request.includes("/rpc/claim_interaction"),
           ),
       ).toEqual([]);
@@ -489,7 +491,7 @@ describe.each(["status", "close", "delete"])(
         world
           .dbRequests()
           .slice(before)
-          .filter((request) => request.includes("/events")),
+          .filter((request) => /\/events|"events"/.test(request)),
       ).toEqual([]);
     });
 
@@ -506,7 +508,7 @@ describe.each(["status", "close", "delete"])(
         world
           .dbRequests()
           .slice(before)
-          .filter((request) => request.includes("/events")),
+          .filter((request) => /\/events|"events"/.test(request)),
       ).toEqual([]);
     });
 
@@ -521,7 +523,7 @@ describe.each(["status", "close", "delete"])(
 
     it("acknowledges an officer without reading the event first", async () => {
       const event = await seed();
-      world.failDb(/GET .*\/events/);
+      world.failDb(/^SQL select .* from "events"/);
 
       const ran = await world.send(
         eventCommand(sub, eventOption(event.id), officerFields),
@@ -546,7 +548,7 @@ describe.each(["status", "close", "delete"])(
         world
           .dbRequests()
           .slice(before)
-          .filter((request) => request.includes("/events")),
+          .filter((request) => /\/events|"events"/.test(request)),
       ).toEqual([]);
     });
 
@@ -752,7 +754,7 @@ describe("/event status", () => {
 
   it("reports a database failure with no detail", async () => {
     const event = await seed();
-    world.failDb(/GET .*\/tasks/);
+    world.failDb(/^SQL select .* from "tasks"/);
 
     await status(eventOption(event.id));
 
@@ -1356,7 +1358,7 @@ describe("/event delete", () => {
 
     it("acknowledges the click without reading the event first", async () => {
       const event = await seed();
-      world.failDb(/GET .*\/events/);
+      world.failDb(/^SQL select .* from "events"/);
 
       const ran = await world.send(await confirmClick(event.id));
 

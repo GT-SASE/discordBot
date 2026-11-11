@@ -11,6 +11,11 @@ import {
   it,
   vi,
 } from "vitest";
+import {
+  pgliteSql,
+  serverError,
+  type Intercept,
+} from "../support/sql-client.ts";
 import { createDbClient, type DbClient } from "../../src/db/client.ts";
 import { createDiscordClient } from "../../src/discord/client.ts";
 import { runDailyJobs } from "../../src/reminders/daily.ts";
@@ -32,6 +37,8 @@ const TOKEN = ["unit", "test", "token"].join("-");
 let database: PGlite;
 let db: DbClient;
 let dbGate: (url: string) => Response | undefined;
+/** Lets a test answer or fail one statement built with Drizzle. */
+let sqlGate: Intercept;
 let requests: { method: string; path: string }[];
 let answers: Map<string, () => Response>;
 let logLines: string[];
@@ -102,6 +109,7 @@ beforeAll(async () => {
       const answer = dbGate(input as string);
       return answer === undefined ? shim(input, init) : Promise.resolve(answer);
     },
+    sql: pgliteSql(database, (call) => sqlGate(call)),
   });
 });
 
@@ -109,6 +117,7 @@ afterAll(() => database.close());
 
 beforeEach(async () => {
   dbGate = () => undefined;
+  sqlGate = () => undefined;
   requests = [];
   answers = new Map();
   logLines = [];
@@ -265,12 +274,9 @@ describe("channel checks", () => {
 
   it("stores no text from a database failure", async () => {
     const canary = "canary-row-text";
-    dbGate = (url) =>
-      url.includes("/managed_channels?")
-        ? Response.json(
-            { code: "23514", message: canary, details: canary },
-            { status: 400 },
-          )
+    sqlGate = ({ sql }) =>
+      /^select .* from "managed_channels"/.test(sql)
+        ? serverError("23514", canary)
         : undefined;
     const result = await health([]);
     expect(result).toMatchObject({
@@ -321,10 +327,8 @@ describe("freshness", () => {
   });
 
   it("does not report a job as fine when it cannot read job_runs", async () => {
-    dbGate = (url) =>
-      url.includes("/job_runs?")
-        ? Response.json({ code: "XX000" }, { status: 500 })
-        : undefined;
+    sqlGate = ({ sql }) =>
+      /^select .* from "job_runs"/.test(sql) ? serverError("XX000") : undefined;
     expect(await jobFreshness(db, "reminders", new Date())).toEqual({
       state: "unknown",
     });

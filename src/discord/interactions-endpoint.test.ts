@@ -11,9 +11,18 @@ import {
 } from "discord-api-types/v10";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { POST } from "../../api/interactions.ts";
+import { testDatabaseUrl } from "../../test/support/sql-client.ts";
 
 const waitUntil = vi.hoisted(() => vi.fn());
 vi.mock("@vercel/functions", () => ({ waitUntil }));
+// The database the endpoint builds from its settings reads nothing.
+vi.mock("../db/pool.ts", async () => {
+  const { recordingSql } = await import("../../test/support/sql-client.ts");
+  return {
+    poolDatabase: () => recordingSql().sql,
+    closePool: () => Promise.resolve(),
+  };
+});
 
 const { publicKey, privateKey } = generateKeyPairSync("ed25519");
 const publicKeyHex = publicKey
@@ -717,6 +726,7 @@ describe("work done after the reply", () => {
     });
     vi.stubGlobal("fetch", send);
     vi.stubEnv("SUPABASE_URL", "https://project.example.test");
+    vi.stubEnv("DATABASE_URL", testDatabaseUrl());
     vi.stubEnv(
       "SUPABASE_SECRET_KEY",
       ["sb", "secret", "x".repeat(24)].join("_"),

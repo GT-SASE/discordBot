@@ -15,6 +15,13 @@ import {
   it,
   vi,
 } from "vitest";
+import {
+  pgliteSql,
+  readsFrom,
+  serverError,
+  sqlTarget,
+  type Intercept,
+} from "../support/sql-client.ts";
 import { createDbClient, type DbClient } from "../../src/db/client.ts";
 import { getLatestSucceededJobRun } from "../../src/db/job-runs.ts";
 import { createDiscordClient } from "../../src/discord/client.ts";
@@ -77,6 +84,8 @@ let dbGate: (
   url: string,
   init: RequestInit | undefined,
 ) => Response | undefined;
+/** Lets a test answer, fail or watch one statement built with Drizzle. */
+let sqlGate: Intercept;
 /** Lets a test refuse or react to one Discord request. */
 let discordGate: (
   method: string,
@@ -289,6 +298,7 @@ beforeAll(async () => {
         (answer) => answer ?? shim(input, init),
       );
     },
+    sql: pgliteSql(database, (call) => sqlGate(call)),
   });
 });
 
@@ -296,6 +306,7 @@ afterAll(() => database.close());
 
 beforeEach(async () => {
   dbGate = () => undefined;
+  sqlGate = () => undefined;
   discordGate = () => undefined;
   requests = [];
   sent = [];
@@ -777,9 +788,13 @@ describe("volume", () => {
 
   it("alerts in job_runs when the read was truncated", async () => {
     const guild = await guildInZone();
-    const page = Array.from({ length: 500 }, () => ({ id: "not-a-uuid" }));
-    dbGate = (url) =>
-      url.includes("/tasks?") ? Response.json(page) : undefined;
+    // Rows come back as the values of the selected columns, in order: the ID first.
+    // Every other value is left out, and a row whose ID is no UUID fails its checks.
+    const page = Array.from({ length: 500 }, () => [
+      "not-a-uuid",
+      ...Array.from({ length: 15 }, () => null),
+    ]);
+    sqlGate = (call) => (readsFrom(call, "tasks") ? { rows: page } : undefined);
     const result = await run({ guilds: [guild] });
     expect(result.status).toBe("succeeded");
     expect((await jobRow()).results).toMatchObject({
@@ -1235,20 +1250,13 @@ describe("a thread whose parent is not managed", () => {
     const { eventId } = await eventWithThread(guild);
     const taskId = await task(guild, eventId, dateOffset(3));
     // The forum is removed after the claim, just before the send's check reads it.
-    const forumRow = {
-      guild_id: guild.guildId,
-      channel_id: guild.channelId,
-      status: "removed",
-    };
-    dbGate = (url) => {
-      const { pathname, search } = new URL(url);
-      if (pathname.endsWith("/events") && search.includes("managed_channels")) {
-        return Response.json([{ managed_channels: forumRow }]);
-      }
-      return pathname.endsWith("/managed_channels")
-        ? Response.json([forumRow])
+    // Both checks select the forum's guild_id, channel_id and status, in that order.
+    const forumRow = [guild.guildId, guild.channelId, "removed"];
+    sqlGate = (call) =>
+      (readsFrom(call, "events") && call.sql.includes('"managed_channels"')) ||
+      readsFrom(call, "managed_channels")
+        ? { rows: [forumRow] }
         : undefined;
-    };
 
     const result = await run({ guilds: [guild] });
 
@@ -2552,14 +2560,14 @@ describe("the worst case for time", () => {
       const start = Date.now();
       let elapsed = 0;
       let finishedAt = 0;
-      dbGate = (url) => {
-        if (url.includes("/managed_channels")) {
-          return undefined;
+      sqlGate = (call) => {
+        if (readsFrom(call, "reminder_log")) {
+          elapsed = Math.max(elapsed, startsAt);
         }
-        elapsed = Math.max(
-          elapsed + (url.includes("rpc/") ? DATABASE_CALL_MS / 8 : 0),
-          url.includes("/reminder_log?") ? startsAt : 0,
-        );
+        return undefined;
+      };
+      dbGate = (url) => {
+        elapsed += url.includes("rpc/") ? DATABASE_CALL_MS / 8 : 0;
         if (url.includes("rpc/finish_job_run")) {
           elapsed += DATABASE_CALL_MS;
           finishedAt = elapsed;
@@ -2767,13 +2775,8 @@ describe("what a failure leaves behind", () => {
     const guild = await guildInZone();
     const { eventId } = await eventWithThread(guild);
     await task(guild, eventId, dateOffset(3));
-    dbGate = (url) =>
-      url.includes("/tasks?")
-        ? Response.json(
-            { code: "23514", message: CANARY, details: CANARY, hint: CANARY },
-            { status: 400 },
-          )
-        : undefined;
+    sqlGate = (call) =>
+      readsFrom(call, "tasks") ? serverError("23514", CANARY) : undefined;
     const warn = vi.spyOn(console, "warn");
     const error = vi.spyOn(console, "error");
 
@@ -2873,6 +2876,12 @@ describe("round trips", () => {
       database.push(`${init?.method ?? "GET"} ${new URL(url).pathname}`);
       return undefined;
     };
+    sqlGate = (call) => {
+      database.push(
+        readsFrom(call, "events") ? "read events" : sqlTarget(call.sql),
+      );
+      return undefined;
+    };
 
     const result = await run({ guilds: [guild] });
 
@@ -2885,7 +2894,7 @@ describe("round trips", () => {
     expect(sent).toHaveLength(4);
     expect(count("POST /rest/v1/rpc/claim_reminders")).toBe(4);
     expect(count("POST /rest/v1/rpc/mark_reminders_sent")).toBe(4);
-    expect(database.filter((line) => line.endsWith("/events"))).toHaveLength(
+    expect(database.filter((line) => line === "read events")).toHaveLength(
       // The four checks, and the event reminders' own read.
       5,
     );

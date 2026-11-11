@@ -140,12 +140,9 @@ export function isSearchTerm(value: unknown): value is string {
 }
 
 /**
- * A pattern for `.ilike()` that matches the term literally anywhere in the column.
- * Every `%`, `_`, `*` and backslash in the term is escaped.
- *
- * PostgREST turns every `*` in a pattern into `%` with no way to escape it, so `\*`
- * reaches Postgres as `\%`, a literal percent sign. A term with `*` therefore cannot
- * find a literal asterisk, but it can never widen the match.
+ * A pattern for `ilike()` that matches the term literally anywhere in the column.
+ * Every `%`, `_` and backslash in the term is escaped, backslash being the default
+ * escape character of LIKE. The pattern is sent as a parameter like any other value.
  */
 export function searchPattern(term: string): string {
   let capped = "";
@@ -158,16 +155,5 @@ export function searchPattern(term: string): string {
     capped += character;
     codePoints += 1;
   }
-  return `%${capped.replace(/[\\%_*]/g, "\\$&")}%`;
-}
-
-/**
- * The only way to give `.or()` a value, which lint enforces: rows after a position
- * in `due_date, id` order. Both parts are checked, so no text can change the filter.
- */
-export function keysetAfter(dueDate: string, id: string): string {
-  if (!isDbDate(dueDate) || !isUuid(id)) {
-    throw new RangeError("Page position failed validation");
-  }
-  return `due_date.gt.${dueDate},and(due_date.eq.${dueDate},id.gt.${id})`;
+  return `%${capped.replace(/[\\%_]/g, "\\$&")}%`;
 }

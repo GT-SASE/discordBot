@@ -46,9 +46,6 @@ const DATE = "2030-01-10" as DateOnly;
 const NOW = new Date("2030-01-01T12:00:00.000Z");
 const CREATED = "2030-01-01T11:00:00.123456+00:00";
 
-const WORKFLOW_SELECT =
-  "id,pickup_time,event_steps(event_id,kind,status,completed_at,completed_by,handoff_claimed_at,handoff_sent_at),event_step_assignees(id,event_id,kind,user_id,assigned_by,created_at)";
-
 const ROLES: SetupRoles = {
   officerRoleId: testSnowflake(),
   adminRoleId: testSnowflake(),
@@ -104,11 +101,17 @@ const rpc = (name: string, body: unknown) => ({
   target: `/rest/v1/rpc/${name}?`,
   body,
 });
-const read = (target: string) => ({
-  method: "GET",
-  target: `/rest/v1/${target}`,
-  body: undefined,
-});
+/**
+ * Rows as a read built with Drizzle returns them: each one's values in the order
+ * selected, with the fields of a joined event in its place.
+ */
+function values(...rows: Record<string, unknown>[]): unknown[][] {
+  return rows.map((row) =>
+    Object.entries(row).flatMap(([key, value]): unknown[] =>
+      key === "events" ? Object.values(value as object) : [value],
+    ),
+  );
+}
 
 const assignment = {
   guildId: GUILD,
@@ -130,23 +133,6 @@ describe("exact requests", () => {
     MockResponse,
     { method: string; target: string; body: unknown },
   ][] = [
-    [
-      "listEventWorkflows",
-      (db) =>
-        listEventWorkflows(db, { guildId: GUILD, eventIds: [ID, OTHER_ID] }),
-      { body: [workflowRow()] },
-      read(
-        `events?select=${WORKFLOW_SELECT}&guild_id=eq.${GUILD}&id=in.(${ID},${OTHER_ID})&deleted_at=is.null&event_step_assignees.removed_at=is.null&order=id.asc&limit=100`,
-      ),
-    ],
-    [
-      "getEventWorkflow",
-      (db) => getEventWorkflow(db, { guildId: GUILD, eventId: ID }),
-      { body: [workflowRow()] },
-      read(
-        `events?select=${WORKFLOW_SELECT}&guild_id=eq.${GUILD}&id=in.(${ID})&deleted_at=is.null&event_step_assignees.removed_at=is.null&order=id.asc&limit=100`,
-      ),
-    ],
     [
       "assignEventStep",
       (db) => assignEventStep(db, assignment),
@@ -236,31 +222,6 @@ describe("exact requests", () => {
       }),
     ],
     [
-      "listOpenStepsForUser",
-      (db) =>
-        listOpenStepsForUser(db, { guildId: GUILD, userId: USER, today: DATE }),
-      {},
-      read(
-        `event_step_assignees?select=id,kind,events!inner(id,name,event_date,pickup_time,event_steps(kind,status))&guild_id=eq.${GUILD}&user_id=eq.${USER}&removed_at=is.null&events.status=eq.active&events.deleted_at=is.null&order=created_at.asc,id.asc&limit=101`,
-      ),
-    ],
-    [
-      "listEventReminderCandidates",
-      (db) => listEventReminderCandidates(db, { fromDate: DATE }),
-      {},
-      read(
-        `events?select=id,guild_id,name,event_date,thread_id,thread_status,created_by,thread_refusals,pickup_time,managed_channels!inner(guild_config!inner(timezone,officer_role_id)),event_steps(kind,status),event_step_assignees(id,kind,user_id,created_at),event_reminder_log(kind,reminder_date,state,claimed_at)&status=eq.active&deleted_at=is.null&event_date=gte.${DATE}&managed_channels.status=eq.active&managed_channels.guild_config.reminders_enabled=is.true&event_step_assignees.removed_at=is.null&event_reminder_log.reminder_date=gte.${DATE}&order=event_date.asc,id.asc&limit=501`,
-      ),
-    ],
-    [
-      "listStaleEventReminderClaims",
-      (db) => listStaleEventReminderClaims(db, { claimedBefore: NOW }),
-      {},
-      read(
-        `event_reminder_log?select=event_id,kind,reminder_date,claim_token,attempts,claimed_at&state=eq.claimed&claimed_at=lt.${NOW.toISOString()}&order=claimed_at.asc,event_id.asc,kind.asc,reminder_date.asc&limit=501`,
-      ),
-    ],
-    [
       "claimEventReminder",
       (db) => claimEventReminder(db, reminderKey),
       { body: TOKEN },
@@ -327,20 +288,6 @@ describe("exact requests", () => {
         p_fingerprint: setupDraftFingerprint(ROLES),
       }),
     ],
-    [
-      "getSetupDraft",
-      (db) =>
-        getSetupDraft(db, {
-          guildId: GUILD,
-          actorId: ACTOR,
-          fingerprint: setupDraftFingerprint(ROLES),
-          now: NOW,
-        }),
-      {},
-      read(
-        `setup_drafts?select=guild_id,actor_id,officer_role_id,admin_role_id,eboard_role_id,events_committee_role_id,treasury_role_id,marketing_role_id,fingerprint,created_at&guild_id=eq.${GUILD}&actor_id=eq.${ACTOR}&fingerprint=eq.${setupDraftFingerprint(ROLES)}&created_at=gt.2030-01-01T11:00:00.000Z&limit=1`,
-      ),
-    ],
   ];
 
   it.each(cases)("%s", async (_name, call, response, expected) => {
@@ -353,6 +300,63 @@ describe("exact requests", () => {
       target: requests[0]?.target,
       body: requests[0]?.body,
     }).toEqual(expected);
+  });
+});
+
+describe("reads built with Drizzle", () => {
+  it.each([
+    [
+      "listEventWorkflows",
+      (db: ReturnType<typeof mockPostgrest>["db"]) =>
+        listEventWorkflows(db, { guildId: GUILD, eventIds: [ID, OTHER_ID] }),
+    ],
+    [
+      "listOpenStepsForUser",
+      (db: ReturnType<typeof mockPostgrest>["db"]) =>
+        listOpenStepsForUser(db, { guildId: GUILD, userId: USER, today: DATE }),
+    ],
+    [
+      "listEventReminderCandidates",
+      (db: ReturnType<typeof mockPostgrest>["db"]) =>
+        listEventReminderCandidates(db, { fromDate: DATE }),
+    ],
+    [
+      "listStaleEventReminderClaims",
+      (db: ReturnType<typeof mockPostgrest>["db"]) =>
+        listStaleEventReminderClaims(db, { claimedBefore: NOW }),
+    ],
+    [
+      "getSetupDraft",
+      (db: ReturnType<typeof mockPostgrest>["db"]) =>
+        getSetupDraft(db, {
+          guildId: GUILD,
+          actorId: ACTOR,
+          fingerprint: setupDraftFingerprint(ROLES),
+          now: NOW,
+        }),
+    ],
+  ])(
+    "%s sends one select, with every value as a parameter",
+    async (_name, call) => {
+      const { db, requests } = mockPostgrest();
+      await call(db);
+      expect(requests).toHaveLength(1);
+      const [request] = requests;
+      expect(request?.target).toMatch(/^select /);
+      expect(request?.target).not.toMatch(/select \*|\.\*/);
+      for (const value of [GUILD, ACTOR, USER, ID, OTHER_ID, DATE]) {
+        expect(request?.target).not.toContain(value);
+      }
+    },
+  );
+
+  it("reads only live assignments, of live events in this guild", async () => {
+    const { db, requests } = mockPostgrest();
+    await listEventWorkflows(db, { guildId: GUILD, eventIds: [ID] });
+    const sql = requests[0]?.target ?? "";
+    expect(sql).toContain('"event_step_assignees"."removed_at" IS NULL');
+    expect(sql).toContain('"events"."deleted_at" is null');
+    expect(requests[0]?.body).toEqual([GUILD, ID, 100]);
   });
 });
 
@@ -600,7 +604,7 @@ describe("refusals before any query", () => {
 
 describe("reading answers", () => {
   it("orders a workflow's steps by kind and its people oldest first, as HH:MM", async () => {
-    const { db } = mockPostgrest(() => ({ body: [workflowRow()] }));
+    const { db } = mockPostgrest(() => ({ body: values(workflowRow()) }));
     const result = await getEventWorkflow(db, { guildId: GUILD, eventId: ID });
     expect(result.ok).toBe(true);
     const workflow = result.ok ? result.value : null;
@@ -627,7 +631,7 @@ describe("reading answers", () => {
   it("treats a workflow with a step missing as a bad row", async () => {
     const row = workflowRow();
     row.event_steps.pop();
-    const { db } = mockPostgrest(() => ({ body: [row] }));
+    const { db } = mockPostgrest(() => ({ body: values(row) }));
     expect(await getEventWorkflow(db, { guildId: GUILD, eventId: ID })).toEqual(
       { ok: false, error: { category: "bad_row", code: null } },
     );
@@ -703,13 +707,13 @@ describe("reading answers", () => {
     const sooner = event(OTHER_ID, "2030-01-20", "done");
     const past = event(OTHER_ID, "2030-01-01", "open");
     const { db } = mockPostgrest(() => ({
-      body: [
+      body: values(
         { id: ID, kind: "budget_sheet", events: later },
         { id: TOKEN, kind: "budget_sheet", events: sooner },
         { id: OTHER_ID, kind: "food_pickup", events: sooner },
         { id: CREATED_ID, kind: "food_pickup", events: past },
         { id: SECOND_ID, kind: "engage_post", events: sooner },
-      ],
+      ),
     }));
     const result = await listOpenStepsForUser(db, {
       guildId: GUILD,
@@ -730,48 +734,46 @@ describe("reading answers", () => {
   it("reads a reminder candidate with its guild's zone and Events Directors role", async () => {
     const role = testSnowflake();
     const { db } = mockPostgrest(() => ({
-      body: [
-        {
-          id: ID,
-          guild_id: GUILD,
-          name: "Social",
-          event_date: DATE,
-          thread_id: USER,
-          thread_status: "active",
-          created_by: ACTOR,
-          thread_refusals: 0,
-          pickup_time: "09:05:00",
-          managed_channels: {
-            guild_config: {
-              timezone: "America/New_York",
-              officer_role_id: role,
-            },
+      body: values({
+        id: ID,
+        guild_id: GUILD,
+        name: "Social",
+        event_date: DATE,
+        thread_id: USER,
+        thread_status: "active",
+        created_by: ACTOR,
+        thread_refusals: 0,
+        pickup_time: "09:05:00",
+        managed_channels: {
+          guild_config: {
+            timezone: "America/New_York",
+            officer_role_id: role,
           },
-          event_steps: [{ kind: "budget_sheet", status: "open" }],
-          event_step_assignees: [
-            {
-              id: OTHER_ID,
-              kind: "budget_sheet",
-              user_id: USER,
-              created_at: "2030-01-02T00:00:00+00:00",
-            },
-            {
-              id: ID,
-              kind: "food_pickup",
-              user_id: ACTOR,
-              created_at: "2030-01-01T00:00:00+00:00",
-            },
-          ],
-          event_reminder_log: [
-            {
-              kind: "daily_steps",
-              reminder_date: DATE,
-              state: "sent",
-              claimed_at: CREATED,
-            },
-          ],
         },
-      ],
+        event_steps: [{ kind: "budget_sheet", status: "open" }],
+        event_step_assignees: [
+          {
+            id: OTHER_ID,
+            kind: "budget_sheet",
+            user_id: USER,
+            created_at: "2030-01-02T00:00:00+00:00",
+          },
+          {
+            id: ID,
+            kind: "food_pickup",
+            user_id: ACTOR,
+            created_at: "2030-01-01T00:00:00+00:00",
+          },
+        ],
+        event_reminder_log: [
+          {
+            kind: "daily_steps",
+            reminder_date: DATE,
+            state: "sent",
+            claimed_at: CREATED,
+          },
+        ],
+      }),
     }));
     const result = await listEventReminderCandidates(db, { fromDate: DATE });
     expect(result.ok && result.value.rows[0]).toMatchObject({
@@ -832,7 +834,7 @@ describe("setup drafts", () => {
   });
 
   it("reads a draft back, and gives its roles in the bindings' shape", async () => {
-    const { db } = mockPostgrest(() => ({ body: [draftRow()] }));
+    const { db } = mockPostgrest(() => ({ body: values(draftRow()) }));
     const result = await getSetupDraft(db, {
       guildId: GUILD,
       actorId: ACTOR,
@@ -846,7 +848,7 @@ describe("setup drafts", () => {
 
   it("ignores a stored draft whose fingerprint does not match its roles", async () => {
     const { db } = mockPostgrest(() => ({
-      body: [draftRow({ treasury_role_id: testSnowflake() })],
+      body: values(draftRow({ treasury_role_id: testSnowflake() })),
     }));
     expect(
       await getSetupDraft(db, {

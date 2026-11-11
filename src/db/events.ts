@@ -1,7 +1,10 @@
 import type { DateOnly } from "../lib/dates.ts";
 import { isSnowflake } from "../lib/snowflake.ts";
 import type { DbClient } from "./client.ts";
-import { rest } from "./internal.ts";
+import { and, asc, desc, eq, ilike, isNull } from "drizzle-orm";
+import { EVENT_CHOICE_COLUMNS, EVENT_COLUMNS } from "./columns.ts";
+import { rest, run } from "./internal.ts";
+import { events } from "./schema.ts";
 import { failure, refused, type DbResult } from "./errors.ts";
 import {
   booleanValue,
@@ -131,15 +134,19 @@ export async function getEvent(
     return refused();
   }
   return oneOrNone(
-    await rest(db)
-      .from("events")
-      .select(
-        "id,guild_id,channel_id,name,event_date,thread_id,overview_message_id,status,thread_status,created_by,deleted_at,created_at",
-      )
-      .eq("id", key.eventId)
-      .eq("guild_id", key.guildId)
-      .is("deleted_at", null)
-      .limit(1),
+    await run(db, (sql) =>
+      sql
+        .select(EVENT_COLUMNS)
+        .from(events)
+        .where(
+          and(
+            eq(events.id, key.eventId),
+            eq(events.guildId, key.guildId),
+            isNull(events.deletedAt),
+          ),
+        )
+        .limit(1),
+    ),
     parseEvent,
   );
 }
@@ -158,18 +165,22 @@ export async function listEventsNamed(
     return refused();
   }
   return rowList(
-    await rest(db)
-      .from("events")
-      .select(
-        "id,guild_id,channel_id,name,event_date,thread_id,overview_message_id,status,thread_status,created_by,deleted_at,created_at",
-      )
-      .eq("guild_id", guildId)
-      .eq("channel_id", channelId)
-      .eq("name", name)
-      .eq("event_date", eventDate)
-      .is("deleted_at", null)
-      .order("id")
-      .limit(MAX_CHOICES),
+    await run(db, (sql) =>
+      sql
+        .select(EVENT_COLUMNS)
+        .from(events)
+        .where(
+          and(
+            eq(events.guildId, guildId),
+            eq(events.channelId, channelId),
+            eq(events.name, name),
+            eq(events.eventDate, eventDate),
+            isNull(events.deletedAt),
+          ),
+        )
+        .orderBy(asc(events.id))
+        .limit(MAX_CHOICES),
+    ),
     parseEvent,
   );
 }
@@ -186,17 +197,14 @@ export async function listEvents(
     return refused();
   }
   return cappedList(
-    await rest(db)
-      .from("events")
-      .select(
-        "id,guild_id,channel_id,name,event_date,thread_id,overview_message_id,status,thread_status,created_by,deleted_at,created_at",
-      )
-      .eq("guild_id", guildId)
-      .is("deleted_at", null)
-      .order("status")
-      .order("event_date", { ascending: false })
-      .order("id")
-      .limit(MAX_EVENTS + 1),
+    await run(db, (sql) =>
+      sql
+        .select(EVENT_COLUMNS)
+        .from(events)
+        .where(and(eq(events.guildId, guildId), isNull(events.deletedAt)))
+        .orderBy(asc(events.status), desc(events.eventDate), asc(events.id))
+        .limit(MAX_EVENTS + 1),
+    ),
     parseEvent,
     MAX_EVENTS,
   );
@@ -215,16 +223,20 @@ export async function searchEvents(
     return refused();
   }
   return rowList(
-    await rest(db)
-      .from("events")
-      .select("id,name,event_date,status")
-      .eq("guild_id", guildId)
-      .is("deleted_at", null)
-      .ilike("name", searchPattern(term))
-      .order("status")
-      .order("event_date", { ascending: false })
-      .order("id")
-      .limit(MAX_CHOICES),
+    await run(db, (sql) =>
+      sql
+        .select(EVENT_CHOICE_COLUMNS)
+        .from(events)
+        .where(
+          and(
+            eq(events.guildId, guildId),
+            isNull(events.deletedAt),
+            ilike(events.name, searchPattern(term)),
+          ),
+        )
+        .orderBy(asc(events.status), desc(events.eventDate), asc(events.id))
+        .limit(MAX_CHOICES),
+    ),
     parseEventChoice,
   );
 }

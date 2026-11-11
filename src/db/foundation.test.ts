@@ -5,6 +5,11 @@ import {
   mockPostgrest,
   testSnowflake,
 } from "../../test/support/mock-postgrest.ts";
+import {
+  recordingSql,
+  testDatabaseUrl,
+} from "../../test/support/sql-client.ts";
+import { getGuildConfig } from "./guild-config.ts";
 import { ConfigError } from "../lib/config-error.ts";
 import type { DateOnly } from "../lib/dates.ts";
 import type { EventResource, TaskResource } from "../lib/permissions.ts";
@@ -26,7 +31,6 @@ import {
   isStoredText,
   isTimestampText,
   isUuid,
-  keysetAfter,
   searchPattern,
   snowflakeList,
   uuidList,
@@ -41,7 +45,11 @@ afterEach(() => {
 });
 
 describe("client", () => {
-  const settings = { url: TEST_ORIGIN, secretKey: TEST_SECRET_KEY };
+  const settings = {
+    url: TEST_ORIGIN,
+    secretKey: TEST_SECRET_KEY,
+    sql: recordingSql().sql,
+  };
 
   it("sends the key only in the apikey header, to the REST path", async () => {
     const { db, requests } = mockPostgrest();
@@ -81,6 +89,17 @@ describe("client", () => {
       ok: false,
       error: { category: "unavailable", code: null },
     });
+  });
+
+  it("abandons a query at its deadline and reports it as unavailable", async () => {
+    const { sql } = recordingSql(() => new Promise<never>(() => undefined));
+    const db = withDeadline(createDbClient({ ...settings, sql }), 10);
+    const started = Date.now();
+    expect(await getGuildConfig(db, { guildId: testSnowflake() })).toEqual({
+      ok: false,
+      error: { category: "unavailable", code: null },
+    });
+    expect(Date.now() - started).toBeLessThan(1000);
   });
 
   it("keeps interaction calls inside Discord's first reply window", () => {
@@ -147,6 +166,7 @@ describe("client", () => {
   it("reads settings on first use, not on import, and reuses one client", async () => {
     vi.stubEnv("SUPABASE_URL", "");
     vi.stubEnv("SUPABASE_SECRET_KEY", "");
+    vi.stubEnv("DATABASE_URL", "");
     const { getDb } = await import("./client.ts");
     expect(() => getDb()).toThrow("SUPABASE_URL");
 
@@ -154,6 +174,9 @@ describe("client", () => {
     expect(() => getDb()).toThrow("SUPABASE_SECRET_KEY");
 
     vi.stubEnv("SUPABASE_SECRET_KEY", TEST_SECRET_KEY);
+    expect(() => getDb()).toThrow("DATABASE_URL");
+
+    vi.stubEnv("DATABASE_URL", testDatabaseUrl());
     expect(getDb()).toBe(getDb());
   });
 });
@@ -228,6 +251,7 @@ describe("errors", () => {
     const db = createDbClient({
       url: TEST_ORIGIN,
       secretKey: TEST_SECRET_KEY,
+      sql: recordingSql().sql,
       fetch: () => Promise.reject(new TypeError(canary)),
     });
     const result = oneOrNone(
@@ -421,7 +445,7 @@ describe("input checks", () => {
     ["plain", "%plain%"],
     ["50%", "%50\\%%"],
     ["a_b", "%a\\_b%"],
-    ["a*b", "%a\\*b%"],
+    ["a*b", "%a*b%"],
     ["a\\b", "%a\\\\b%"],
     ['a,b).c"', '%a,b).c"%'],
     ["", "%%"],
@@ -454,14 +478,6 @@ describe("input checks", () => {
     null,
   ])("refuses the timestamp %j", (value) => {
     expect(isTimestampText(value)).toBe(false);
-  });
-
-  it("builds a page position only from a checked date and ID", () => {
-    expect(keysetAfter("2030-01-10", UUID)).toBe(
-      `due_date.gt.2030-01-10,and(due_date.eq.2030-01-10,id.gt.${UUID})`,
-    );
-    expect(() => keysetAfter("2030-01-10,x", UUID)).toThrow(RangeError);
-    expect(() => keysetAfter("2030-01-10", `${UUID})`)).toThrow(RangeError);
   });
 
   it("refuses an ID list holding a crafted value", () => {

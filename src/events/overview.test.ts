@@ -17,6 +17,7 @@ import {
   testSnowflake,
   type RecordedRequest,
 } from "../../test/support/mock-postgrest.ts";
+import { asSelected, sqlTarget } from "../../test/support/sql-client.ts";
 import { DiscordClientError, DiscordErrorCode } from "../discord/client.ts";
 import type { DiscordClient, DiscordFailure } from "../discord/client.ts";
 import { safe, safeTextValue } from "../discord/safe-text.ts";
@@ -332,15 +333,21 @@ describe("refreshOverview", () => {
 
   function context() {
     const mock = mockPostgrest((request) => {
-      const path = request.target.split("?")[0] ?? "";
-      if (dbFails !== undefined && request.target.includes(dbFails)) {
+      const target =
+        request.method === "SQL" ? sqlTarget(request.target) : request.target;
+      if (dbFails !== undefined && target.includes(dbFails)) {
         return { status: 500, body: { message: "canary row text" } };
       }
       if (request.method === "PATCH") {
         return { body: [{ ...eventRow(), ...(request.body as object) }] };
       }
-      if (path.endsWith("/events")) {
-        return { body: row === null ? [] : [row] };
+      if (target === "select events") {
+        return {
+          body: asSelected(
+            request.target,
+            row === null ? [] : [row as unknown as Record<string, unknown>],
+          ),
+        };
       }
       return { body: [] };
     });
@@ -578,7 +585,7 @@ describe("refreshOverview", () => {
     expect(edited).toEqual([]);
   });
 
-  it.each(["/events", "/tasks"])(
+  it.each(["events", "tasks"])(
     "does not reject or quote the row when %s fails",
     async (path) => {
       dbFails = path;

@@ -1,7 +1,7 @@
 /**
- * The exact requests sent to PostgREST, for ordinary and hostile inputs. Anything
- * sent here is what the database layer will parse, so a filter or column that changes
- * shape shows up as a failure.
+ * The exact requests sent by the database layer, for ordinary and hostile inputs. A
+ * write sent to PostgREST is checked as its whole request. A read built with Drizzle is
+ * checked for keeping every value out of the statement's text.
  */
 
 import { describe, expect, it } from "vitest";
@@ -153,11 +153,6 @@ describe("exact requests", () => {
     method: "POST",
     target: `/rest/v1/rpc/${name}?`,
     body,
-  });
-  const read = (target: string) => ({
-    method: "GET",
-    target: `/rest/v1/${target}`,
-    body: undefined,
   });
 
   const scopedTask = `id=eq.${ID}&guild_id=eq.${GUILD}`;
@@ -311,85 +306,6 @@ describe("exact requests", () => {
       },
     ],
     [
-      "getTask",
-      (db) => getTask(db, { guildId: GUILD, taskId: ID }),
-      { body: [taskRow()] },
-      read(
-        `tasks?select=${TASK_COLUMNS}&${scopedTask}&deleted_at=is.null&limit=1`,
-      ),
-    ],
-    [
-      "searchOpenTasksByIdPrefix",
-      (db) => searchOpenTasksByIdPrefix(db, { guildId: GUILD, prefix: "ab12" }),
-      {},
-      read(
-        `tasks?select=id,description,due_date,events!inner(id)&guild_id=eq.${GUILD}&status=eq.open&deleted_at=is.null&events.status=eq.active&events.deleted_at=is.null&id=gte.ab120000-0000-0000-0000-000000000000&id=lte.ab12ffff-ffff-ffff-ffff-ffffffffffff&order=id.asc&limit=25`,
-      ),
-    ],
-    [
-      "searchLiveTasksByIdPrefix",
-      (db) => searchLiveTasksByIdPrefix(db, { guildId: GUILD, prefix: "ab12" }),
-      {},
-      read(
-        `tasks?select=id,description,due_date,status,events!inner(id)&guild_id=eq.${GUILD}&deleted_at=is.null&events.status=eq.active&events.deleted_at=is.null&id=gte.ab120000-0000-0000-0000-000000000000&id=lte.ab12ffff-ffff-ffff-ffff-ffffffffffff&order=id.asc&limit=25`,
-      ),
-    ],
-    [
-      "searchOwnOpenTasksByIdPrefix",
-      (db) =>
-        searchOwnOpenTasksByIdPrefix(db, {
-          guildId: GUILD,
-          assigneeId: ACTOR,
-          prefix: "ab12",
-        }),
-      {},
-      read(
-        `tasks?select=id,description,due_date,events!inner(id)&guild_id=eq.${GUILD}&assignee_id=eq.${ACTOR}&status=eq.open&deleted_at=is.null&events.status=eq.active&events.deleted_at=is.null&id=gte.ab120000-0000-0000-0000-000000000000&id=lte.ab12ffff-ffff-ffff-ffff-ffffffffffff&order=id.asc&limit=25`,
-      ),
-    ],
-    [
-      "searchOpenEventsByIdPrefix",
-      (db) =>
-        searchOpenEventsByIdPrefix(db, { guildId: GUILD, prefix: "ab12" }),
-      {},
-      read(
-        `events?select=id,name,event_date,status&guild_id=eq.${GUILD}&status=eq.active&deleted_at=is.null&id=gte.ab120000-0000-0000-0000-000000000000&id=lte.ab12ffff-ffff-ffff-ffff-ffffffffffff&order=id.asc&limit=25`,
-      ),
-    ],
-    [
-      "findEventByThread",
-      (db) => findEventByThread(db, { guildId: GUILD, threadId: OTHER }),
-      {},
-      read(
-        `events?select=${EVENT_COLUMNS}&thread_id=eq.${OTHER}&guild_id=eq.${GUILD}&deleted_at=is.null&limit=1`,
-      ),
-    ],
-    [
-      "findEventEverOnThread",
-      (db) => findEventEverOnThread(db, { guildId: GUILD, threadId: OTHER }),
-      {},
-      read(
-        `events?select=${EVENT_COLUMNS}&thread_id=eq.${OTHER}&guild_id=eq.${GUILD}&limit=1`,
-      ),
-    ],
-    [
-      "listOpenTasksForAssignee",
-      (db) =>
-        listOpenTasksForAssignee(db, { guildId: GUILD, assigneeId: ACTOR }),
-      {},
-      read(
-        `tasks?select=id,event_id,description,due_date,events!inner(name)&guild_id=eq.${GUILD}&assignee_id=eq.${ACTOR}&status=eq.open&deleted_at=is.null&events.status=eq.active&events.deleted_at=is.null&order=due_date.asc,id.asc&limit=101`,
-      ),
-    ],
-    [
-      "listEventTasks",
-      (db) => listEventTasks(db, { guildId: GUILD, eventId: ID }),
-      {},
-      read(
-        `tasks?select=${TASK_COLUMNS}&guild_id=eq.${GUILD}&event_id=eq.${ID}&deleted_at=is.null&order=status.asc,due_date.asc,id.asc&limit=101`,
-      ),
-    ],
-    [
       "createEvent",
       (db) =>
         createEvent(db, {
@@ -451,20 +367,6 @@ describe("exact requests", () => {
       rpc("release_event_post_attempt", { p_event_id: ID, p_guild_id: GUILD }),
     ],
     [
-      "listEventsNamed",
-      (db) =>
-        listEventsNamed(db, {
-          guildId: GUILD,
-          channelId: OTHER,
-          name: "x,deleted_at.not.is.null",
-          eventDate: DATE,
-        }),
-      {},
-      read(
-        `events?select=${EVENT_COLUMNS}&guild_id=eq.${GUILD}&channel_id=eq.${OTHER}&name=eq.x,deleted_at.not.is.null&event_date=eq.${DATE}&deleted_at=is.null&order=id.asc&limit=25`,
-      ),
-    ],
-    [
       "attachEventPost",
       (db) =>
         attachEventPost(db, {
@@ -481,20 +383,6 @@ describe("exact requests", () => {
           thread_status: "active",
         },
         `${scopedEvent}&thread_status=eq.pending`,
-      ),
-    ],
-    [
-      "getEvent",
-      (db) => getEvent(db, { guildId: GUILD, eventId: ID }),
-      { body: [eventRow()] },
-      read(`events?select=${EVENT_COLUMNS}&${scopedEvent}&limit=1`),
-    ],
-    [
-      "listEvents",
-      (db) => listEvents(db, { guildId: GUILD }),
-      {},
-      read(
-        `events?select=${EVENT_COLUMNS}&guild_id=eq.${GUILD}&deleted_at=is.null&order=status.asc,event_date.desc,id.asc&limit=101`,
       ),
     ],
     [
@@ -538,22 +426,6 @@ describe("exact requests", () => {
       (db) => softDeleteEvent(db, { guildId: GUILD, eventId: ID }),
       { body: 2 },
       rpc("soft_delete_event", { p_event_id: ID, p_guild_id: GUILD }),
-    ],
-    [
-      "getGuildConfig",
-      (db) => getGuildConfig(db, { guildId: GUILD }),
-      {},
-      read(
-        `guild_config?select=guild_id,officer_role_id,admin_role_id,eboard_role_id,events_committee_role_id,treasury_role_id,marketing_role_id,timezone,reminders_enabled,version&guild_id=eq.${GUILD}&limit=1`,
-      ),
-    ],
-    [
-      "listRecentConfigChanges",
-      (db) => listRecentConfigChanges(db, { guildId: GUILD }),
-      {},
-      read(
-        `config_audit?select=id,actor_id,action,old_values,new_values,version_after,created_at&guild_id=eq.${GUILD}&order=id.desc&limit=6`,
-      ),
     ],
     [
       "applyRoleBindings",
@@ -606,55 +478,6 @@ describe("exact requests", () => {
       }),
     ],
     [
-      "getManagedChannel",
-      (db) => getManagedChannel(db, { guildId: GUILD, channelId: OTHER }),
-      {},
-      read(
-        `managed_channels?select=guild_id,channel_id,status&guild_id=eq.${GUILD}&channel_id=eq.${OTHER}&limit=1`,
-      ),
-    ],
-    [
-      "getEventThreadForum",
-      (db) => getEventThreadForum(db, { guildId: GUILD, threadId: OTHER }),
-      {},
-      read(
-        `events?select=managed_channels!inner(guild_id,channel_id,status)&guild_id=eq.${GUILD}&thread_id=eq.${OTHER}&deleted_at=is.null&limit=1`,
-      ),
-    ],
-    [
-      "listManagedChannels",
-      (db) => listManagedChannels(db, { guildId: GUILD }),
-      {},
-      read(
-        `managed_channels?select=guild_id,channel_id,status&guild_id=eq.${GUILD}&order=channel_id.asc&limit=501`,
-      ),
-    ],
-    [
-      "listManagedChannelsByIds",
-      (db) =>
-        listManagedChannelsByIds(db, {
-          guildId: GUILD,
-          channelIds: [OTHER, ACTOR],
-        }),
-      {},
-      read(
-        `managed_channels?select=guild_id,channel_id,status&guild_id=eq.${GUILD}&channel_id=in.(${OTHER},${ACTOR})&order=channel_id.asc&limit=501`,
-      ),
-    ],
-    [
-      "listRecentEventsInChannel",
-      (db) =>
-        listRecentEventsInChannel(db, {
-          guildId: GUILD,
-          channelId: OTHER,
-          limit: 10,
-        }),
-      {},
-      read(
-        `events?select=id,guild_id,channel_id,name,event_date,thread_id,overview_message_id,status,thread_status,created_by,deleted_at,created_at&guild_id=eq.${GUILD}&channel_id=eq.${OTHER}&thread_status=eq.active&deleted_at=is.null&order=updated_at.desc,id.asc&limit=11`,
-      ),
-    ],
-    [
       "markChannelUnavailable",
       (db) => markChannelUnavailable(db, { guildId: GUILD, channelId: OTHER }),
       { body: true },
@@ -668,22 +491,6 @@ describe("exact requests", () => {
       (db) => claimInteraction(db, { interactionId: OTHER }),
       { body: true },
       rpc("claim_interaction", { p_interaction_id: OTHER }),
-    ],
-    [
-      "listReminderCandidates",
-      (db) => listReminderCandidates(db, { lastDueDate: DATE }),
-      {},
-      read(
-        `tasks?select=id,event_id,guild_id,assignee_id,description,due_date,status,updated_at,events!inner(id,name,thread_id,status,thread_status,thread_refusals,managed_channels!inner(guild_config!inner(timezone))),reminder_log(kind,due_date,state,claimed_at)&status=eq.open&deleted_at=is.null&due_date=lte.${DATE}&events.status=eq.active&events.deleted_at=is.null&events.managed_channels.status=eq.active&events.managed_channels.guild_config.reminders_enabled=is.true&or=(due_date.gt.2000-01-01,and(due_date.eq.2000-01-01,id.gt.00000000-0000-0000-0000-000000000000))&order=due_date.asc,id.asc&limit=500`,
-      ),
-    ],
-    [
-      "listStaleClaims",
-      (db) => listStaleClaims(db, { claimedBefore: NOW }),
-      {},
-      read(
-        `reminder_log?select=task_id,kind,due_date,claim_token,attempts,refused_attempts,claimed_at&state=eq.claimed&claimed_at=lt.${NOW.toISOString()}&order=claimed_at.asc,task_id.asc,kind.asc,due_date.asc&limit=501`,
-      ),
     ],
     [
       "claimReminder",
@@ -814,14 +621,6 @@ describe("exact requests", () => {
         p_claim_token: TOKEN,
       }),
     ],
-    [
-      "getLatestJobRun",
-      (db) => getLatestJobRun(db, { jobName: "reminders" }),
-      {},
-      read(
-        "job_runs?select=id,job_name,status,started_at,heartbeat_at,finished_at,results,error&job_name=eq.reminders&order=started_at.desc&limit=1",
-      ),
-    ],
   ];
 
   it.each(cases)("%s", async (_name, call, response, expected) => {
@@ -847,23 +646,25 @@ describe("exact requests", () => {
     expect(requests[0]?.headers.get("prefer")).toBe("return=representation");
   });
 
-  const candidate = (id: string, dueDate: string) => ({
-    ...taskRow(),
+  /** A planner row as the read returns it: the selected values, in order. */
+  const candidate = (id: string, dueDate: string) => [
     id,
-    due_date: dueDate,
-    events: {
-      id: ID,
-      name: "Social",
-      thread_id: null,
-      status: "active",
-      thread_status: "pending",
-      thread_refusals: 0,
-      managed_channels: {
-        guild_config: { timezone: "America/New_York" },
-      },
-    },
-    reminder_log: [],
-  });
+    ID,
+    GUILD,
+    ACTOR,
+    "Book the room",
+    dueDate,
+    "open",
+    VERSION,
+    ID,
+    "Social",
+    null,
+    "active",
+    "pending",
+    0,
+    { guild_config: { timezone: "America/New_York" } },
+    [],
+  ];
 
   it("reads the planner in pages, continuing after the last row of each", async () => {
     let call = 0;
@@ -880,9 +681,11 @@ describe("exact requests", () => {
     expect(result.ok && result.value.rows).toHaveLength(501);
     expect(result.ok && result.value.truncated).toBe(false);
     expect(requests).toHaveLength(2);
-    expect(requests[1]?.target).toContain(
-      `or=(due_date.gt.2030-01-05,and(due_date.eq.2030-01-05,id.gt.${TOKEN}))`,
+    // The second page starts after the first page's last due date and ID.
+    expect(requests[1]?.body).toEqual(
+      expect.arrayContaining(["2030-01-05", TOKEN]),
     );
+    expect(requests[0]?.body).not.toContain(TOKEN);
   });
 
   it("reports the planner as truncated when it stops at the page limit", async () => {
@@ -896,12 +699,139 @@ describe("exact requests", () => {
 
   it("stops and reports truncated if a full page ends with no readable position", async () => {
     const { db, requests } = mockPostgrest(() => ({
-      body: Array.from({ length: 500 }, () => ({ id: "not-a-uuid" })),
+      body: Array.from({ length: 500 }, () =>
+        candidate("not-a-uuid", "2030-01-05"),
+      ),
     }));
     const result = await listReminderCandidates(db, { lastDueDate: DATE });
     expect(result.ok && result.value.truncated).toBe(true);
     expect(result.ok && result.value.excluded).toHaveLength(500);
     expect(requests).toHaveLength(1);
+  });
+});
+
+describe("reads built with Drizzle", () => {
+  const term = "x' OR 1=1 --";
+  const reads: [
+    string,
+    (db: ReturnType<typeof mockPostgrest>["db"]) => Promise<unknown>,
+  ][] = [
+    ["getTask", (db) => getTask(db, { guildId: GUILD, taskId: ID })],
+    ["getEvent", (db) => getEvent(db, { guildId: GUILD, eventId: ID })],
+    [
+      "searchOpenTasksByIdPrefix",
+      (db) => searchOpenTasksByIdPrefix(db, { guildId: GUILD, prefix: "abc" }),
+    ],
+    [
+      "searchLiveTasksByIdPrefix",
+      (db) => searchLiveTasksByIdPrefix(db, { guildId: GUILD, prefix: "abc" }),
+    ],
+    [
+      "searchOwnOpenTasksByIdPrefix",
+      (db) =>
+        searchOwnOpenTasksByIdPrefix(db, {
+          guildId: GUILD,
+          assigneeId: ACTOR,
+          prefix: "abc",
+        }),
+    ],
+    [
+      "searchOpenEventsByIdPrefix",
+      (db) => searchOpenEventsByIdPrefix(db, { guildId: GUILD, prefix: "abc" }),
+    ],
+    [
+      "findEventByThread",
+      (db) => findEventByThread(db, { guildId: GUILD, threadId: OTHER }),
+    ],
+    [
+      "findEventEverOnThread",
+      (db) => findEventEverOnThread(db, { guildId: GUILD, threadId: OTHER }),
+    ],
+    [
+      "listOpenTasksForAssignee",
+      (db) =>
+        listOpenTasksForAssignee(db, { guildId: GUILD, assigneeId: ACTOR }),
+    ],
+    [
+      "listEventTasks",
+      (db) => listEventTasks(db, { guildId: GUILD, eventId: ID }),
+    ],
+    [
+      "listEventsNamed",
+      (db) =>
+        listEventsNamed(db, {
+          guildId: GUILD,
+          channelId: OTHER,
+          name: term,
+          eventDate: DATE,
+        }),
+    ],
+    ["listEvents", (db) => listEvents(db, { guildId: GUILD })],
+    ["searchEvents", (db) => searchEvents(db, { guildId: GUILD, term })],
+    ["getGuildConfig", (db) => getGuildConfig(db, { guildId: GUILD })],
+    [
+      "listRecentConfigChanges",
+      (db) => listRecentConfigChanges(db, { guildId: GUILD }),
+    ],
+    [
+      "getManagedChannel",
+      (db) => getManagedChannel(db, { guildId: GUILD, channelId: OTHER }),
+    ],
+    [
+      "getEventThreadForum",
+      (db) => getEventThreadForum(db, { guildId: GUILD, threadId: OTHER }),
+    ],
+    [
+      "listManagedChannels",
+      (db) => listManagedChannels(db, { guildId: GUILD }),
+    ],
+    [
+      "listManagedChannelsByIds",
+      (db) =>
+        listManagedChannelsByIds(db, {
+          guildId: GUILD,
+          channelIds: [OTHER, ACTOR],
+        }),
+    ],
+    [
+      "listRecentEventsInChannel",
+      (db) =>
+        listRecentEventsInChannel(db, {
+          guildId: GUILD,
+          channelId: OTHER,
+          limit: 5,
+        }),
+    ],
+    [
+      "listReminderCandidates",
+      (db) => listReminderCandidates(db, { lastDueDate: DATE }),
+    ],
+    ["listStaleClaims", (db) => listStaleClaims(db, { claimedBefore: NOW })],
+    ["getLatestJobRun", (db) => getLatestJobRun(db, { jobName: "reminders" })],
+  ];
+
+  it.each(reads)(
+    "%s sends one select, with every value as a parameter",
+    async (_name, read) => {
+      const { db, requests } = mockPostgrest();
+      await read(db);
+      expect(requests).toHaveLength(1);
+      const [request] = requests;
+      expect(request?.target).toMatch(/^select /);
+      expect(request?.target).not.toMatch(/select \*|\.\*/);
+      for (const value of [GUILD, ACTOR, OTHER, ID, term, DATE]) {
+        expect(request?.target).not.toContain(value);
+      }
+      expect(request?.body).not.toEqual([]);
+    },
+  );
+
+  it("scopes a read by key to the guild and to live rows", async () => {
+    const { db, requests } = mockPostgrest();
+    await getTask(db, { guildId: GUILD, taskId: ID });
+    expect(requests[0]?.target).toContain('"tasks"."guild_id" = $');
+    expect(requests[0]?.target).toContain('"tasks"."deleted_at" is null');
+    expect(requests[0]?.body).toEqual([ID, GUILD, 1]);
   });
 });
 
@@ -913,48 +843,36 @@ describe("autocomplete search", () => {
       term: string,
     ) => Promise<{ ok: boolean }>,
     string,
-    string,
-    string,
   ][] = [
     [
       "searchEvents",
       (db, term) => searchEvents(db, { guildId: GUILD, term }),
       "events",
-      `select=id,name,event_date,status&guild_id=eq.${GUILD}&deleted_at=is.null&name=ilike.`,
-      "&order=status.asc,event_date.desc,id.asc&limit=25",
     ],
     [
       "searchOpenEvents",
       (db, term) => searchOpenEvents(db, { guildId: GUILD, term }),
       "events",
-      `select=id,name,event_date,status&guild_id=eq.${GUILD}&status=eq.active&deleted_at=is.null&name=ilike.`,
-      "&order=event_date.desc,id.asc&limit=25",
     ],
     [
       "searchOpenTasks",
       (db, term) => searchOpenTasks(db, { guildId: GUILD, term }),
       "tasks",
-      `select=id,description,due_date,events!inner(id)&guild_id=eq.${GUILD}&status=eq.open&deleted_at=is.null&events.status=eq.active&events.deleted_at=is.null&description=ilike.`,
-      "&order=due_date.asc,id.asc&limit=25",
     ],
     [
       "searchLiveTasks",
       (db, term) => searchLiveTasks(db, { guildId: GUILD, term }),
       "tasks",
-      `select=id,description,due_date,status,events!inner(id)&guild_id=eq.${GUILD}&deleted_at=is.null&events.status=eq.active&events.deleted_at=is.null&description=ilike.`,
-      "&order=status.asc,due_date.asc,id.asc&limit=25",
     ],
     [
       "searchOwnOpenTasks",
       (db, term) =>
         searchOwnOpenTasks(db, { guildId: GUILD, assigneeId: ACTOR, term }),
       "tasks",
-      `select=id,description,due_date,events!inner(id)&guild_id=eq.${GUILD}&assignee_id=eq.${ACTOR}&status=eq.open&deleted_at=is.null&events.status=eq.active&events.deleted_at=is.null&description=ilike.`,
-      "&order=due_date.asc,id.asc&limit=25",
     ],
   ];
 
-  describe.each(searches)("%s", (_name, search, table, before, after) => {
+  describe.each(searches)("%s", (_name, search, table) => {
     it.each([
       [
         "a comma and a filter",
@@ -964,30 +882,23 @@ describe("autocomplete search", () => {
       ["a closing paren", "x)", "%x)%"],
       ["a dot", "a.b", "%a.b%"],
       ["a double quote", 'x","y', '%x","y%'],
-      ["an asterisk", "x*", "%x\\*%"],
+      ["an asterisk", "x*", "%x*%"],
       ["a percent sign", "%", "%\\%%"],
       ["an underscore", "_", "%\\_%"],
       ["a backslash", "\\", "%\\\\%"],
-      ["an or() group", "or=(id.eq.1)", "%or=(id.eq.1)%"],
-      [
-        "an ampersand",
-        "a&deleted_at=not.is.null",
-        "%a&deleted\\_at=not.is.null%",
-      ],
-    ])("keeps %s inside the one value", async (_case, term, pattern) => {
+      ["a quote and a comment", "x' OR 1=1 --", "%x' OR 1=1 --%"],
+      ["a statement", "'; DELETE FROM tasks; --", "%'; DELETE FROM tasks; --%"],
+    ])("sends %s only as a parameter", async (_case, term, pattern) => {
       const { db, requests } = mockPostgrest();
       await search(db, term);
       expect(requests).toHaveLength(1);
-      expect(requests[0]?.target).toBe(
-        `/rest/v1/${table}?${before}${pattern}${after}`,
-      );
-    });
-
-    it("encodes the value so it cannot add a query parameter", async () => {
-      const { db, requests } = mockPostgrest();
-      await search(db, "a&deleted_at=not.is.null");
-      const url = new URL(`https://x.test${requests[0]?.rawTarget ?? ""}`);
-      expect(url.searchParams.getAll("deleted_at")).toEqual(["is.null"]);
+      const [request] = requests;
+      expect(request?.target).toMatch(new RegExp(`^select .* from "${table}"`));
+      expect(request?.target).toMatch(/ ilike \$[0-9]+/);
+      // One character can be part of a column name.
+      expect(term.length === 1 || !request?.target.includes(term)).toBe(true);
+      expect(request?.body).toContain(pattern);
+      expect(request?.body).toContain(GUILD);
     });
 
     it.each(["x\u0000y", "\u0000", "x\ud800", "\udc00y"])(
@@ -1006,9 +917,7 @@ describe("autocomplete search", () => {
     it("caps a long term", async () => {
       const { db, requests } = mockPostgrest();
       await search(db, "a".repeat(6000));
-      expect(requests[0]?.target).toBe(
-        `/rest/v1/${table}?${before}%${"a".repeat(100)}%${after}`,
-      );
+      expect(requests[0]?.body).toContain(`%${"a".repeat(100)}%`);
     });
   });
 });
@@ -1509,10 +1418,9 @@ describe("row counts on writes", () => {
 
 describe("countOpenTasksInChannel", () => {
   const CHANNEL = testSnowflake();
-  const row = (index: number) => ({
-    id: `00000000-0000-4000-8000-${String(index).padStart(12, "0")}`,
-    events: { channel_id: CHANNEL },
-  });
+  const row = (index: number) => [
+    `00000000-0000-4000-8000-${String(index).padStart(12, "0")}`,
+  ];
 
   it("asks only for open, live tasks of live events in this guild and channel", async () => {
     const { db, requests } = mockPostgrest(() => ({ body: [row(1), row(2)] }));
@@ -1520,9 +1428,20 @@ describe("countOpenTasksInChannel", () => {
     expect(
       await countOpenTasksInChannel(db, { guildId: GUILD, channelId: CHANNEL }),
     ).toEqual({ ok: true, value: { count: 2, truncated: false } });
-    expect(requests[0]?.target).toBe(
-      `/rest/v1/tasks?select=id,events!inner(channel_id)&guild_id=eq.${GUILD}&status=eq.open&deleted_at=is.null&events.channel_id=eq.${CHANNEL}&events.deleted_at=is.null&limit=101`,
+    const [request] = requests;
+    expect(request?.target).toMatch(
+      /^select "tasks"\."id" from "tasks" inner join "events"/,
     );
+    for (const filter of [
+      '"tasks"."guild_id" = $',
+      '"tasks"."status" = $',
+      '"tasks"."deleted_at" is null',
+      '"events"."channel_id" = $',
+      '"events"."deleted_at" is null',
+    ]) {
+      expect(request?.target).toContain(filter);
+    }
+    expect(request?.body).toEqual([GUILD, "open", CHANNEL, 101]);
   });
 
   it("says when it stopped counting", async () => {

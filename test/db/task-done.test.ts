@@ -20,6 +20,7 @@ import {
   run,
 } from "../support/interactions.ts";
 import { mockPostgrest, testSnowflake } from "../support/mock-postgrest.ts";
+import { asSelected, sqlTarget } from "../support/sql-client.ts";
 import { insertEvent, withoutQuotas } from "./fixtures.ts";
 import { queryAs } from "./harness.ts";
 import {
@@ -821,12 +822,12 @@ describe("marking tasks done and reading them, on the real schema", () => {
 
     describe("what a keystroke costs", () => {
       function countingWorld(typed: unknown, member: Record<string, unknown>) {
-        const { db: mock, requests } = mockPostgrest((request) => {
-          const path = request.target.split("?")[0] ?? "";
-          return path.endsWith("/guild_config")
-            ? { body: [configRow()] }
-            : { body: [] };
-        });
+        const { db: mock, requests } = mockPostgrest((request) =>
+          request.method === "SQL" &&
+          sqlTarget(request.target) === "select guild_config"
+            ? { body: asSelected(request.target, [{ ...configRow() }]) }
+            : { body: [] },
+        );
         const discordCalls: string[] = [];
         const refuse = new Proxy(
           {},
@@ -857,8 +858,8 @@ describe("marking tasks done and reading them, on the real schema", () => {
         await ran;
 
         expect(requests.map((request) => request.method)).toEqual([
-          "GET",
-          "GET",
+          "SQL",
+          "SQL",
         ]);
         expect(discordCalls).toEqual([]);
       });
@@ -869,9 +870,9 @@ describe("marking tasks done and reading them, on the real schema", () => {
         await ran;
 
         expect(requests.map((request) => request.method)).toEqual([
-          "GET",
-          "GET",
-          "GET",
+          "SQL",
+          "SQL",
+          "SQL",
         ]);
       });
 

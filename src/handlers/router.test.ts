@@ -784,7 +784,7 @@ describe("authorization on every kind of interaction", () => {
     expect(deferred).toBe(false);
     expect(finished).not.toHaveBeenCalled();
     expect(requests.map((request) => request.target)).toEqual([
-      expect.stringContaining("/guild_config"),
+      expect.stringContaining('from "guild_config"'),
     ]);
   });
 
@@ -1090,7 +1090,7 @@ describe("databases", () => {
     );
 
     expect(short.requests.map((request) => request.target)).toEqual([
-      expect.stringContaining("/guild_config"),
+      expect.stringContaining('from "guild_config"'),
     ]);
     expect(long.rpcBodies("claim_interaction")).toHaveLength(1);
     expect(short.rpcBodies("claim_interaction")).toEqual([]);

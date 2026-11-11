@@ -20,6 +20,37 @@ const GuildIds = z
   .pipe(z.array(DiscordId))
   .transform((ids): ReadonlySet<string> => new Set(ids));
 
+/** The bot's role. A connection string for any other is refused, the owner's above all. */
+export const DATABASE_ROLE = "bot_app";
+
+const LOCAL_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]"]);
+const TLS_MODES = new Set(["require", "verify-ca", "verify-full"]);
+
+/**
+ * A Postgres URL for bot_app, with a password, a host and a database. Anything but a
+ * local server must ask for TLS. Parsed with the URL parser alone, so no error can quote
+ * the password.
+ */
+const DatabaseUrl = z.string().refine((value) => {
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    return false;
+  }
+  const sslmode = url.searchParams.get("sslmode");
+  return (
+    (url.protocol === "postgresql:" || url.protocol === "postgres:") &&
+    decodeURIComponent(url.username) === DATABASE_ROLE &&
+    url.password !== "" &&
+    url.hostname !== "" &&
+    /^\/[A-Za-z0-9_-]+$/.test(url.pathname) &&
+    url.hash === "" &&
+    (LOCAL_HOSTS.has(url.hostname) ||
+      (sslmode !== null && TLS_MODES.has(sslmode)))
+  );
+});
+
 /** Reads a setting. Zod's own messages are not used, so no error can quote a value. */
 function read<T>(
   name: string,
@@ -35,6 +66,14 @@ function read<T>(
     throw new ConfigError(name, problem);
   }
   return parsed.data;
+}
+
+export function getDatabaseUrl(): string {
+  return read(
+    "DATABASE_URL",
+    DatabaseUrl,
+    `must be a postgresql:// URL for ${DATABASE_ROLE}, with a password, a database and sslmode=require or stricter`,
+  );
 }
 
 export function getDiscordAppId(): string {

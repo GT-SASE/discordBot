@@ -1,5 +1,8 @@
 import type { DbClient } from "./client.ts";
-import { rest } from "./internal.ts";
+import { and, desc, eq } from "drizzle-orm";
+import { JOB_RUN_COLUMNS } from "./columns.ts";
+import { rest, run } from "./internal.ts";
+import { jobRuns } from "./schema.ts";
 import {
   errorSummary,
   refused,
@@ -136,14 +139,14 @@ export async function getLatestJobRun(
     return refused();
   }
   return oneOrNone(
-    await rest(db)
-      .from("job_runs")
-      .select(
-        "id,job_name,status,started_at,heartbeat_at,finished_at,results,error",
-      )
-      .eq("job_name", jobName)
-      .order("started_at", { ascending: false })
-      .limit(1),
+    await run(db, (sql) =>
+      sql
+        .select(JOB_RUN_COLUMNS)
+        .from(jobRuns)
+        .where(eq(jobRuns.jobName, jobName))
+        .orderBy(desc(jobRuns.startedAt))
+        .limit(1),
+    ),
     parseJobRun,
   );
 }
@@ -157,15 +160,16 @@ export async function getLatestSucceededJobRun(
     return refused();
   }
   return oneOrNone(
-    await rest(db)
-      .from("job_runs")
-      .select(
-        "id,job_name,status,started_at,heartbeat_at,finished_at,results,error",
-      )
-      .eq("job_name", jobName)
-      .eq("status", "succeeded")
-      .order("started_at", { ascending: false })
-      .limit(1),
+    await run(db, (sql) =>
+      sql
+        .select(JOB_RUN_COLUMNS)
+        .from(jobRuns)
+        .where(
+          and(eq(jobRuns.jobName, jobName), eq(jobRuns.status, "succeeded")),
+        )
+        .orderBy(desc(jobRuns.startedAt))
+        .limit(1),
+    ),
     parseJobRun,
   );
 }

@@ -14,6 +14,7 @@ import {
   it,
   vi,
 } from "vitest";
+import { pgliteSql } from "../support/sql-client.ts";
 import { createDbClient, type DbClient } from "../../src/db/client.ts";
 import { createDiscordClient } from "../../src/discord/client.ts";
 import { managedChannelCheck, runReminders } from "../../src/reminders/run.ts";
@@ -92,6 +93,7 @@ beforeAll(async () => {
     url: TEST_ORIGIN,
     secretKey: TEST_SECRET_KEY,
     fetch: postgrestShim(database),
+    sql: pgliteSql(database),
   });
   guild = await insertGuild(database);
   await database.query(

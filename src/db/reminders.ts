@@ -8,7 +8,26 @@ import {
   refused,
   type DbResult,
 } from "./errors.ts";
-import { rest } from "./internal.ts";
+import {
+  and,
+  asc,
+  eq,
+  gt,
+  isNull,
+  lt,
+  lte,
+  or,
+  sql as fragment,
+} from "drizzle-orm";
+import { selected } from "./columns.ts";
+import { rest, run } from "./internal.ts";
+import {
+  events,
+  guildConfig,
+  managedChannels,
+  reminderLog,
+  tasks,
+} from "./schema.ts";
 import {
   booleanValue,
   cappedList,
@@ -30,7 +49,7 @@ import {
   type ReminderKind,
   type StaleClaim,
 } from "./types.ts";
-import { isDbDate, isInstant, isUuid, keysetAfter } from "./validate.ts";
+import { isDbDate, isInstant, isUuid } from "./validate.ts";
 
 const PAGE_SIZE = 500;
 const MAX_PAGES = 20;
@@ -64,22 +83,69 @@ export async function listReminderCandidates(
   const excluded: ExcludedRow[] = [];
   let position = FIRST_POSITION;
   for (let page = 0; page < MAX_PAGES; page += 1) {
-    const response = await rest(db)
-      .from("tasks")
-      .select(
-        "id,event_id,guild_id,assignee_id,description,due_date,status,updated_at,events!inner(id,name,thread_id,status,thread_status,thread_refusals,managed_channels!inner(guild_config!inner(timezone))),reminder_log(kind,due_date,state,claimed_at)",
-      )
-      .eq("status", "open")
-      .is("deleted_at", null)
-      .lte("due_date", lastDueDate)
-      .eq("events.status", "active")
-      .is("events.deleted_at", null)
-      .eq("events.managed_channels.status", "active")
-      .is("events.managed_channels.guild_config.reminders_enabled", true)
-      .or(keysetAfter(position.dueDate, position.id))
-      .order("due_date")
-      .order("id")
-      .limit(PAGE_SIZE);
+    const { dueDate, id } = position;
+    const response = await run(db, (sql) =>
+      sql
+        .select({
+          id: tasks.id,
+          event_id: tasks.eventId,
+          guild_id: tasks.guildId,
+          assignee_id: tasks.assigneeId,
+          description: tasks.description,
+          due_date: tasks.dueDate,
+          status: tasks.status,
+          updated_at: tasks.updatedAt,
+          events: {
+            id: events.id,
+            name: events.name,
+            thread_id: events.threadId,
+            status: events.status,
+            thread_status: events.threadStatus,
+            thread_refusals: events.threadRefusals,
+            managed_channels: selected(fragment<unknown>`json_build_object(
+              'guild_config', json_build_object('timezone', ${guildConfig.timezone}))`),
+          },
+          reminder_log: selected(fragment<unknown>`coalesce((
+            SELECT json_agg(json_build_object(
+              'kind', ${reminderLog.kind},
+              'due_date', ${reminderLog.dueDate},
+              'state', ${reminderLog.state},
+              'claimed_at', ${reminderLog.claimedAt}))
+            FROM ${reminderLog}
+            WHERE ${reminderLog.taskId} = ${tasks.id}), '[]'::json)`),
+        })
+        .from(tasks)
+        .innerJoin(
+          events,
+          and(eq(events.id, tasks.eventId), eq(events.guildId, tasks.guildId)),
+        )
+        .innerJoin(
+          managedChannels,
+          and(
+            eq(managedChannels.guildId, events.guildId),
+            eq(managedChannels.channelId, events.channelId),
+          ),
+        )
+        .innerJoin(guildConfig, eq(guildConfig.guildId, events.guildId))
+        .where(
+          and(
+            eq(tasks.status, "open"),
+            isNull(tasks.deletedAt),
+            lte(tasks.dueDate, lastDueDate),
+            eq(events.status, "active"),
+            isNull(events.deletedAt),
+            eq(managedChannels.status, "active"),
+            eq(guildConfig.remindersEnabled, true),
+            // Rows after the last one read, in due_date, id order.
+            or(
+              gt(tasks.dueDate, dueDate),
+              and(eq(tasks.dueDate, dueDate), gt(tasks.id, id)),
+            ),
+          ),
+        )
+        .orderBy(asc(tasks.dueDate), asc(tasks.id))
+        .limit(PAGE_SIZE),
+    );
     const list = rowList(response, parseReminderCandidate);
     if (!list.ok) {
       return list;
@@ -90,9 +156,8 @@ export async function listReminderCandidates(
     if (count < PAGE_SIZE) {
       return { ok: true, value: { rows, excluded, truncated: false } };
     }
-    const data: unknown = response.data;
     const last = parseCandidateCursor(
-      Array.isArray(data) ? (data as unknown[]).at(-1) : undefined,
+      response.ok ? response.value.at(-1) : undefined,
     );
     if (!last.ok) {
       // A row with no readable position leaves nowhere to continue from.
@@ -112,18 +177,32 @@ export async function listStaleClaims(
     return refused();
   }
   return cappedList(
-    await rest(db)
-      .from("reminder_log")
-      .select(
-        "task_id,kind,due_date,claim_token,attempts,refused_attempts,claimed_at",
-      )
-      .eq("state", "claimed")
-      .lt("claimed_at", claimedBefore.toISOString())
-      .order("claimed_at")
-      .order("task_id")
-      .order("kind")
-      .order("due_date")
-      .limit(MAX_STALE_CLAIMS + 1),
+    await run(db, (sql) =>
+      sql
+        .select({
+          task_id: reminderLog.taskId,
+          kind: reminderLog.kind,
+          due_date: reminderLog.dueDate,
+          claim_token: reminderLog.claimToken,
+          attempts: reminderLog.attempts,
+          refused_attempts: reminderLog.refusedAttempts,
+          claimed_at: reminderLog.claimedAt,
+        })
+        .from(reminderLog)
+        .where(
+          and(
+            eq(reminderLog.state, "claimed"),
+            lt(reminderLog.claimedAt, claimedBefore.toISOString()),
+          ),
+        )
+        .orderBy(
+          asc(reminderLog.claimedAt),
+          asc(reminderLog.taskId),
+          asc(reminderLog.kind),
+          asc(reminderLog.dueDate),
+        )
+        .limit(MAX_STALE_CLAIMS + 1),
+    ),
     parseStaleClaim,
     MAX_STALE_CLAIMS,
   );
@@ -342,13 +421,22 @@ export async function closeStaleClaim(
     return refused();
   }
   const claim = oneOrNone(
-    await rest(db)
-      .from("reminder_log")
-      .select("state,claim_token")
-      .eq("task_id", key.taskId)
-      .eq("kind", key.kind)
-      .eq("due_date", key.dueDate)
-      .limit(1),
+    await run(db, (sql) =>
+      sql
+        .select({
+          state: reminderLog.state,
+          claim_token: reminderLog.claimToken,
+        })
+        .from(reminderLog)
+        .where(
+          and(
+            eq(reminderLog.taskId, key.taskId),
+            eq(reminderLog.kind, key.kind),
+            eq(reminderLog.dueDate, key.dueDate),
+          ),
+        )
+        .limit(1),
+    ),
     parseClaimState,
   );
   if (!claim.ok) {
@@ -362,11 +450,17 @@ export async function closeStaleClaim(
   }
 
   const task = oneOrNone(
-    await rest(db)
-      .from("tasks")
-      .select("due_date,status,deleted_at")
-      .eq("id", key.taskId)
-      .limit(1),
+    await run(db, (sql) =>
+      sql
+        .select({
+          due_date: tasks.dueDate,
+          status: tasks.status,
+          deleted_at: tasks.deletedAt,
+        })
+        .from(tasks)
+        .where(eq(tasks.id, key.taskId))
+        .limit(1),
+    ),
     parseTaskLiveness,
   );
   if (!task.ok) {

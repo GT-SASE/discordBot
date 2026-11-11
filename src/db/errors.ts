@@ -112,6 +112,44 @@ export function failureFromResponse(error: unknown, status: number): DbFailure {
   );
 }
 
+/** SQLSTATE classes that say the server could not do the work now, not that it was wrong. */
+const UNAVAILABLE_CLASSES = new Set(["08", "53", "57", "58", "XX"]);
+
+const SQLSTATE = /^[0-9A-Z]{5}$/;
+
+/**
+ * Reads only the SQLSTATE from a failed query. The driver's message can quote the
+ * statement, its parameters or the failing row, and Drizzle wraps the error in one whose
+ * message holds the whole query, so neither is ever read. An error with no server
+ * severity never reached the database, such as a refused connection or a dropped socket,
+ * so it is `unavailable` whatever code it carries.
+ */
+export function failureFromError(error: unknown): DbFailure {
+  const cause =
+    typeof error === "object" &&
+    error !== null &&
+    "cause" in error &&
+    typeof error.cause === "object" &&
+    error.cause !== null
+      ? error.cause
+      : error;
+  if (typeof cause !== "object" || cause === null) {
+    return failure("unexpected");
+  }
+  const fromServer = "severity" in cause && typeof cause.severity === "string";
+  const code = "code" in cause ? cause.code : undefined;
+  if (!fromServer || typeof code !== "string" || !SQLSTATE.test(code)) {
+    return failure("unavailable");
+  }
+  return failure(
+    CATEGORY_BY_CODE.get(code) ??
+      (UNAVAILABLE_CLASSES.has(code.slice(0, 2))
+        ? "unavailable"
+        : "unexpected"),
+    code,
+  );
+}
+
 /** The only form of an error that may be stored in `job_runs.error` or logged. */
 export function errorSummary(error: {
   readonly category: string;

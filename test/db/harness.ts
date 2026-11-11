@@ -107,3 +107,22 @@ export function fakeId(): string {
   nextFakeId += 1n;
   return nextFakeId.toString();
 }
+
+const sessionQueues = new WeakMap<object, Promise<unknown>>();
+
+/**
+ * Runs `fn` alone on this connection. PGlite has one session, and a caller that switches
+ * its role must not let another caller's statement run under that role.
+ */
+export function onSessionAlone<T>(
+  db: object,
+  fn: () => Promise<T>,
+): Promise<T> {
+  const previous = sessionQueues.get(db) ?? Promise.resolve();
+  const next = previous.then(fn);
+  sessionQueues.set(
+    db,
+    next.catch(() => undefined),
+  );
+  return next;
+}

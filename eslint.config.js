@@ -5,7 +5,7 @@ import tseslint from "typescript-eslint";
 
 /** Methods whose first argument names a table, column or function, or a whole filter. */
 const NAMED_FIRST_ARGUMENT =
-  "match|imatch|order|select|from|textSearch|rpc|eq|neq|is|gt|gte|lt|lte|in|like|ilike|contains|containedBy|overlaps";
+  "match|imatch|order|textSearch|rpc|eq|neq|is|gt|gte|lt|lte|in|like|ilike|contains|containedBy|overlaps";
 
 /** Client methods the bot has no use for, and that could widen or redirect a query. */
 const BANNED_METHODS = [
@@ -33,6 +33,7 @@ const BANNED_METHODS = [
   "overrideTypes",
   "getOpenApiSpec",
   "range",
+  "prepare",
   "rangeGt",
   "rangeGte",
   "rangeLt",
@@ -48,6 +49,8 @@ const TABLES =
 const EXTENSIONS = "{ts,tsx,mts,cts,js,jsx,mjs,cjs}";
 
 const SUPABASE_ONLY_IN_DB = "Only src/db/ may load Supabase packages.";
+const DRIVERS_ONLY_IN_DB =
+  "Only src/db/ may load the database driver or Drizzle. Use the functions there.";
 const QUERIES_ONLY_IN_DB = "Database queries belong in src/db/.";
 
 // A rule's options replace rather than merge across config blocks, so using the
@@ -162,6 +165,31 @@ export default defineConfig([
     },
   },
   {
+    // Tests and scripts set databases up directly. The bot's own code goes through src/db.
+    name: "db/drivers-in-app",
+    files: [`{src,api}/**/*.${EXTENSIONS}`],
+    ignores: ["src/db/**"],
+    plugins: { db: dbRules },
+    rules: {
+      "db/imports": [
+        "error",
+        {
+          patterns: [
+            { group: ["@supabase/*"], message: SUPABASE_ONLY_IN_DB },
+            {
+              group: ["**/db/internal", "**/db/internal.ts"],
+              message: "Only src/db/ can reach the query client.",
+            },
+            {
+              regex: "^(drizzle-orm(/.*)?|pg|pg-.*|@electric-sql/.*)$",
+              message: DRIVERS_ONLY_IN_DB,
+            },
+          ],
+        },
+      ],
+    },
+  },
+  {
     name: "db/query-shape",
     files: [`src/db/**/*.${EXTENSIONS}`],
     ignores: [`src/db/**/*.test.${EXTENSIONS}`],
@@ -177,13 +205,65 @@ export default defineConfig([
         },
         {
           selector:
-            "CallExpression[callee.property.name='or']:not([arguments.0.type='Literal']):not([arguments.0.callee.name='keysetAfter'])",
-          message: ".or() takes a literal, or the output of keysetAfter().",
+            "CallExpression[callee.property.name='or']:not([arguments.0.type='Literal'])",
+          message: ".or() takes a literal.",
+        },
+        {
+          selector:
+            "CallExpression[callee.property.name='from']:not([arguments.0.type=/^(Literal|Identifier)$/])",
+          message: "Name the table: a string, or a table from schema.ts.",
+        },
+        {
+          selector:
+            "CallExpression[callee.property.name=/^(select|returning)$/]:not([arguments.length=1]), CallExpression[callee.property.name=/^(select|returning)$/][arguments.0.type=/^(TemplateLiteral|CallExpression)$/]",
+          message:
+            "List the columns, once, as an object or a constant. Do not select everything.",
         },
         {
           selector:
             "CallExpression[callee.property.name='select'][arguments.0.value=/[*]/]",
           message: "List the columns. Do not select everything.",
+        },
+        {
+          selector:
+            "CallExpression[callee.property.name='raw'], MemberExpression[property.name='raw'], CallExpression[callee.name=/^(sql|fragment)$/]",
+          message:
+            "Build SQL only with the sql tagged template, so every value is a parameter.",
+        },
+        {
+          selector:
+            "CallExpression[callee.property.name='execute']:not([arguments.0.type='TaggedTemplateExpression'])",
+          message: "Pass execute() a sql`...` template, written out in place.",
+        },
+        {
+          selector: "MemberExpression[property.name='$client']",
+          message: "Do not reach past Drizzle to the driver.",
+        },
+        {
+          selector:
+            "CallExpression[callee.name='inArray']:not([arguments.1.callee.name=/^(snowflakeList|uuidList)$/])",
+          message:
+            "inArray() values must be passed through snowflakeList() or uuidList().",
+        },
+        {
+          selector:
+            "CallExpression[callee.name=/^(ilike|like)$/]:not([arguments.1.callee.name='searchPattern'])",
+          message: "Search patterns must be built by searchPattern().",
+        },
+        {
+          selector:
+            "CallExpression[callee.property.name=/^(values|set)$/][arguments.length=1]:not([arguments.0.type='ObjectExpression'])",
+          message: "Written values must be a literal object.",
+        },
+        {
+          selector:
+            "CallExpression[callee.property.name=/^(values|set)$/][arguments.length=1] > ObjectExpression > SpreadElement",
+          message: "Name each written field. Do not spread into a write.",
+        },
+        {
+          selector:
+            "CallExpression[callee.property.name=/^(values|set)$/][arguments.length=1] > ObjectExpression > Property[computed=true]",
+          message: "Name each written field. Do not compute a key.",
         },
         {
           selector:
@@ -198,8 +278,9 @@ export default defineConfig([
         },
         {
           selector:
-            "CallExpression[callee.property.name=/^(insert|update)$/]:not([arguments.0.type='ObjectExpression'])",
-          message: "Written values must be a literal object.",
+            "CallExpression[callee.property.name=/^(insert|update)$/]:not([arguments.0.type=/^(ObjectExpression|Identifier)$/])",
+          message:
+            "Written values must be a literal object, and a table one from schema.ts.",
         },
         {
           selector:

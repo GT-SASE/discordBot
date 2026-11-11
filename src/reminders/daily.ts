@@ -3,7 +3,12 @@
  * outcome into a fixed response.
  */
 
-import { createDbFromEnv, withDeadline, type DbClient } from "../db/client.ts";
+import {
+  closeDb,
+  createDbFromEnv,
+  withDeadline,
+  type DbClient,
+} from "../db/client.ts";
 import { errorSummary } from "../db/errors.ts";
 import { expireInteractionClaims } from "../db/interaction-claims.ts";
 import { createDiscordClient, type DiscordClient } from "../discord/client.ts";
@@ -48,8 +53,10 @@ function productionDependencies(): DailyDependencies {
 export async function runDailyJobs(
   dependencies?: DailyDependencies,
 ): Promise<boolean> {
+  let owned: DbClient | undefined;
   try {
     const shared = dependencies ?? productionDependencies();
+    owned = dependencies === undefined ? shared.db : undefined;
     // One time budget and one client for both, so a token refused by the first is not
     // tried again by the second.
     const startedMs = Date.now();
@@ -103,5 +110,9 @@ export async function runDailyJobs(
         : `Daily jobs failed: ${error instanceof Error ? error.name : "unknown error"}`,
     );
     return false;
+  } finally {
+    if (owned !== undefined) {
+      await closeDb(owned).catch(() => undefined);
+    }
   }
 }

@@ -1790,7 +1790,7 @@ describe("adding a forum back", () => {
 
   it("keeps the forum and says so when the events can't be read", async () => {
     const { dependencies, edits, edit, state } = removedForum([eventRow(1)]);
-    state.failing = { path: "/events", status: 503 };
+    state.failing = { path: "select events", status: 503 };
 
     await run(ROUTER, addPayload(FORUM), dependencies);
 

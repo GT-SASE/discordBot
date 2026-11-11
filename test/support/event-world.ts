@@ -5,6 +5,7 @@
  */
 
 import { afterAll, afterEach, beforeAll, beforeEach, expect, vi } from "vitest";
+import { pgliteSql, serverError } from "./sql-client.ts";
 import type { MockInstance } from "vitest";
 import { createDbClient, type DbClient } from "../../src/db/client.ts";
 import type { EventRow } from "../../src/db/types.ts";
@@ -50,7 +51,8 @@ export interface World {
   readonly errors: MockInstance<typeof console.error>;
   /**
    * Fails database requests whose decoded target matches, until cleared. Status 200
-   * instead answers as if no row matched, as a read just before another write would.
+   * instead answers as if no row matched, as a read just before another write would. A
+   * statement built with Drizzle has the target `SQL <its text>`.
    */
   failDb(pattern: RegExp, status?: number, times?: number): void;
   clearDbFailures(): void;
@@ -114,6 +116,21 @@ export function eventWorld(): World {
       }
       return shim(input, init);
     },
+    sql: pgliteSql(
+      () => pg,
+      ({ sql }) => {
+        const target = `SQL ${sql}`;
+        seen.push(target);
+        const failure = dbFailures.find(
+          (entry) => entry.times > 0 && entry.pattern.test(target),
+        );
+        if (failure === undefined) {
+          return undefined;
+        }
+        failure.times -= 1;
+        return failure.status === 200 ? { rows: [] } : serverError("XX000");
+      },
+    ),
   });
 
   beforeAll(async () => {

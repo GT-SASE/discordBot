@@ -22,6 +22,7 @@ import {
   type MockResponse,
   type RecordedRequest,
 } from "../../test/support/mock-postgrest.ts";
+import { asSelected, sqlTarget } from "../../test/support/sql-client.ts";
 import { COMMANDS, ROUTER } from "./registry.ts";
 
 const TASK_ID = "11111111-1111-4111-8111-111111111111";
@@ -34,8 +35,13 @@ function database(
 ) {
   return mockPostgrest((request) => {
     const path = request.target.split("?")[0] ?? "";
-    if (path.endsWith("/guild_config")) {
-      return { body: config };
+    if (
+      request.method === "SQL" &&
+      sqlTarget(request.target) === "select guild_config"
+    ) {
+      return {
+        body: asSelected(request.target, config as Record<string, unknown>[]),
+      };
     }
     if (path.endsWith("/rpc/claim_interaction")) {
       return { body: true };
@@ -154,7 +160,7 @@ describe("before setup", () => {
 
     expect(ran.reply.data?.choices).toEqual([]);
     expect(requests.map((request) => request.target)).toEqual([
-      expect.stringContaining("/guild_config"),
+      expect.stringContaining('from "guild_config"'),
     ]);
   });
 });
@@ -193,7 +199,7 @@ describe("a failing database", () => {
 
     expect(outcome.after).toBeDefined();
     expect(requests.map((request) => request.target)).toEqual([
-      expect.stringContaining("/guild_config"),
+      expect.stringContaining('from "guild_config"'),
     ]);
   });
 
@@ -230,24 +236,23 @@ describe("a failing database", () => {
 describe("/mytasks with a row that fails its checks", () => {
   it("counts it as hidden and logs nothing from the row", async () => {
     const log = vi.spyOn(console, "error").mockImplementation(() => undefined);
-    const { db } = database(() => ({
-      body: [
-        {
-          id: TASK_ID,
-          event_id: TASK_ID,
-          description: "Fine",
-          due_date: "2040-01-01",
-          events: { name: "Meeting" },
-        },
-        {
-          id: "22222222-2222-4222-8222-222222222222",
-          event_id: TASK_ID,
-          description: "canary row",
-          due_date: "not a date",
-          events: { name: "Meeting" },
-        },
-      ],
-    }));
+    // The task, its event, its text, its due date and the event's name, in that order.
+    const { db } = database((request) =>
+      sqlTarget(request.target) === "select tasks"
+        ? {
+            body: [
+              [TASK_ID, TASK_ID, "Fine", "2040-01-01", "Meeting"],
+              [
+                "22222222-2222-4222-8222-222222222222",
+                TASK_ID,
+                "canary row",
+                "not a date",
+                "Meeting",
+              ],
+            ],
+          }
+        : { body: [] },
+    );
     const { discord, edits } = fakeDiscord();
 
     await run(

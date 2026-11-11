@@ -6,6 +6,11 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as endpoint from "../../api/cron/reminders.ts";
 import { vercelConfig } from "../../test/support/json.ts";
+import {
+  serverError,
+  sqlTarget,
+  testDatabaseUrl,
+} from "../../test/support/sql-client.ts";
 import { STALE_CLAIM_MS } from "./plan.ts";
 import {
   DATABASE_CALL_MS,
@@ -49,6 +54,20 @@ vi.mock("../discord/client.ts", async (original) => {
       clients.made.push(client);
       return client;
     },
+  };
+});
+
+/** What the database answers the reads built with Drizzle. Each test may replace it. */
+const sqlReads = vi.hoisted(() => ({
+  answer: (call: { sql: string }): unknown => ({ rows: [], sql: call.sql }),
+}));
+
+vi.mock("../db/pool.ts", async () => {
+  const { recordingSql } = await import("../../test/support/sql-client.ts");
+  return {
+    poolDatabase: () =>
+      recordingSql((call) => sqlReads.answer(call) as { rows: unknown[] }).sql,
+    closePool: () => Promise.resolve(),
   };
 });
 
@@ -98,6 +117,47 @@ function candidateRow() {
   };
 }
 
+/** The candidate as the planner's read returns it: the selected values, in order. */
+function candidateValues(): unknown[] {
+  const row = candidateRow();
+  return [
+    row.id,
+    row.event_id,
+    row.guild_id,
+    row.assignee_id,
+    row.description,
+    row.due_date,
+    row.status,
+    row.updated_at,
+    ...Object.values(row.events),
+    row.reminder_log,
+  ];
+}
+
+/** Answers the reads: one candidate task if asked, this forum, and a succeeded run. */
+function reads({
+  candidate = false,
+  forum,
+}: { candidate?: boolean; forum?: string | undefined } = {}) {
+  return ({ sql }: { sql: string }) => {
+    const target = sqlTarget(sql);
+    const forumRows = forum === undefined ? [] : [[GUILD, FORUM, forum]];
+    if (target === "select tasks") {
+      return { rows: candidate ? [candidateValues()] : [] };
+    }
+    if (target === "select managed_channels") {
+      return { rows: forumRows };
+    }
+    if (target === "select events" && sql.includes('join "managed_channels"')) {
+      return { rows: sql.includes('"thread_id" = $') ? forumRows : [] };
+    }
+    if (target === "select job_runs") {
+      return { rows: [Object.values(jobRow("succeeded", null))] };
+    }
+    return { rows: [] };
+  };
+}
+
 function jobRow(status: string, error: string | null) {
   return {
     id: RUN_ID,
@@ -115,6 +175,8 @@ beforeEach(() => {
   clients.options = [];
   clients.made = [];
   databases.made = [];
+  sqlReads.answer = reads();
+  vi.stubEnv("DATABASE_URL", testDatabaseUrl());
   fetchMock.mockReset();
   vi.stubGlobal("fetch", fetchMock);
   vi.stubEnv("CRON_SECRET", SECRET);
@@ -277,6 +339,7 @@ describe("an authorized request", () => {
         Response.json({ code: "XX000", message: canary }, { status: 500 }),
       ),
     );
+    sqlReads.answer = () => serverError("XX000", canary);
     const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     const response = await get(authorized);
     expect(response.status).toBe(500);
@@ -298,6 +361,7 @@ describe("an authorized request", () => {
   it("builds a new Discord client and database handle on each run", async () => {
     // The first run's token is refused. The second must ask Discord afresh, and send.
     let tokenRefused = true;
+    sqlReads.answer = reads({ candidate: true, forum: "active" });
     fetchMock.mockImplementation((input, init) => {
       const url = input as string;
       if (url.startsWith("https://discord.com")) {
@@ -366,6 +430,7 @@ describe("the Discord client the function builds", () => {
    * between the reminder and the send. Discord would accept the send.
    */
   function worldWhereForumIs(status: string | undefined) {
+    sqlReads.answer = reads({ candidate: true, forum: status });
     fetchMock.mockImplementation((input, init) => {
       const url = input as string;
       if (url.startsWith("https://discord.com")) {

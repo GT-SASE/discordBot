@@ -18,7 +18,7 @@ describe("database lint rules", () => {
     const loaded = (await import(CONFIG_URL)) as { default: Linter.Config[] };
     blocks = loaded.default.filter((block) => block.name?.startsWith("db/"));
     linter = new Linter();
-    expect(blocks).toHaveLength(2);
+    expect(blocks).toHaveLength(3);
   });
 
   const problems = (code: string, filename = "src/db/sample.ts") =>
@@ -45,8 +45,6 @@ describe("database lint rules", () => {
       "or",
       "match",
       "order",
-      "select",
-      "from",
       "textSearch",
       "rpc",
       "eq",
@@ -123,11 +121,56 @@ describe("database lint rules", () => {
       expect(problems(`q.ilike("name", searchPattern(term));`)).toEqual([]);
     });
 
-    it("lets .or() take only a literal or the page helper", () => {
+    it("lets .or() take only a literal", () => {
       refused(`q.or(term);`);
       refused(`q.or(helper(term));`);
       expect(problems(`q.or("a.eq.1");`)).toEqual([]);
-      expect(problems(`q.or(keysetAfter(date, id));`)).toEqual([]);
+    });
+
+    it("names a table by a string or a schema table, never anything built", () => {
+      refused("db.from(`events${x}`);");
+      refused(`db.from(pick(name));`);
+      expect(problems(`sql.select(COLUMNS).from(events);`)).toEqual([]);
+    });
+
+    it("refuses raw SQL, and SQL built any way but the tagged template", () => {
+      refused("sql.raw(`DELETE FROM ${table}`);");
+      refused(`const raw = sql.raw;`);
+      refused(`sql(text);`);
+      refused(`db.execute(text);`);
+      refused("db.execute(`SELECT ${x}`);");
+      expect(problems("db.execute(sql`SELECT public.f(${x})`);")).toEqual([]);
+    });
+
+    it("refuses selecting or returning every column", () => {
+      refused(`sql.select().from(events);`);
+      refused(`sql.update(tasks).set({ name }).returning();`);
+      expect(problems(`sql.select({ id: events.id }).from(events);`)).toEqual(
+        [],
+      );
+    });
+
+    it("refuses reaching the driver behind Drizzle, and named prepared statements", () => {
+      refused(`db.$client.query("DELETE FROM tasks");`);
+      refused(`q.prepare("named");`);
+    });
+
+    it("refuses inArray() and ilike() values that skip a validator", () => {
+      refused(`inArray(events.id, ids);`);
+      refused("ilike(events.name, `%${term}%`);");
+      expect(problems(`inArray(events.id, uuidList(ids));`)).toEqual([]);
+      expect(problems(`ilike(events.name, searchPattern(term));`)).toEqual([]);
+    });
+
+    it("refuses spread, computed keys or a variable in Drizzle writes", () => {
+      refused(`sql.update(tasks).set({ ...input });`);
+      refused(`sql.update(tasks).set({ [column]: value });`);
+      refused(`sql.update(tasks).set(input);`);
+      refused(`sql.insert(tasks).values(input);`);
+      refused(`sql.insert(tasks).values({ ...input });`);
+      expect(
+        problems(`sql.insert(tasks).values({ name }).returning(COLUMNS);`),
+      ).toEqual([]);
     });
 
     it("refuses spread, computed keys or a variable in RPC arguments and writes", () => {
@@ -136,9 +179,7 @@ describe("database lint rules", () => {
       refused(`db.rpc("claim_reminder", input);`);
       refused(`q.update({ ...input });`);
       refused(`q.update({ [column]: value });`);
-      refused(`q.update(input);`);
       refused(`q.insert({ [column]: value });`);
-      refused(`q.insert(input);`);
     });
 
     it("accepts literal RPC arguments and writes", () => {
@@ -186,6 +227,21 @@ describe("database lint rules", () => {
         refused(`import { rest } from "${path}";`, OUTSIDE);
       },
     );
+
+    it.each([
+      `import { drizzle } from "drizzle-orm/node-postgres";`,
+      `import { eq } from "drizzle-orm";`,
+      `import pg from "pg";`,
+      `import { PGlite } from "@electric-sql/pglite";`,
+    ])("refuses loading a driver in the bot's code: %s", (code) => {
+      refused(code, OUTSIDE);
+      refused(code, "api/x.ts");
+    });
+
+    it("lets tests and scripts set a database up", () => {
+      expect(problems(`import pg from "pg";`, "test/db/x.ts")).toEqual([]);
+      expect(problems(`import pg from "pg";`, "scripts/x.ts")).toEqual([]);
+    });
 
     it("allows importing the opaque client and the functions", () => {
       expect(

@@ -41,6 +41,7 @@ import {
   queryAs,
 } from "./harness.ts";
 import { postgrestShim } from "./postgrest-shim.ts";
+import { testDatabaseUrl } from "../support/sql-client.ts";
 
 const pending = vi.hoisted(() => ({ work: [] as Promise<unknown>[] }));
 
@@ -49,6 +50,25 @@ vi.mock("@vercel/functions", () => ({
     pending.work.push(work);
   },
 }));
+
+/** The migrated database, for the client the function builds from its settings. */
+const current = vi.hoisted(() => ({
+  database: undefined as PGlite | undefined,
+}));
+
+vi.mock("../../src/db/pool.ts", async () => {
+  const { pgliteSql } = await import("../support/sql-client.ts");
+  return {
+    poolDatabase: () =>
+      pgliteSql(() => {
+        if (current.database === undefined) {
+          throw new Error("the database is not set up");
+        }
+        return current.database;
+      }),
+    closePool: () => Promise.resolve(),
+  };
+});
 
 const { publicKey, privateKey } = generateKeyPairSync("ed25519");
 
@@ -141,6 +161,7 @@ async function assignOn(eventId: string): Promise<void> {
 describe("the client built by liveDependencies", () => {
   beforeAll(async () => {
     database = await createMigratedDb();
+    current.database = database;
     await queryAs(
       database,
       "bot_app",
@@ -166,6 +187,7 @@ describe("the client built by liveDependencies", () => {
     vi.stubEnv("DISCORD_BOT_TOKEN", ["test", "bot", "token"].join("-"));
     vi.stubEnv("SUPABASE_URL", TEST_ORIGIN);
     vi.stubEnv("SUPABASE_SECRET_KEY", TEST_SECRET_KEY);
+    vi.stubEnv("DATABASE_URL", testDatabaseUrl());
     const shim = postgrestShim(database);
     vi.stubGlobal("fetch", ((input, init) =>
       (typeof input === "string" || input instanceof URL

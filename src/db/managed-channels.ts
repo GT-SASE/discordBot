@@ -1,6 +1,9 @@
 import { isSnowflake } from "../lib/snowflake.ts";
 import type { DbClient } from "./client.ts";
-import { rest } from "./internal.ts";
+import { and, asc, desc, eq, inArray, isNull } from "drizzle-orm";
+import { EVENT_COLUMNS, MANAGED_CHANNEL_COLUMNS } from "./columns.ts";
+import { rest, run } from "./internal.ts";
+import { events, managedChannels } from "./schema.ts";
 import { refused, type DbResult } from "./errors.ts";
 import {
   booleanValue,
@@ -13,7 +16,6 @@ import {
   parseManagedChannel,
   type EventRow,
   type ManagedChannel,
-  type ParsedRow,
 } from "./types.ts";
 import { isSnowflakeList, snowflakeList } from "./validate.ts";
 
@@ -27,23 +29,19 @@ export async function getManagedChannel(
     return refused();
   }
   return oneOrNone(
-    await rest(db)
-      .from("managed_channels")
-      .select("guild_id,channel_id,status")
-      .eq("guild_id", guildId)
-      .eq("channel_id", channelId)
-      .limit(1),
+    await run(db, (sql) =>
+      sql
+        .select(MANAGED_CHANNEL_COLUMNS)
+        .from(managedChannels)
+        .where(
+          and(
+            eq(managedChannels.guildId, guildId),
+            eq(managedChannels.channelId, channelId),
+          ),
+        )
+        .limit(1),
+    ),
     parseManagedChannel,
-  );
-}
-
-function embeddedForum(raw: unknown): ParsedRow<ManagedChannel> {
-  return parseManagedChannel(
-    typeof raw === "object" &&
-      raw !== null &&
-      Object.hasOwn(raw, "managed_channels")
-      ? (raw as Record<string, unknown>).managed_channels
-      : undefined,
   );
 }
 
@@ -60,14 +58,27 @@ export async function getEventThreadForum(
     return refused();
   }
   return oneOrNone(
-    await rest(db)
-      .from("events")
-      .select("managed_channels!inner(guild_id,channel_id,status)")
-      .eq("guild_id", guildId)
-      .eq("thread_id", threadId)
-      .is("deleted_at", null)
-      .limit(1),
-    embeddedForum,
+    await run(db, (sql) =>
+      sql
+        .select(MANAGED_CHANNEL_COLUMNS)
+        .from(events)
+        .innerJoin(
+          managedChannels,
+          and(
+            eq(managedChannels.guildId, events.guildId),
+            eq(managedChannels.channelId, events.channelId),
+          ),
+        )
+        .where(
+          and(
+            eq(events.guildId, guildId),
+            eq(events.threadId, threadId),
+            isNull(events.deletedAt),
+          ),
+        )
+        .limit(1),
+    ),
+    parseManagedChannel,
   );
 }
 
@@ -79,12 +90,14 @@ export async function listManagedChannels(
     return refused();
   }
   return cappedList(
-    await rest(db)
-      .from("managed_channels")
-      .select("guild_id,channel_id,status")
-      .eq("guild_id", guildId)
-      .order("channel_id")
-      .limit(MAX_CHANNELS + 1),
+    await run(db, (sql) =>
+      sql
+        .select(MANAGED_CHANNEL_COLUMNS)
+        .from(managedChannels)
+        .where(eq(managedChannels.guildId, guildId))
+        .orderBy(asc(managedChannels.channelId))
+        .limit(MAX_CHANNELS + 1),
+    ),
     parseManagedChannel,
     MAX_CHANNELS,
   );
@@ -95,13 +108,14 @@ export async function listActiveManagedChannels(
   db: DbClient,
 ): Promise<DbResult<CappedList<ManagedChannel>>> {
   return cappedList(
-    await rest(db)
-      .from("managed_channels")
-      .select("guild_id,channel_id,status")
-      .eq("status", "active")
-      .order("guild_id")
-      .order("channel_id")
-      .limit(MAX_CHANNELS + 1),
+    await run(db, (sql) =>
+      sql
+        .select(MANAGED_CHANNEL_COLUMNS)
+        .from(managedChannels)
+        .where(eq(managedChannels.status, "active"))
+        .orderBy(asc(managedChannels.guildId), asc(managedChannels.channelId))
+        .limit(MAX_CHANNELS + 1),
+    ),
     parseManagedChannel,
     MAX_CHANNELS,
   );
@@ -116,13 +130,19 @@ export async function listManagedChannelsByIds(
     return refused();
   }
   return cappedList(
-    await rest(db)
-      .from("managed_channels")
-      .select("guild_id,channel_id,status")
-      .eq("guild_id", guildId)
-      .in("channel_id", snowflakeList(channelIds))
-      .order("channel_id")
-      .limit(MAX_CHANNELS + 1),
+    await run(db, (sql) =>
+      sql
+        .select(MANAGED_CHANNEL_COLUMNS)
+        .from(managedChannels)
+        .where(
+          and(
+            eq(managedChannels.guildId, guildId),
+            inArray(managedChannels.channelId, snowflakeList(channelIds)),
+          ),
+        )
+        .orderBy(asc(managedChannels.channelId))
+        .limit(MAX_CHANNELS + 1),
+    ),
     parseManagedChannel,
     MAX_CHANNELS,
   );
@@ -144,18 +164,21 @@ export async function listRecentEventsInChannel(
     return refused();
   }
   return cappedList(
-    await rest(db)
-      .from("events")
-      .select(
-        "id,guild_id,channel_id,name,event_date,thread_id,overview_message_id,status,thread_status,created_by,deleted_at,created_at",
-      )
-      .eq("guild_id", guildId)
-      .eq("channel_id", channelId)
-      .eq("thread_status", "active")
-      .is("deleted_at", null)
-      .order("updated_at", { ascending: false })
-      .order("id")
-      .limit(limit + 1),
+    await run(db, (sql) =>
+      sql
+        .select(EVENT_COLUMNS)
+        .from(events)
+        .where(
+          and(
+            eq(events.guildId, guildId),
+            eq(events.channelId, channelId),
+            eq(events.threadStatus, "active"),
+            isNull(events.deletedAt),
+          ),
+        )
+        .orderBy(desc(events.updatedAt), asc(events.id))
+        .limit(limit + 1),
+    ),
     parseEvent,
     limit,
   );

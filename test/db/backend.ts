@@ -5,44 +5,64 @@
  */
 
 import { createHmac } from "node:crypto";
+import { drizzle } from "drizzle-orm/node-postgres";
 import pg from "pg";
-import { createDbClient, type DbClient } from "../../src/db/client.ts";
+import {
+  createDbClient,
+  type DbClient,
+  type SqlDatabase,
+} from "../../src/db/client.ts";
 import { TEST_ORIGIN, TEST_SECRET_KEY } from "../support/mock-postgrest.ts";
-import { createMigratedDb, pgConnection, type Connection } from "./harness.ts";
+import { pgliteSql } from "../support/sql-client.ts";
+import {
+  BOT_APP,
+  createMigratedDb,
+  pgConnection,
+  type Connection,
+} from "./harness.ts";
 import { postgrestShim } from "./postgrest-shim.ts";
 
 export interface Backend {
   /** A superuser connection, for setting up rows the bot's role cannot write. */
   connection: Connection;
   db: DbClient;
-  /** A client that runs `before` ahead of each request, to stage a race at that point. */
+  /**
+   * A client that runs `before` ahead of each request, to stage a race at that point.
+   * A statement built with Drizzle comes as method `SQL` and its text.
+   */
   dbWith: (before: (method: string, path: string) => Promise<void>) => DbClient;
   close: () => Promise<unknown>;
 }
 
-function clientFor(send: typeof fetch): DbClient {
+type SqlFor = (
+  before?: (method: string, path: string) => Promise<void>,
+) => SqlDatabase;
+
+function clientFor(send: typeof fetch, sql: SqlDatabase): DbClient {
   return createDbClient({
     url: TEST_ORIGIN,
     secretKey: TEST_SECRET_KEY,
     fetch: send,
+    sql,
   });
 }
 
 function withBackend(
   send: typeof fetch,
+  sqlFor: SqlFor,
   connection: Connection,
   close: () => Promise<unknown>,
 ): Backend {
   return {
     connection,
-    db: clientFor(send),
+    db: clientFor(send, sqlFor()),
     dbWith: (before) =>
       clientFor(async (input, init) => {
         const url =
           typeof input === "string" || input instanceof URL ? input : input.url;
         await before(init?.method ?? "GET", new URL(url).pathname);
         return send(input, init);
-      }),
+      }, sqlFor(before)),
     close,
   };
 }
@@ -98,16 +118,35 @@ function fetchThroughPostgrest(baseUrl: string, secret: string): typeof fetch {
 export async function openBackend(): Promise<Backend> {
   const postgrestUrl = process.env.POSTGREST_URL;
   if (postgrestUrl !== undefined && postgrestUrl !== "") {
-    const client = new pg.Client({
-      connectionString: required("POSTGREST_DATABASE_URL"),
-    });
+    const connectionString = required("POSTGREST_DATABASE_URL");
+    const client = new pg.Client({ connectionString });
     await client.connect();
+    // One connection that stays bot_app, so the grants apply as they will in production.
+    const botClient = new pg.Client({ connectionString });
+    await botClient.connect();
+    await botClient.query(`SET ROLE ${BOT_APP}`);
+    const sql = drizzle({ client: botClient });
     return withBackend(
       fetchThroughPostgrest(postgrestUrl, required("PGRST_JWT_SECRET")),
+      () => sql,
       pgConnection(client),
-      () => client.end(),
+      () => Promise.all([client.end(), botClient.end()]),
     );
   }
   const database = await createMigratedDb();
-  return withBackend(postgrestShim(database), database, () => database.close());
+  return withBackend(
+    postgrestShim(database),
+    (before) =>
+      pgliteSql(
+        database,
+        before === undefined
+          ? undefined
+          : async (call) => {
+              await before("SQL", call.sql);
+              return undefined;
+            },
+      ),
+    database,
+    () => database.close(),
+  );
 }

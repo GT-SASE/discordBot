@@ -6,21 +6,36 @@
 
 import { PostgrestClient } from "@supabase/postgrest-js";
 import { ConfigError } from "../lib/config-error.ts";
+import { getDatabaseUrl } from "../lib/env.ts";
 import {
   rebuildWithDeadline,
   registerClient,
+  sqlDatabase,
   type DbClient,
   type RestClient,
+  type SqlDatabase,
 } from "./internal.ts";
+import { closePool, poolDatabase } from "./pool.ts";
 import type { Database } from "./types.ts";
 
-export type { DbClient };
+export type { DbClient, SqlDatabase };
 
 export interface DbSettings {
   readonly url: string;
   readonly secretKey: string;
   /** Replaces the network layer, for tests. */
   readonly fetch?: typeof globalThis.fetch;
+  /** Where the queries built with Drizzle go. See `poolDatabase`. */
+  readonly sql: SqlDatabase;
+}
+
+/**
+ * Closes the connections of a client from `createDbFromEnv`, and of every client made
+ * from it with `withDeadline`. For a caller done with the client, so a warm instance
+ * keeps no connection between runs. Does nothing for any other client.
+ */
+export async function closeDb(db: DbClient): Promise<void> {
+  await closePool(sqlDatabase(db));
 }
 
 const SECRET_KEY = /^sb_secret_[\x21-\x7e]+$/;
@@ -55,7 +70,7 @@ export function createDbClient(settings: DbSettings): DbClient {
   if ("window" in globalThis || "document" in globalThis) {
     throw new Error("The database client is server-side only");
   }
-  const { url, secretKey, fetch: send = globalThis.fetch } = settings;
+  const { url, secretKey, fetch: send = globalThis.fetch, sql } = settings;
   const origin = projectOrigin(url);
   if (!SECRET_KEY.test(secretKey)) {
     throw new ConfigError(
@@ -81,7 +96,12 @@ export function createDbClient(settings: DbSettings): DbClient {
     });
 
   const register = (deadlineMs: number): DbClient =>
-    registerClient({ client: build(deadlineMs), withDeadline: register });
+    registerClient({
+      client: build(deadlineMs),
+      sql,
+      deadlineMs,
+      withDeadline: register,
+    });
 
   return register(DEFAULT_DEADLINE_MS);
 }
@@ -111,7 +131,11 @@ export function createDbFromEnv(): DbClient {
   if (secretKey === undefined || secretKey === "") {
     throw new ConfigError("SUPABASE_SECRET_KEY", "must be set");
   }
-  return createDbClient({ url, secretKey });
+  return createDbClient({
+    url,
+    secretKey,
+    sql: poolDatabase(getDatabaseUrl()),
+  });
 }
 
 let client: DbClient | undefined;

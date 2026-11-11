@@ -31,6 +31,13 @@ import {
   testSnowflake,
   type RecordedRequest,
 } from "./mock-postgrest.ts";
+import {
+  asSelected,
+  comparisons,
+  limitOf,
+  sqlTarget,
+  type SqlCall,
+} from "./sql-client.ts";
 
 const { publicKey, privateKey } = generateKeyPairSync("ed25519");
 const PUBLIC_KEY_HEX = publicKey
@@ -285,7 +292,10 @@ export interface DbState {
   claimed: Set<string>;
   /** Event rows, for what reads them by channel or ID. */
   events?: Record<string, unknown>[];
-  /** Fails a request whose path holds this text, with this status and code. */
+  /**
+   * Fails a request whose path holds this text, with this status and code. A statement
+   * built with Drizzle has the path `select <table>` or `call <function>`.
+   */
   failing?: { path: string; status: number; code?: string };
 }
 
@@ -346,22 +356,6 @@ export function fakeDb(fields: Partial<DbState> = {}): {
     return { body: true };
   }
 
-  /** Answers with the filters getSetupDraft sends. */
-  function readDrafts(target: string) {
-    const query = new URLSearchParams(target.split("?")[1] ?? "");
-    const equal = (key: string) => query.get(key)?.replace(/^eq\./, "");
-    const after = query.get("created_at")?.replace(/^gt\./, "") ?? "";
-    return {
-      body: state.drafts.filter(
-        (draft) =>
-          draft.guild_id === equal("guild_id") &&
-          draft.actor_id === equal("actor_id") &&
-          draft.fingerprint === equal("fingerprint") &&
-          Date.parse(draft.created_at) > Date.parse(after),
-      ),
-    };
-  }
-
   function configChange(args: Record<string, unknown>) {
     if (
       state.config === null ||
@@ -393,8 +387,70 @@ export function fakeDb(fields: Partial<DbState> = {}): {
     return { body: state.config.version };
   }
 
+  /** Rows that pass every `column = $n` and `created_at > $n` the statement holds. */
+  function matching(
+    call: SqlCall,
+    rows: readonly Record<string, unknown>[],
+  ): Record<string, unknown>[] {
+    const filters = comparisons(call);
+    const limit = limitOf(call);
+    return rows
+      .map((row) => ({ ...row }))
+      .filter((row) =>
+        [...filters].every(([key, value]) => {
+          const [column = "", operator] = key.split(" ");
+          if (!(column in row)) {
+            return true;
+          }
+          return operator === ">"
+            ? Date.parse(String(row[column])) > Date.parse(String(value))
+            : operator === "="
+              ? row[column] === value
+              : true;
+        }),
+      )
+      .slice(0, limit);
+  }
+
+  /** Answers the reads src/db builds with Drizzle, from the same state. */
+  function read(call: SqlCall) {
+    const [, table] = sqlTarget(call.sql).split(" ");
+    const answer = (rows: readonly object[]) => ({
+      body: asSelected(
+        call.sql,
+        matching(call, rows as readonly Record<string, unknown>[]),
+      ),
+    });
+    switch (table) {
+      case "guild_config":
+        return answer(state.config === null ? [] : [state.config]);
+      case "managed_channels":
+        return answer(state.channels);
+      case "setup_drafts":
+        return answer(state.drafts);
+      case "config_audit":
+        return answer(state.changes);
+      case "events":
+        return answer(state.events ?? []);
+      case "tasks": {
+        const channel = comparisons(call).get("channel_id =");
+        const count = state.openTasks.get(String(channel)) ?? 0;
+        return {
+          body: Array.from({ length: count }, (_, index) => [
+            `00000000-0000-4000-8000-${String(index).padStart(12, "0")}`,
+          ]),
+        };
+      }
+      default:
+        return { status: 500, body: { message: "unexpected test request" } };
+    }
+  }
+
   const { db, requests } = mockPostgrest((request) => {
-    const path = request.target.split("?")[0] ?? "";
+    const path =
+      request.method === "SQL"
+        ? sqlTarget(request.target)
+        : (request.target.split("?")[0] ?? "");
     if (state.failing !== undefined && path.includes(state.failing.path)) {
       return {
         status: state.failing.status,
@@ -403,6 +459,12 @@ export function fakeDb(fields: Partial<DbState> = {}): {
           message: "canary row text",
         },
       };
+    }
+    if (request.method === "SQL") {
+      return read({
+        sql: request.target,
+        params: request.body as unknown[],
+      });
     }
     const args = (request.body ?? {}) as Record<string, unknown>;
     if (path.endsWith("/rpc/claim_interaction")) {
@@ -417,44 +479,8 @@ export function fakeDb(fields: Partial<DbState> = {}): {
     if (path.endsWith("/rpc/save_setup_draft")) {
       return saveDraft(args);
     }
-    if (path.endsWith("/setup_drafts")) {
-      return readDrafts(request.target);
-    }
     if (path.endsWith("/rpc/apply_config_change")) {
       return configChange(args);
-    }
-    if (path.endsWith("/guild_config")) {
-      return { body: state.config === null ? [] : [{ ...state.config }] };
-    }
-    if (path.endsWith("/managed_channels")) {
-      const match = /channel_id=eq\.([0-9]+)/.exec(request.target);
-      return {
-        body: state.channels.filter(
-          (row) => match === null || row.channel_id === match[1],
-        ),
-      };
-    }
-    if (path.endsWith("/events")) {
-      const id = /[?&]id=eq\.([0-9a-f-]+)/.exec(request.target)?.[1];
-      const limit = /[?&]limit=([0-9]+)/.exec(request.target)?.[1];
-      return {
-        body: (state.events ?? [])
-          .filter((row) => id === undefined || row.id === id)
-          .slice(0, limit === undefined ? undefined : Number(limit)),
-      };
-    }
-    if (path.endsWith("/config_audit")) {
-      return { body: state.changes };
-    }
-    if (path.endsWith("/tasks")) {
-      const match = /events\.channel_id=eq\.([0-9]+)/.exec(request.target);
-      const count = state.openTasks.get(match?.[1] ?? "") ?? 0;
-      return {
-        body: Array.from({ length: count }, (_, index) => ({
-          id: `00000000-0000-4000-8000-${String(index).padStart(12, "0")}`,
-          events: { channel_id: match?.[1] },
-        })),
-      };
     }
     return { status: 500, body: { message: "unexpected test request" } };
   });

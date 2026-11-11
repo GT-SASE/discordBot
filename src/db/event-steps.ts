@@ -13,7 +13,26 @@ import type { DateOnly } from "../lib/dates.ts";
 import { isSnowflake } from "../lib/snowflake.ts";
 import type { DbClient } from "./client.ts";
 import { failure, refused, type DbResult } from "./errors.ts";
-import { rest } from "./internal.ts";
+import {
+  and,
+  asc,
+  eq,
+  gte,
+  inArray,
+  isNull,
+  lt,
+  sql as fragment,
+} from "drizzle-orm";
+import { selected } from "./columns.ts";
+import { rest, run } from "./internal.ts";
+import {
+  eventReminderLog,
+  eventStepAssignees,
+  eventSteps,
+  events,
+  guildConfig,
+  managedChannels,
+} from "./schema.ts";
 import {
   booleanValue,
   cappedList,
@@ -54,6 +73,42 @@ export const MAX_ASSIGNEES_PER_STEP = 10;
 export const MAX_FOOD_PICKUP_ASSIGNEES = 15;
 
 const MAX_USER_STEPS = 100;
+
+/** An event's four steps, as a JSON array of the named fields. */
+const STEPS_OF_EVENT = fragment<unknown>`coalesce((
+  SELECT json_agg(json_build_object(
+    'event_id', ${eventSteps.eventId},
+    'kind', ${eventSteps.kind},
+    'status', ${eventSteps.status},
+    'completed_at', ${eventSteps.completedAt},
+    'completed_by', ${eventSteps.completedBy},
+    'handoff_claimed_at', ${eventSteps.handoffClaimedAt},
+    'handoff_sent_at', ${eventSteps.handoffSentAt}))
+  FROM ${eventSteps}
+  WHERE ${eventSteps.eventId} = ${events.id} AND ${eventSteps.guildId} = ${events.guildId}
+), '[]'::json)`;
+
+/** The kind and status of each of an event's steps, as a JSON array. */
+const STEP_STATUSES_OF_EVENT = fragment<unknown>`coalesce((
+  SELECT json_agg(json_build_object('kind', ${eventSteps.kind}, 'status', ${eventSteps.status}))
+  FROM ${eventSteps}
+  WHERE ${eventSteps.eventId} = ${events.id} AND ${eventSteps.guildId} = ${events.guildId}
+), '[]'::json)`;
+
+/** An event's live assignments, as a JSON array of the named fields. */
+const LIVE_ASSIGNEES_OF_EVENT = fragment<unknown>`coalesce((
+  SELECT json_agg(json_build_object(
+    'id', ${eventStepAssignees.id},
+    'event_id', ${eventStepAssignees.eventId},
+    'kind', ${eventStepAssignees.kind},
+    'user_id', ${eventStepAssignees.userId},
+    'assigned_by', ${eventStepAssignees.assignedBy},
+    'created_at', ${eventStepAssignees.createdAt}))
+  FROM ${eventStepAssignees}
+  WHERE ${eventStepAssignees.eventId} = ${events.id}
+    AND ${eventStepAssignees.guildId} = ${events.guildId}
+    AND ${eventStepAssignees.removedAt} IS NULL
+), '[]'::json)`;
 const MAX_REMINDER_EVENTS = 500;
 const MAX_STALE_CLAIMS = 500;
 
@@ -102,17 +157,25 @@ export async function listEventWorkflows(
     return { ok: true, value: { rows: [], excluded: [] } };
   }
   return rowList(
-    await rest(db)
-      .from("events")
-      .select(
-        "id,pickup_time,event_steps(event_id,kind,status,completed_at,completed_by,handoff_claimed_at,handoff_sent_at),event_step_assignees(id,event_id,kind,user_id,assigned_by,created_at)",
-      )
-      .eq("guild_id", guildId)
-      .in("id", uuidList(eventIds))
-      .is("deleted_at", null)
-      .is("event_step_assignees.removed_at", null)
-      .order("id")
-      .limit(MAX_ID_LIST),
+    await run(db, (sql) =>
+      sql
+        .select({
+          id: events.id,
+          pickup_time: events.pickupTime,
+          event_steps: selected(STEPS_OF_EVENT),
+          event_step_assignees: selected(LIVE_ASSIGNEES_OF_EVENT),
+        })
+        .from(events)
+        .where(
+          and(
+            eq(events.guildId, guildId),
+            inArray(events.id, uuidList(eventIds)),
+            isNull(events.deletedAt),
+          ),
+        )
+        .orderBy(asc(events.id))
+        .limit(MAX_ID_LIST),
+    ),
     parseEventWorkflow,
   );
 }
@@ -315,19 +378,39 @@ export async function listOpenStepsForUser(
     return refused();
   }
   const list = cappedList(
-    await rest(db)
-      .from("event_step_assignees")
-      .select(
-        "id,kind,events!inner(id,name,event_date,pickup_time,event_steps(kind,status))",
-      )
-      .eq("guild_id", guildId)
-      .eq("user_id", userId)
-      .is("removed_at", null)
-      .eq("events.status", "active")
-      .is("events.deleted_at", null)
-      .order("created_at")
-      .order("id")
-      .limit(MAX_USER_STEPS + 1),
+    await run(db, (sql) =>
+      sql
+        .select({
+          id: eventStepAssignees.id,
+          kind: eventStepAssignees.kind,
+          events: {
+            id: events.id,
+            name: events.name,
+            event_date: events.eventDate,
+            pickup_time: events.pickupTime,
+            event_steps: selected(STEP_STATUSES_OF_EVENT),
+          },
+        })
+        .from(eventStepAssignees)
+        .innerJoin(
+          events,
+          and(
+            eq(events.id, eventStepAssignees.eventId),
+            eq(events.guildId, eventStepAssignees.guildId),
+          ),
+        )
+        .where(
+          and(
+            eq(eventStepAssignees.guildId, guildId),
+            eq(eventStepAssignees.userId, userId),
+            isNull(eventStepAssignees.removedAt),
+            eq(events.status, "active"),
+            isNull(events.deletedAt),
+          ),
+        )
+        .orderBy(asc(eventStepAssignees.createdAt), asc(eventStepAssignees.id))
+        .limit(MAX_USER_STEPS + 1),
+    ),
     parseUserStep,
     MAX_USER_STEPS,
   );
@@ -369,21 +452,66 @@ export async function listEventReminderCandidates(
     return refused();
   }
   return cappedList(
-    await rest(db)
-      .from("events")
-      .select(
-        "id,guild_id,name,event_date,thread_id,thread_status,created_by,thread_refusals,pickup_time,managed_channels!inner(guild_config!inner(timezone,officer_role_id)),event_steps(kind,status),event_step_assignees(id,kind,user_id,created_at),event_reminder_log(kind,reminder_date,state,claimed_at)",
-      )
-      .eq("status", "active")
-      .is("deleted_at", null)
-      .gte("event_date", fromDate)
-      .eq("managed_channels.status", "active")
-      .is("managed_channels.guild_config.reminders_enabled", true)
-      .is("event_step_assignees.removed_at", null)
-      .gte("event_reminder_log.reminder_date", fromDate)
-      .order("event_date")
-      .order("id")
-      .limit(MAX_REMINDER_EVENTS + 1),
+    await run(db, (sql) =>
+      sql
+        .select({
+          id: events.id,
+          guild_id: events.guildId,
+          name: events.name,
+          event_date: events.eventDate,
+          thread_id: events.threadId,
+          thread_status: events.threadStatus,
+          created_by: events.createdBy,
+          thread_refusals: events.threadRefusals,
+          pickup_time: events.pickupTime,
+          managed_channels: selected(fragment<unknown>`json_build_object(
+            'guild_config', json_build_object(
+              'timezone', ${guildConfig.timezone},
+              'officer_role_id', ${guildConfig.officerRoleId}))`),
+          event_steps: selected(STEP_STATUSES_OF_EVENT),
+          event_step_assignees: selected(fragment<unknown>`coalesce((
+            SELECT json_agg(json_build_object(
+              'id', ${eventStepAssignees.id},
+              'kind', ${eventStepAssignees.kind},
+              'user_id', ${eventStepAssignees.userId},
+              'created_at', ${eventStepAssignees.createdAt}))
+            FROM ${eventStepAssignees}
+            WHERE ${eventStepAssignees.eventId} = ${events.id}
+              AND ${eventStepAssignees.guildId} = ${events.guildId}
+              AND ${eventStepAssignees.removedAt} IS NULL
+          ), '[]'::json)`),
+          event_reminder_log: selected(fragment<unknown>`coalesce((
+            SELECT json_agg(json_build_object(
+              'kind', ${eventReminderLog.kind},
+              'reminder_date', ${eventReminderLog.reminderDate},
+              'state', ${eventReminderLog.state},
+              'claimed_at', ${eventReminderLog.claimedAt}))
+            FROM ${eventReminderLog}
+            WHERE ${eventReminderLog.eventId} = ${events.id}
+              AND ${eventReminderLog.reminderDate} >= ${fromDate}
+          ), '[]'::json)`),
+        })
+        .from(events)
+        .innerJoin(
+          managedChannels,
+          and(
+            eq(managedChannels.guildId, events.guildId),
+            eq(managedChannels.channelId, events.channelId),
+          ),
+        )
+        .innerJoin(guildConfig, eq(guildConfig.guildId, events.guildId))
+        .where(
+          and(
+            eq(events.status, "active"),
+            isNull(events.deletedAt),
+            gte(events.eventDate, fromDate),
+            eq(managedChannels.status, "active"),
+            eq(guildConfig.remindersEnabled, true),
+          ),
+        )
+        .orderBy(asc(events.eventDate), asc(events.id))
+        .limit(MAX_REMINDER_EVENTS + 1),
+    ),
     parseEventReminderCandidate,
     MAX_REMINDER_EVENTS,
   );
@@ -398,16 +526,31 @@ export async function listStaleEventReminderClaims(
     return refused();
   }
   return cappedList(
-    await rest(db)
-      .from("event_reminder_log")
-      .select("event_id,kind,reminder_date,claim_token,attempts,claimed_at")
-      .eq("state", "claimed")
-      .lt("claimed_at", claimedBefore.toISOString())
-      .order("claimed_at")
-      .order("event_id")
-      .order("kind")
-      .order("reminder_date")
-      .limit(MAX_STALE_CLAIMS + 1),
+    await run(db, (sql) =>
+      sql
+        .select({
+          event_id: eventReminderLog.eventId,
+          kind: eventReminderLog.kind,
+          reminder_date: eventReminderLog.reminderDate,
+          claim_token: eventReminderLog.claimToken,
+          attempts: eventReminderLog.attempts,
+          claimed_at: eventReminderLog.claimedAt,
+        })
+        .from(eventReminderLog)
+        .where(
+          and(
+            eq(eventReminderLog.state, "claimed"),
+            lt(eventReminderLog.claimedAt, claimedBefore.toISOString()),
+          ),
+        )
+        .orderBy(
+          asc(eventReminderLog.claimedAt),
+          asc(eventReminderLog.eventId),
+          asc(eventReminderLog.kind),
+          asc(eventReminderLog.reminderDate),
+        )
+        .limit(MAX_STALE_CLAIMS + 1),
+    ),
     parseEventReminderStaleClaim,
     MAX_STALE_CLAIMS,
   );

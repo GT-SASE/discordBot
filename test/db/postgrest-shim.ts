@@ -12,7 +12,7 @@
  */
 
 import type { PGlite } from "@electric-sql/pglite";
-import { queryAs } from "./harness.ts";
+import { onSessionAlone, queryAs } from "./harness.ts";
 
 interface Relation {
   table: string;
@@ -496,10 +496,5 @@ async function answer(
 export function postgrestShim(db: PGlite): typeof fetch {
   // queryAs changes the session's role, so two requests must not overlap on the one
   // connection PGlite has.
-  let previous: Promise<unknown> = Promise.resolve();
-  return (input, init) => {
-    const next = previous.then(() => answer(db, input, init));
-    previous = next.catch(() => undefined);
-    return next;
-  };
+  return (input, init) => onSessionAlone(db, () => answer(db, input, init));
 }

@@ -1,4 +1,5 @@
 import { createDbClient, type DbClient } from "../../src/db/client.ts";
+import { recordingSql, serverError } from "./sql-client.ts";
 
 export interface RecordedRequest {
   method: string;
@@ -20,14 +21,39 @@ export const TEST_SECRET_KEY = ["sb", "secret", "x".repeat(24)].join("_");
 
 export const TEST_ORIGIN = "https://project.example.test";
 
-/** A client whose network layer records each request and answers from `respond`. */
+/**
+ * A client whose network layer records each request and answers from `respond`. A
+ * statement built with Drizzle is recorded too, with method `SQL`, its text as the
+ * target and its parameters as the body. A status other than 200 fails it with the
+ * body's code, and a body that is a list answers it with those rows.
+ */
 export function mockPostgrest(
   respond: (request: RecordedRequest) => MockResponse = () => ({ body: [] }),
 ): { db: DbClient; requests: RecordedRequest[] } {
   const requests: RecordedRequest[] = [];
+  const { sql } = recordingSql((call) => {
+    const request: RecordedRequest = {
+      method: "SQL",
+      target: call.sql,
+      rawTarget: call.sql,
+      headers: new Headers(),
+      body: call.params,
+    };
+    requests.push(request);
+    const { status = 200, body = [] } = respond(request);
+    if (status !== 200) {
+      const code =
+        typeof body === "object" && body !== null && "code" in body
+          ? String(body.code)
+          : "XX000";
+      return serverError(code);
+    }
+    return { rows: Array.isArray(body) ? body : [] };
+  });
   const db = createDbClient({
     url: TEST_ORIGIN,
     secretKey: TEST_SECRET_KEY,
+    sql,
     fetch: (input, init) => {
       const url = new URL(
         typeof input === "string" || input instanceof URL ? input : input.url,

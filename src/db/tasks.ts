@@ -10,7 +10,14 @@
 import type { DateOnly } from "../lib/dates.ts";
 import { isSnowflake } from "../lib/snowflake.ts";
 import type { DbClient } from "./client.ts";
-import { rest } from "./internal.ts";
+import { and, asc, eq, gte, ilike, isNull, lte } from "drizzle-orm";
+import {
+  LIVE_TASK_CHOICE_COLUMNS,
+  TASK_CHOICE_COLUMNS,
+  TASK_COLUMNS,
+} from "./columns.ts";
+import { rest, run } from "./internal.ts";
+import { events, tasks } from "./schema.ts";
 import { refused, type DbResult } from "./errors.ts";
 import {
   cappedList,
@@ -52,6 +59,19 @@ export const MAX_TASKS_PER_EVENT = 100;
 export const MAX_TASK_ACTIONS_PER_OFFICER_PER_DAY = 50;
 /** Discord's limit for autocomplete choices. */
 const MAX_CHOICES = 25;
+
+/** A task's event, which is in the same guild by the foreign key. */
+const TASK_EVENT = and(
+  eq(events.id, tasks.eventId),
+  eq(events.guildId, tasks.guildId),
+);
+
+/** The task is live and its event is live and open. */
+const ON_OPEN_EVENT = and(
+  isNull(tasks.deletedAt),
+  eq(events.status, "active"),
+  isNull(events.deletedAt),
+);
 
 export interface TaskKey {
   guildId: string;
@@ -132,15 +152,19 @@ export async function getTask(
     return refused();
   }
   return oneOrNone(
-    await rest(db)
-      .from("tasks")
-      .select(
-        "id,event_id,guild_id,assignee_id,description,due_date,status,completed_at,created_by,deleted_at,updated_at",
-      )
-      .eq("id", key.taskId)
-      .eq("guild_id", key.guildId)
-      .is("deleted_at", null)
-      .limit(1),
+    await run(db, (sql) =>
+      sql
+        .select(TASK_COLUMNS)
+        .from(tasks)
+        .where(
+          and(
+            eq(tasks.id, key.taskId),
+            eq(tasks.guildId, key.guildId),
+            isNull(tasks.deletedAt),
+          ),
+        )
+        .limit(1),
+    ),
     parseTask,
   );
 }
@@ -157,18 +181,28 @@ export async function listOpenTasksForAssignee(
     return refused();
   }
   return cappedList(
-    await rest(db)
-      .from("tasks")
-      .select("id,event_id,description,due_date,events!inner(name)")
-      .eq("guild_id", guildId)
-      .eq("assignee_id", assigneeId)
-      .eq("status", "open")
-      .is("deleted_at", null)
-      .eq("events.status", "active")
-      .is("events.deleted_at", null)
-      .order("due_date")
-      .order("id")
-      .limit(MAX_TASKS + 1),
+    await run(db, (sql) =>
+      sql
+        .select({
+          id: tasks.id,
+          event_id: tasks.eventId,
+          description: tasks.description,
+          due_date: tasks.dueDate,
+          events: { name: events.name },
+        })
+        .from(tasks)
+        .innerJoin(events, TASK_EVENT)
+        .where(
+          and(
+            eq(tasks.guildId, guildId),
+            eq(tasks.assigneeId, assigneeId),
+            eq(tasks.status, "open"),
+            ON_OPEN_EVENT,
+          ),
+        )
+        .orderBy(asc(tasks.dueDate), asc(tasks.id))
+        .limit(MAX_TASKS + 1),
+    ),
     parseOpenTask,
     MAX_TASKS,
   );
@@ -189,15 +223,22 @@ export async function countOpenTasksInChannel(
     return refused();
   }
   const list = cappedList(
-    await rest(db)
-      .from("tasks")
-      .select("id,events!inner(channel_id)")
-      .eq("guild_id", guildId)
-      .eq("status", "open")
-      .is("deleted_at", null)
-      .eq("events.channel_id", channelId)
-      .is("events.deleted_at", null)
-      .limit(MAX_TASKS + 1),
+    await run(db, (sql) =>
+      sql
+        .select({ id: tasks.id })
+        .from(tasks)
+        .innerJoin(events, TASK_EVENT)
+        .where(
+          and(
+            eq(tasks.guildId, guildId),
+            eq(tasks.status, "open"),
+            isNull(tasks.deletedAt),
+            eq(events.channelId, channelId),
+            isNull(events.deletedAt),
+          ),
+        )
+        .limit(MAX_TASKS + 1),
+    ),
     parseTaskId,
     MAX_TASKS,
   );
@@ -224,18 +265,20 @@ export async function listEventTasks(
     return refused();
   }
   return cappedList(
-    await rest(db)
-      .from("tasks")
-      .select(
-        "id,event_id,guild_id,assignee_id,description,due_date,status,completed_at,created_by,deleted_at,updated_at",
-      )
-      .eq("guild_id", guildId)
-      .eq("event_id", eventId)
-      .is("deleted_at", null)
-      .order("status")
-      .order("due_date")
-      .order("id")
-      .limit(MAX_TASKS + 1),
+    await run(db, (sql) =>
+      sql
+        .select(TASK_COLUMNS)
+        .from(tasks)
+        .where(
+          and(
+            eq(tasks.guildId, guildId),
+            eq(tasks.eventId, eventId),
+            isNull(tasks.deletedAt),
+          ),
+        )
+        .orderBy(asc(tasks.status), asc(tasks.dueDate), asc(tasks.id))
+        .limit(MAX_TASKS + 1),
+    ),
     parseTask,
     MAX_TASKS,
   );
@@ -250,18 +293,22 @@ export async function searchOpenTasks(
     return refused();
   }
   return rowList(
-    await rest(db)
-      .from("tasks")
-      .select("id,description,due_date,events!inner(id)")
-      .eq("guild_id", guildId)
-      .eq("status", "open")
-      .is("deleted_at", null)
-      .eq("events.status", "active")
-      .is("events.deleted_at", null)
-      .ilike("description", searchPattern(term))
-      .order("due_date")
-      .order("id")
-      .limit(MAX_CHOICES),
+    await run(db, (sql) =>
+      sql
+        .select(TASK_CHOICE_COLUMNS)
+        .from(tasks)
+        .innerJoin(events, TASK_EVENT)
+        .where(
+          and(
+            eq(tasks.guildId, guildId),
+            eq(tasks.status, "open"),
+            ilike(tasks.description, searchPattern(term)),
+            ON_OPEN_EVENT,
+          ),
+        )
+        .orderBy(asc(tasks.dueDate), asc(tasks.id))
+        .limit(MAX_CHOICES),
+    ),
     parseTaskChoice,
   );
 }
@@ -278,18 +325,21 @@ export async function searchLiveTasks(
     return refused();
   }
   return rowList(
-    await rest(db)
-      .from("tasks")
-      .select("id,description,due_date,status,events!inner(id)")
-      .eq("guild_id", guildId)
-      .is("deleted_at", null)
-      .eq("events.status", "active")
-      .is("events.deleted_at", null)
-      .ilike("description", searchPattern(term))
-      .order("status")
-      .order("due_date")
-      .order("id")
-      .limit(MAX_CHOICES),
+    await run(db, (sql) =>
+      sql
+        .select(LIVE_TASK_CHOICE_COLUMNS)
+        .from(tasks)
+        .innerJoin(events, TASK_EVENT)
+        .where(
+          and(
+            eq(tasks.guildId, guildId),
+            ilike(tasks.description, searchPattern(term)),
+            ON_OPEN_EVENT,
+          ),
+        )
+        .orderBy(asc(tasks.status), asc(tasks.dueDate), asc(tasks.id))
+        .limit(MAX_CHOICES),
+    ),
     parseLiveTaskChoice,
   );
 }
@@ -304,17 +354,22 @@ export async function searchLiveTasksByIdPrefix(
   }
   const { low, high } = idPrefixRange(prefix);
   return rowList(
-    await rest(db)
-      .from("tasks")
-      .select("id,description,due_date,status,events!inner(id)")
-      .eq("guild_id", guildId)
-      .is("deleted_at", null)
-      .eq("events.status", "active")
-      .is("events.deleted_at", null)
-      .gte("id", low)
-      .lte("id", high)
-      .order("id")
-      .limit(MAX_CHOICES),
+    await run(db, (sql) =>
+      sql
+        .select(LIVE_TASK_CHOICE_COLUMNS)
+        .from(tasks)
+        .innerJoin(events, TASK_EVENT)
+        .where(
+          and(
+            eq(tasks.guildId, guildId),
+            gte(tasks.id, low),
+            lte(tasks.id, high),
+            ON_OPEN_EVENT,
+          ),
+        )
+        .orderBy(asc(tasks.id))
+        .limit(MAX_CHOICES),
+    ),
     parseLiveTaskChoice,
   );
 }
@@ -336,19 +391,23 @@ export async function searchOwnOpenTasks(
     return refused();
   }
   return rowList(
-    await rest(db)
-      .from("tasks")
-      .select("id,description,due_date,events!inner(id)")
-      .eq("guild_id", guildId)
-      .eq("assignee_id", assigneeId)
-      .eq("status", "open")
-      .is("deleted_at", null)
-      .eq("events.status", "active")
-      .is("events.deleted_at", null)
-      .ilike("description", searchPattern(term))
-      .order("due_date")
-      .order("id")
-      .limit(MAX_CHOICES),
+    await run(db, (sql) =>
+      sql
+        .select(TASK_CHOICE_COLUMNS)
+        .from(tasks)
+        .innerJoin(events, TASK_EVENT)
+        .where(
+          and(
+            eq(tasks.guildId, guildId),
+            eq(tasks.assigneeId, assigneeId),
+            eq(tasks.status, "open"),
+            ilike(tasks.description, searchPattern(term)),
+            ON_OPEN_EVENT,
+          ),
+        )
+        .orderBy(asc(tasks.dueDate), asc(tasks.id))
+        .limit(MAX_CHOICES),
+    ),
     parseTaskChoice,
   );
 }
@@ -363,18 +422,23 @@ export async function searchOpenTasksByIdPrefix(
   }
   const { low, high } = idPrefixRange(prefix);
   return rowList(
-    await rest(db)
-      .from("tasks")
-      .select("id,description,due_date,events!inner(id)")
-      .eq("guild_id", guildId)
-      .eq("status", "open")
-      .is("deleted_at", null)
-      .eq("events.status", "active")
-      .is("events.deleted_at", null)
-      .gte("id", low)
-      .lte("id", high)
-      .order("id")
-      .limit(MAX_CHOICES),
+    await run(db, (sql) =>
+      sql
+        .select(TASK_CHOICE_COLUMNS)
+        .from(tasks)
+        .innerJoin(events, TASK_EVENT)
+        .where(
+          and(
+            eq(tasks.guildId, guildId),
+            eq(tasks.status, "open"),
+            gte(tasks.id, low),
+            lte(tasks.id, high),
+            ON_OPEN_EVENT,
+          ),
+        )
+        .orderBy(asc(tasks.id))
+        .limit(MAX_CHOICES),
+    ),
     parseTaskChoice,
   );
 }
@@ -397,19 +461,24 @@ export async function searchOwnOpenTasksByIdPrefix(
   }
   const { low, high } = idPrefixRange(prefix);
   return rowList(
-    await rest(db)
-      .from("tasks")
-      .select("id,description,due_date,events!inner(id)")
-      .eq("guild_id", guildId)
-      .eq("assignee_id", assigneeId)
-      .eq("status", "open")
-      .is("deleted_at", null)
-      .eq("events.status", "active")
-      .is("events.deleted_at", null)
-      .gte("id", low)
-      .lte("id", high)
-      .order("id")
-      .limit(MAX_CHOICES),
+    await run(db, (sql) =>
+      sql
+        .select(TASK_CHOICE_COLUMNS)
+        .from(tasks)
+        .innerJoin(events, TASK_EVENT)
+        .where(
+          and(
+            eq(tasks.guildId, guildId),
+            eq(tasks.assigneeId, assigneeId),
+            eq(tasks.status, "open"),
+            gte(tasks.id, low),
+            lte(tasks.id, high),
+            ON_OPEN_EVENT,
+          ),
+        )
+        .orderBy(asc(tasks.id))
+        .limit(MAX_CHOICES),
+    ),
     parseTaskChoice,
   );
 }

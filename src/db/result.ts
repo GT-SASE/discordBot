@@ -1,4 +1,4 @@
-/** Turns PostgREST responses into results, with the row counts each caller expects. */
+/** Turns query outcomes into results, with the row counts each caller expects. */
 
 import { failure, failureFromResponse, type DbResult } from "./errors.ts";
 import type { ExcludedRow, RowParser } from "./types.ts";
@@ -17,7 +17,13 @@ export interface RowList<T> {
   readonly excluded: ExcludedRow[];
 }
 
-function responseRows(response: ApiResponse): DbResult<readonly unknown[]> {
+/** The rows a query returned, or why it failed. */
+export type Rows = DbResult<readonly unknown[]>;
+
+function responseRows(response: ApiResponse | Rows): Rows {
+  if ("ok" in response) {
+    return response;
+  }
   if (response.error !== null) {
     return failureFromResponse(response.error, response.status);
   }
@@ -47,7 +53,7 @@ function parseAll<T>(raw: readonly unknown[], parse: RowParser<T>): RowList<T> {
 }
 
 export function rowList<T>(
-  response: ApiResponse,
+  response: ApiResponse | Rows,
   parse: RowParser<T>,
 ): DbResult<RowList<T>> {
   const raw = responseRows(response);
@@ -56,7 +62,7 @@ export function rowList<T>(
 
 /** For a query that asked for `cap + 1` rows. The extra row only shows there are more. */
 export function cappedList<T>(
-  response: ApiResponse,
+  response: ApiResponse | Rows,
   parse: RowParser<T>,
   cap: number,
 ): DbResult<CappedList<T>> {
@@ -75,7 +81,7 @@ export function cappedList<T>(
 
 /** A read by key: at most one row. A row that fails its checks is a `bad_row` failure. */
 export function oneOrNone<T>(
-  response: ApiResponse,
+  response: ApiResponse | Rows,
   parse: RowParser<T>,
 ): DbResult<T | null> {
   const list = rowList(response, parse);
@@ -94,7 +100,7 @@ export function oneOrNone<T>(
  * that is absent, in another guild, or no longer meets the write's conditions.
  */
 export function exactlyOne<T>(
-  response: ApiResponse,
+  response: ApiResponse | Rows,
   parse: RowParser<T>,
 ): DbResult<T> {
   const raw = responseRows(response);

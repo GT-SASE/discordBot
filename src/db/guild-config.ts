@@ -2,7 +2,14 @@ import { hash } from "node:crypto";
 import { isUsableTimeZone } from "../lib/dates.ts";
 import { isSnowflake } from "../lib/snowflake.ts";
 import type { DbClient } from "./client.ts";
-import { rest } from "./internal.ts";
+import { and, desc, eq, gt } from "drizzle-orm";
+import {
+  CONFIG_CHANGE_COLUMNS,
+  GUILD_CONFIG_COLUMNS,
+  SETUP_DRAFT_COLUMNS,
+} from "./columns.ts";
+import { rest, run } from "./internal.ts";
+import { configAudit, guildConfig, setupDrafts } from "./schema.ts";
 import { refused, type DbResult } from "./errors.ts";
 import {
   booleanValue,
@@ -39,13 +46,13 @@ export async function getGuildConfig(
     return refused();
   }
   return oneOrNone(
-    await rest(db)
-      .from("guild_config")
-      .select(
-        "guild_id,officer_role_id,admin_role_id,eboard_role_id,events_committee_role_id,treasury_role_id,marketing_role_id,timezone,reminders_enabled,version",
-      )
-      .eq("guild_id", guildId)
-      .limit(1),
+    await run(db, (sql) =>
+      sql
+        .select(GUILD_CONFIG_COLUMNS)
+        .from(guildConfig)
+        .where(eq(guildConfig.guildId, guildId))
+        .limit(1),
+    ),
     parseGuildConfig,
   );
 }
@@ -222,19 +229,23 @@ export async function getSetupDraft(
     return refused();
   }
   const draft = oneOrNone(
-    await rest(db)
-      .from("setup_drafts")
-      .select(
-        "guild_id,actor_id,officer_role_id,admin_role_id,eboard_role_id,events_committee_role_id,treasury_role_id,marketing_role_id,fingerprint,created_at",
-      )
-      .eq("guild_id", guildId)
-      .eq("actor_id", actorId)
-      .eq("fingerprint", fingerprint)
-      .gt(
-        "created_at",
-        new Date(now.getTime() - SETUP_DRAFT_TTL_MS).toISOString(),
-      )
-      .limit(1),
+    await run(db, (sql) =>
+      sql
+        .select(SETUP_DRAFT_COLUMNS)
+        .from(setupDrafts)
+        .where(
+          and(
+            eq(setupDrafts.guildId, guildId),
+            eq(setupDrafts.actorId, actorId),
+            eq(setupDrafts.fingerprint, fingerprint),
+            gt(
+              setupDrafts.createdAt,
+              new Date(now.getTime() - SETUP_DRAFT_TTL_MS).toISOString(),
+            ),
+          ),
+        )
+        .limit(1),
+    ),
     parseSetupDraft,
   );
   if (!draft.ok || draft.value === null) {
@@ -320,14 +331,14 @@ export async function listRecentConfigChanges(
     return refused();
   }
   return cappedList(
-    await rest(db)
-      .from("config_audit")
-      .select(
-        "id,actor_id,action,old_values,new_values,version_after,created_at",
-      )
-      .eq("guild_id", guildId)
-      .order("id", { ascending: false })
-      .limit(RECENT_CHANGES + 1),
+    await run(db, (sql) =>
+      sql
+        .select(CONFIG_CHANGE_COLUMNS)
+        .from(configAudit)
+        .where(eq(configAudit.guildId, guildId))
+        .orderBy(desc(configAudit.id))
+        .limit(RECENT_CHANGES + 1),
+    ),
     parseConfigChange,
     RECENT_CHANGES,
   );

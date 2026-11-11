@@ -15,6 +15,7 @@ import {
   it,
   vi,
 } from "vitest";
+import { pgliteSql } from "../support/sql-client.ts";
 import { createDbClient, type DbClient } from "../../src/db/client.ts";
 import {
   assignEventStep,
@@ -275,6 +276,7 @@ beforeAll(async () => {
     url: TEST_ORIGIN,
     secretKey: TEST_SECRET_KEY,
     fetch: shim,
+    sql: pgliteSql(database),
   });
 });
 

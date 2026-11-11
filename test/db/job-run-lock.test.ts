@@ -1,5 +1,6 @@
 import type { PGlite } from "@electric-sql/pglite";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { pgliteSql, recordingSql } from "../support/sql-client.ts";
 import { createDbClient, type DbClient } from "../../src/db/client.ts";
 import {
   beginJobRun,
@@ -47,6 +48,7 @@ describe("begin_job_run", () => {
       url: TEST_ORIGIN,
       secretKey: TEST_SECRET_KEY,
       fetch: postgrestShim(database),
+      sql: pgliteSql(database),
     });
   });
 
@@ -195,6 +197,10 @@ describe("begin_job_run", () => {
         requests += 1;
         return Promise.reject(new Error("no request expected"));
       },
+      sql: recordingSql(() => {
+        requests += 1;
+        return new Error("no request expected");
+      }).sql,
     });
     for (const seconds of [-1, 1.5, Number.NaN]) {
       expect(
@@ -468,6 +474,7 @@ describe("listActiveManagedChannels", () => {
       url: TEST_ORIGIN,
       secretKey: TEST_SECRET_KEY,
       fetch: postgrestShim(database),
+      sql: pgliteSql(database),
     });
   });
 
@@ -506,6 +513,10 @@ describe("a time zone in a config change", () => {
           requests += 1;
           return Promise.reject(new Error("no request expected"));
         },
+        sql: recordingSql(() => {
+          requests += 1;
+          return new Error("no request expected");
+        }).sql,
       });
       const result = await applyConfigChange(counting, {
         guildId: fakeId(),

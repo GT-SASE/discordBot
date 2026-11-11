@@ -946,8 +946,8 @@ describe("database layer against the real schema", () => {
       expect(await namesFor("\\")).toEqual(["Back\\slash"]);
     });
 
-    it("never lets * widen the match", async () => {
-      expect(await namesFor("*")).toEqual(["Budget 100%"]);
+    it("matches * only as itself, never as a wildcard", async () => {
+      expect(await namesFor("*")).toEqual([]);
       expect(await namesFor("S*g")).toEqual([]);
     });
 

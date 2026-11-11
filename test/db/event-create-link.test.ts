@@ -727,7 +727,7 @@ describe("/event create", () => {
           owner_id: APP_ID,
         });
         world.discord.fail("POST", THREADS_POST, SERVER_ERROR, 1);
-        world.failDb(/GET .*thread_id=eq/);
+        world.failDb(/^SQL select .*"events"\."thread_id" = \$/);
 
         await world.send(create());
 
@@ -747,7 +747,7 @@ describe("/event create", () => {
           owner_id: APP_ID,
         });
         await attemptLapsed();
-        world.failDb(/GET .*thread_id=eq/);
+        world.failDb(/^SQL select .*"events"\."thread_id" = \$/);
         const before = world.discord.posts().length;
 
         await world.send(create());
@@ -1020,8 +1020,8 @@ describe("/event create", () => {
   describe("when the database fails", () => {
     it.each([
       ["the claim", /rpc\/claim_interaction/],
-      ["reading the forums", /GET .*managed_channels/],
-      ["looking for the event", /GET \/rest\/v1\/events\?/],
+      ["reading the forums", /^SQL select .*"managed_channels"/],
+      ["looking for the event", /^SQL select .* from "events"/],
       ["the insert", /POST .*events/],
     ])("posts nothing and says so when %s fails", async (_label, pattern) => {
       await world.addManagedForum();
@@ -1488,7 +1488,7 @@ describe("/event link", () => {
     // The event has another name by now, so nothing else stops this before the write.
     await world.pg.query(`UPDATE public.events SET name = 'Other name'`);
     // The read sees nothing held, as if the other link had not yet committed.
-    world.failDb(/GET .*thread_id=eq/, 200, 1);
+    world.failDb(/^SQL select .*"events"\."thread_id" = \$/, 200, 1);
 
     await world.send(link(threadId, parent));
 
@@ -1886,7 +1886,7 @@ describe("an event whose post was deleted", () => {
       const { sent } = await lostEvent();
       world.discord.fail("POST", THREADS_POST, { kind: "lost" }, 1);
       // The first look finds nothing to ask about, so this only stops the second.
-      world.failDb(/GET .*events.*thread_id=eq/);
+      world.failDb(/^SQL select .*"events"\."thread_id" = \$/);
       await world.send(create());
       expect(world.discord.lastReply()).toContain("did not confirm");
       world.clearDbFailures();
@@ -2297,7 +2297,7 @@ describe("an event whose post was deleted", () => {
         world
           .dbRequests()
           .slice(before)
-          .filter((request) => request.includes("/events")),
+          .filter((request) => /\/events|"events"/.test(request)),
       ).toEqual([]);
     });
 
