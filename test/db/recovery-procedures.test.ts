@@ -1,5 +1,5 @@
 /**
- * The SQL that docs/BACKUPS.md gives a maintainer to run by hand. These read each statement
+ * The SQL that docs/RECOVERY.md gives a maintainer to run by hand. These read each statement
  * from the guide and run it as the tables' owner, so the guide cannot drift from what works.
  */
 
@@ -15,16 +15,14 @@ import {
 } from "./fixtures.ts";
 import {
   MIGRATION_OWNER,
-  createBootstrappedDb,
   createMigratedDb,
   errorCodeOf,
   fakeId,
-  migrationScripts,
   queryAs,
 } from "./harness.ts";
 
 const GUIDE = readFileSync(
-  join(import.meta.dirname, "..", "..", "docs", "BACKUPS.md"),
+  join(import.meta.dirname, "..", "..", "docs", "RECOVERY.md"),
   "utf8",
 );
 
@@ -253,105 +251,5 @@ describe("undoing a change", () => {
       [eventId],
     );
     expect(rows).toEqual([{ versions: 2 }]);
-  });
-});
-
-describe("the schema check", () => {
-  const SCHEMA_CHECK = guideSql("schema check");
-
-  async function fingerprint(db: PGlite): Promise<unknown[]> {
-    return (await db.query(SCHEMA_CHECK)).rows;
-  }
-
-  it("matches between two projects with the same migrations", async () => {
-    const [one, two] = await Promise.all([
-      createMigratedDb(),
-      createMigratedDb(),
-    ]);
-    try {
-      const result = await fingerprint(one);
-      expect(result.length).toBeGreaterThan(0);
-      expect(await fingerprint(two)).toEqual(result);
-    } finally {
-      await Promise.all([one.close(), two.close()]);
-    }
-  });
-
-  it("notices a dropped trigger", async () => {
-    const db = await createMigratedDb();
-    try {
-      const before = await fingerprint(db);
-      await db.exec(
-        `DROP TRIGGER tasks_require_open_parent_on_update ON public.tasks`,
-      );
-      expect(await fingerprint(db)).not.toEqual(before);
-    } finally {
-      await db.close();
-    }
-  });
-
-  it("notices a dropped constraint and a changed function", async () => {
-    const db = await createMigratedDb();
-    try {
-      const before = await fingerprint(db);
-      await db.exec(
-        `ALTER TABLE public.tasks DROP CONSTRAINT tasks_completed_matches_status`,
-      );
-      const withoutConstraint = await fingerprint(db);
-      expect(withoutConstraint).not.toEqual(before);
-      await db.exec(
-        `CREATE OR REPLACE FUNCTION public.set_updated_at() RETURNS trigger
-           LANGUAGE plpgsql AS $$ BEGIN RETURN NEW; END; $$`,
-      );
-      expect(await fingerprint(db)).not.toEqual(withoutConstraint);
-    } finally {
-      await db.close();
-    }
-  });
-
-  it("notices a dropped index that backs no constraint", async () => {
-    const db = await createMigratedDb();
-    try {
-      const before = await fingerprint(db);
-      await db.exec(`DROP INDEX public.events_live_thread_uq`);
-      expect(await fingerprint(db)).not.toEqual(before);
-    } finally {
-      await db.close();
-    }
-  });
-
-  it("notices a migration recorded as applied that never ran", async () => {
-    const full = await createMigratedDb();
-    const missing = await createBootstrappedDb();
-    try {
-      const scripts = migrationScripts();
-      const withGuard = scripts.findIndex((script) =>
-        script.includes("tasks_require_open_parent_on_update"),
-      );
-      for (const [index, script] of scripts.entries()) {
-        if (index !== withGuard) {
-          await missing.exec(script);
-        }
-      }
-      expect(await fingerprint(missing)).not.toEqual(await fingerprint(full));
-    } finally {
-      await Promise.all([full.close(), missing.close()]);
-    }
-  });
-});
-
-describe("what the guide says about the policies path", () => {
-  it("gives the number of policies this path really creates", async () => {
-    const db = await createMigratedDb();
-    try {
-      const { rows } = await db.query<{ policies: number }>(
-        `SELECT count(*)::int AS policies FROM pg_policies WHERE policyname = 'backup_ro_read'`,
-      );
-      const policies = rows[0]?.policies;
-      expect(policies).toBeGreaterThan(0);
-      expect(GUIDE).toContain(`returns ${String(policies)}, one per table`);
-    } finally {
-      await db.close();
-    }
   });
 });

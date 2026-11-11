@@ -68,8 +68,6 @@ pgpass.conf
 *.sql.*
 *.psql
 *.pgsql
-!/backup/create-backup-role.psql
-!/backup/grant-backup-role.psql
 *.dump
 *.pgdump
 *.bak

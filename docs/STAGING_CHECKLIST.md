@@ -527,7 +527,7 @@ Run these from your own computer.
 - [ ] **The project stays awake.**
   - Do: leave the test project with only the daily cron for 8 days. Supabase may pause Free projects after 7 days of low activity. Its docs list API calls as activity, but not direct connections.
   - Success: not paused.
-  - If it fails: a paused project fails the bot and the backup job. Find out what counts, and add it.
+  - If it fails: a paused project fails the bot. Find out what counts, and add it.
 
 ## Cron and reminders
 
@@ -636,62 +636,32 @@ Read [Running the cron by hand](#running-the-cron-by-hand) first. Each item here
 
 ## Backups
 
-These come from [BACKUPS.md](BACKUPS.md), which holds the steps.
+These come from [RECOVERY.md](RECOVERY.md), which holds the steps.
 
-- [ ] **Whether Supabase allows `BYPASSRLS` for `backup_ro`.**
-  - Do: look at the migration's outcome, and run `SELECT rolbypassrls FROM pg_roles WHERE rolname = 'backup_ro';`.
-  - Success: `t`, or `f` with one `backup_ro_read` policy on each table.
-  - If it fails: an error code other than `42501` stops the migration, which must then be adjusted.
+- [ ] **The old backup role is gone.**
+  - Do: after `supabase db push`, run `SELECT rolname FROM pg_roles WHERE rolname = 'backup_ro';` and `SELECT policyname FROM pg_policies WHERE schemaname IN ('public', 'history');`.
+  - Success: no rows from either. If the role is still listed, the migration logged a notice that it was kept, and `SELECT rolcanlogin FROM pg_roles WHERE rolname = 'backup_ro';` returns `f`.
+  - If it fails: read the notice from `20261113000020_drop_backup_role_access.sql`, and find what still holds the role.
 
-- [ ] **The real backup job through Supabase.**
-  - Do: run the workflow by hand from the backups repo. This workflow has never committed to a real private repo, because that repo does not exist yet, so read the first commit closely.
-  - Success: a new `.data.age` file and manifest committed, and row counts passed.
-  - If it fails: use the table in "When a run fails".
+- [ ] **What the plan's backups include.**
+  - Do: open Database > Backups on the production project, and note whether it has daily backups and point-in-time restore, and how long they are kept.
+  - Success: written down in the owner's private notes, and [RECOVERY.md](RECOVERY.md) still matches.
+  - If it fails: if there are no backups, take the manual export more often.
 
-- [ ] **The pooler username form, and connections.**
-  - Do: use `backup_ro.<project-ref>` with the session pooler host, and look for connection errors. The role's limit is 3.
-  - Success: the job connects and leaves no connections held open.
-  - If it fails: update `BACKUP_PGUSER` and the docs.
+- [ ] **A restore from the provider's backups.**
+  - Do: on the test project, follow "The provider's backups" in [RECOVERY.md](RECOVERY.md), if its plan has backups.
+  - Success: the bot works afterwards, with the schema up to date.
+  - If it fails: correct `docs/RECOVERY.md`.
 
-- [ ] **A leaked backup password cannot stall reminders for long.** Any role that can log in can take the job's lock. `begin_job_run` waits 3 seconds for it. How long the pooler lets an idle session hold it is unverified.
-  - Do: on the test project, log in as `backup_ro` through the session pooler, and hold the lock in an idle session. With the slot open, run the cron by hand. Leave the session open, note when it ends by itself, if it does, and then close it.
+- [ ] **A manual export and its restore.**
+  - Do: take an export as in [RECOVERY.md](RECOVERY.md#a-manual-export). Run `pg_dump --version` first and record it. Then restore it into a new, empty project and point a test deployment at it.
+  - Success: the bot works on the restored project, and the grants item in the Supabase section passes on it.
+  - If it fails: write the steps that work into `docs/RECOVERY.md`. Do not launch until one restore has worked.
 
-    ```sql
-    SELECT pg_advisory_lock(hashtextextended('job_runs:reminders', 0));
-    ```
-
-  - Success: the by-hand run answers 500 `internal error` after a few seconds and sends nothing. Once the session closes, a run works. Record how long the session lasted, and add it to the "Database password exposed" part of `docs/BACKUPS.md`.
-  - If it fails: a run that hangs to the function's limit means the lock wait is not working behind the real pooler. Check `begin_job_run` in `20261104000014_database_grants_and_lock_order.sql`.
-
-- [ ] **`sslmode=verify-full` with the dashboard's CA file.**
-  - Do: part of the job above.
-  - Success: no certificate errors.
-  - If it fails: check `backup/supabase-ca.pem`. Do not lower the mode.
-
-- [ ] **A secret canary stays out of Actions logs.**
-  - Do: run a dry run with a made-up value in a secret and search the logs for it, including any transformed form.
-  - Success: nothing found.
-  - If it fails: remove what printed it, then rotate.
-
-- [ ] **A real restore by each key holder.**
-  - Do: each holder follows "Restore drill" with their own key, on their own machine, using the newest real backup. Run `pg_restore --version` first and record it. `brew install libpq` may bring a client newer than 17, and a newer client against a Postgres 17 archive is untested.
-  - Success: the script prints `OK`, and everything on that section's checklist is ticked. Each holder took the identity from where they said they keep it, and has the offline copy too.
-  - If it fails: backups you cannot restore are not backups. Do not launch.
-
-- [ ] **The recovery steps on a staging project.**
-  - Do: follow "Real recovery" into a new project, including `supabase migration repair` and repointing the bot. Its `DEFAULT ACL` step was only tried on a stand-in, so note what the hosted project does there.
-  - Success: the bot works on the recovered project, the grants item above passes on it, and a new backup passes.
-  - If it fails: correct `docs/BACKUPS.md`. These steps are marked untested there.
-
-- [ ] **The freshness alert fires.**
-  - Do: delete the `REMINDER_CHECK` variable in the backups repo. Then use Settings > Cron Jobs > Disable Cron Jobs on the test project for over 30 hours, and run the backup. Turn crons back on.
-  - Success: the backup commits, then the check fails with `reminders last succeeded N hours ago`, and GitHub emails whoever last changed the `cron` line. After a restart it passes again. Health check rows also show `reminders_stale`.
-  - If it fails: check the workflow's condition on `vars.REMINDER_CHECK`, and who receives failure emails.
-
-- [ ] **A stopped backup schedule gets noticed.**
-  - Do: if you use `BACKUP_HEARTBEAT_URL`, pause the job and confirm the service alerts you. Otherwise, put the monthly check in a calendar.
+- [ ] **A stopped cron gets noticed.**
+  - Do: put a weekly look at `job_runs` in a calendar, as the runbook says.
   - Success: you hear about it.
-  - If it fails: do the monthly check by hand.
+  - If it fails: check by hand more often.
 
 ## Build and runtime
 
@@ -777,11 +747,11 @@ Look at each one on the dashboard. Repeat on production.
 - [ ] **Discord app** has Public Bot off, User Install off and Install Link set to None, and its endpoint URL is yours. Anyone who can change that URL can receive every interaction token.
 - [ ] **Discord roles.** The groups holding Administrator, Manage Roles, and the two bound roles are small. Review them each term, because the bot is not told about grants.
 - [ ] **A stolen officer account.** Talk through it once: use `/config` to turn reminders off, find the task through `/event status`, remove it, then tell members.
-- [ ] **Handoff.** A second key holder exists, and the next maintainer knows where to find the handoff guide.
-- [ ] **The owner is away.** Ask the second key holder to answer these from the guides alone, without your help: where are the accounts, how do I turn reminders off, and how do I restore. Fix what they could not find. Nobody has tried this.
+- [ ] **Handoff.** A second trusted officer can reach the manual exports, and the next maintainer knows where to find the handoff guide.
+- [ ] **The owner is away.** Ask a second trusted officer to answer these from the guides alone, without your help: where are the accounts, how do I turn reminders off, and how do I restore. Fix what they could not find. Nobody has tried this.
 - [ ] **What a leaked bot token can change.** On the test app only, read the bot's token with `read -rs BOT`, then send a `PATCH` to `/api/v10/applications/@me` on Discord's API host, with the header `Authorization: Bot $BOT` and the JSON body `{"description":"staging check"}`. Reset the token in the portal and check whether the description survives. Then put the new token in `DISCORD_BOT_TOKEN` on the test project and in `.env`, redeploy, and read it into `BOT` again, or the test bot's calls to Discord fail and so does the restore below. If the call works, a leaked token can probably change the endpoint URL too, and a reset does not undo it. So add a check of the endpoint URL and intents to the rotation steps in `SECURITY.md`. Restore the description.
 - [ ] **Vendor changes.** Write down the versions in use today: the Supabase CLI, the PostgREST version, if the dashboard shows it, the Discord API version in `src/discord/client.ts`, Vercel's Node version and the Hobby and Free plan limits you read. Dependabot does not watch these. Put a check in the calendar each term, with the date these were last read, and repeat a sample of this list after any change.
-- [ ] **Member data.** The docs set no retention period, and no process for a deletion request or a member who has left. Row history and backups keep old values. Find out what is really kept: make a task with a made-up marker word, edit it and delete it with `/task delete`, then run the query below. Then look for the word in a backup restored by the drill. Ask the club and the university whether they have rules for this, and write down a retention period and who answers a request. This is unsettled until someone decides it.
+- [ ] **Member data.** The docs set no retention period, and no process for a deletion request or a member who has left. Row history and backups keep old values. Find out what is really kept: make a task with a made-up marker word, edit it and delete it with `/task delete`, then run the query below. Then look for the word in a restored manual export. Ask the club and the university whether they have rules for this, and write down a retention period and who answers a request. This is unsettled until someone decides it.
 
   ```sql
   SELECT source_table, operation, row_id, changed_at

@@ -1,17 +1,17 @@
 # Runbook
 
-What to do when the bot is in one of these states. For a leaked secret, see [SECURITY.md](../SECURITY.md). For restoring data, see [BACKUPS.md](BACKUPS.md).
+What to do when the bot is in one of these states. For a leaked secret, see [SECURITY.md](../SECURITY.md). For restoring data, see [RECOVERY.md](RECOVERY.md).
 
 The bot has not been deployed. Behaviour stated here was read from the code or run in tests with Discord mocked and PGlite in place of Postgres. Anything that depends on the real services is marked unverified and is listed under [Still to test on staging](#still-to-test-on-staging).
 
-The SQL below only reads. Run it in the Supabase SQL editor, or as `backup_ro`. It ran on PGlite with the repo's migrations, not on hosted Supabase.
+The SQL below only reads. Run it in the Supabase SQL editor. It ran on PGlite with the repo's migrations, not on hosted Supabase.
 
 ## Where to look
 
 - `job_runs` is the record to trust. Each row has a `status` and a `results` object of counts and event IDs. A `reminders` row leaves a count of zero out of `results`. A `health_check` row can store a zero, such as `channels_ok: 0`.
 - Vercel logs hold fixed text, IDs and error codes. Hobby keeps them for one hour.
 - Each cron call returns 200 if the day's jobs succeeded, and 500 if not. Vercel does not alert on a 500.
-- `backup/check-freshness.sh` fails when the last successful `reminders` row is over 30 hours old. It reads only that row's time, so it cannot see what a successful run left undone.
+- Nothing outside the bot alerts when reminders stop. Look at the newest successful `reminders` row in `job_runs` each week. Each `health_check` row records `reminders_stale`, which is true once that row is over 26 hours old, but it is written by the same cron, so it cannot report a cron that stopped.
 
 ## Reminders held while the job is green
 
@@ -105,7 +105,7 @@ Unverified: which of these answers Discord gives for a removed bot or a deleted 
 
 1. Take the server's ID out of `ALLOWED_GUILD_IDS` in Vercel and redeploy. Runs then count `guilds_not_allowed` and skip it, and interactions from it are refused.
 2. The setting cannot be empty. An empty value fails every run with a config error, so if this was the only server, leave the ID in and accept the failing job until there is a new one.
-3. The server's rows stay in the database and in backups. Nothing removes them. See [Member data retention](#member-data-retention).
+3. The server's rows stay in the database, in Supabase's backups and in manual exports. Nothing removes them. See [Member data retention](#member-data-retention).
 
 ## A full database
 
@@ -125,14 +125,14 @@ ORDER BY pg_total_relation_size(c.oid) DESC;
 
 **What the bot does, from the code and one test with writes refused in a PGlite session:**
 
-- A reminder run stops at `begin_job_run`. It sends nothing and writes no `job_runs` row, so the failure shows only in the log line `Reminder run failed: unexpected:25006`, the cron's 500 and, after 30 hours, the freshness check. Unverified: that hosted PostgREST passes on the same code.
+- A reminder run stops at `begin_job_run`. It sends nothing and writes no `job_runs` row, so the failure shows only in the log line `Reminder run failed: unexpected:25006` and the cron's 500. Unverified: that hosted PostgREST passes on the same code.
 - No task is lost. The slot stays open, and after a gap only the most urgent reminder goes out.
 - A state-changing command claims the interaction first. The claim fails, and the person gets the fixed failure reply with no change made.
 - `/ping` needs no database. Commands that only read, and autocomplete, write nothing. Unverified: that reads keep working on the hosted database at that point.
 
 **To respond:**
 
-1. Check that the latest backup succeeded, and take one by hand if it can still run. See [BACKUPS.md](BACKUPS.md).
+1. Check that Supabase has a recent backup, and take a manual export if the database can still be read. See [RECOVERY.md](RECOVERY.md).
 2. Do not delete rows by hand. No role has `DELETE` or `TRUNCATE` on the bot's tables on purpose, and schema changes go through migrations only.
 3. Moving to a paid plan should lose nothing (unverified). That costs money, so it is the owner's decision.
 4. There is no approved way to trim row history or old runs. Writing one depends on [the retention decision](#member-data-retention).
@@ -184,7 +184,7 @@ Not run for this guide, as the Supabase CLI was not available: steps 4 and 5. Un
 - A deployment deleted after a secret rotation is no longer a rollback target, as [SECURITY.md](../SECURITY.md) explains.
 - Unverified: Instant Rollback on the hosted platform. The staging checklist has a step for it.
 
-**Restoring an older backup is the opposite case:** new code on an old schema. Follow "Real recovery" in [BACKUPS.md](BACKUPS.md), and bring the schema up to date before the bot takes traffic.
+**Restoring an older backup is the opposite case:** new code on an old schema. Follow [RECOVERY.md](RECOVERY.md), and bring the schema up to date before the bot takes traffic.
 
 ## Member data retention
 
@@ -200,7 +200,8 @@ Not run for this guide, as the Supabase CLI was not available: steps 4 and 5. Un
 | `event_reminder_log`   | Which step or pickup reminder went out for which event, and when | No limit                                                                           |
 | `job_runs`             | Counts and event IDs                                             | No limit                                                                           |
 | `interaction_claims`   | Interaction IDs                                                  | Removed by the daily job after a day                                               |
-| Backups repository     | Everything above, encrypted                                      | Until that repository is deleted. [BACKUPS.md](BACKUPS.md#retention) says how      |
+| Supabase backups       | Everything above                                                 | As long as the plan keeps them                                                     |
+| Manual exports         | Everything above                                                 | The last two are kept, as [RECOVERY.md](RECOVERY.md#a-manual-export) says          |
 | Vercel logs            | Fixed text, IDs and error codes                                  | One hour on Hobby                                                                  |
 | Discord                | The bot's posts and mentions                                     | The bot does not remove them. Deleting an event leaves its post, with a note in it |
 
@@ -210,9 +211,9 @@ The bot stores no member names in their own column, but task text and event name
 
 **Someone asks for their data to be removed.** There is no procedure for this yet. What exists today:
 
-- `/task edit` changes the text and `/task delete` soft-deletes the task. Neither removes the old text from row history or backups.
+- `/task edit` changes the text and `/task delete` soft-deletes the task. Neither removes the old text from row history, backups or exports.
 - No role can hard-delete rows, by design, so removing them would need a migration written for it.
-- Old backups can be removed only by deleting the whole old backups repository.
+- Supabase's backups expire on their own schedule. Manual exports are removed by deleting the file.
 
 **What the owner has to decide:** how long each row above is kept, who answers a removal request, how a removal squares with the no-hard-delete rule, and whether club or university rules apply. Until then, tell the person what is kept and that no removal process exists.
 

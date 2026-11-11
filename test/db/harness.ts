@@ -35,9 +35,6 @@ export const API_ROLES: readonly ApiRole[] = [
 /** Stands in for the hosted `postgres` role: owns the schema, is not a superuser. */
 export const MIGRATION_OWNER = "migration_owner";
 
-/** The read-only role the daily backup connects as. */
-export const BACKUP_ROLE = "backup_ro";
-
 /** Postgres error code for a privilege failure. */
 export const INSUFFICIENT_PRIVILEGE = "42501";
 
@@ -134,7 +131,7 @@ export function present<T>(value: T | null | undefined): T {
 /** Runs one parameterised statement as the given role, then restores the session role. */
 export async function queryAs<Row = Record<string, unknown>>(
   db: Connection,
-  role: ApiRole | typeof MIGRATION_OWNER | typeof BACKUP_ROLE,
+  role: ApiRole | typeof MIGRATION_OWNER,
   sql: string,
   params: unknown[] = [],
 ): Promise<Row[]> {

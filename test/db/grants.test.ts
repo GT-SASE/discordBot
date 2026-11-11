@@ -10,7 +10,6 @@ import {
 } from "./fixtures.ts";
 import {
   API_ROLES,
-  BACKUP_ROLE,
   INSUFFICIENT_PRIVILEGE,
   MIGRATION_OWNER,
   createMigratedDb,
@@ -32,12 +31,6 @@ const READ_ONLY_TABLES = [
 const ALL_TABLES = [...READ_ONLY_TABLES, "events", "job_runs", "tasks"].sort();
 /** Reached only through a function, so service_role has no grant on it. */
 const NO_GRANT_TABLES = ["interaction_claims", "task_reassignments"];
-/** Everything the backup reads, including tables the bot's role cannot reach. */
-const BACKUP_TABLES = [
-  ...ALL_TABLES,
-  ...NO_GRANT_TABLES,
-  "row_versions",
-].sort();
 
 /** Every table-level grant allowed on the app's schemas. Anything else fails the test. */
 const EXPECTED_TABLE_GRANTS = [
@@ -45,7 +38,6 @@ const EXPECTED_TABLE_GRANTS = [
   "service_role job_runs SELECT",
   "service_role tasks SELECT",
   ...READ_ONLY_TABLES.map((table) => `service_role ${table} SELECT`),
-  ...BACKUP_TABLES.map((table) => `${BACKUP_ROLE} ${table} SELECT`),
 ].sort();
 
 /** The only columns of events and tasks that can be written. Anything else fails the test. */
@@ -296,14 +288,10 @@ describe("access", () => {
         "n.nspowner",
         `n.nspname IN ('public', 'history')`,
       );
-      expect(grants).toEqual([
-        `${BACKUP_ROLE} history USAGE`,
-        `${BACKUP_ROLE} public USAGE`,
-        "service_role public USAGE",
-      ]);
+      expect(grants).toEqual(["service_role public USAGE"]);
     });
 
-    it("only the backup role has a grant on any sequence, and only to read it", async () => {
+    it("no role has a grant on any sequence", async () => {
       const grants = await aclGrants(
         `pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace`,
         "c.relname",
@@ -311,11 +299,7 @@ describe("access", () => {
         "c.relowner",
         `c.relkind = 'S' AND n.nspname IN ('public', 'history')`,
       );
-      expect(grants).toEqual([
-        `${BACKUP_ROLE} config_audit_id_seq SELECT`,
-        `${BACKUP_ROLE} row_versions_id_seq SELECT`,
-        `${BACKUP_ROLE} task_reassignments_id_seq SELECT`,
-      ]);
+      expect(grants).toEqual([]);
     });
 
     it("type and domain grants match", async () => {
@@ -342,7 +326,7 @@ describe("access", () => {
   });
 
   describe("catalog rules", () => {
-    it("row level security is on, with policies for the backup role alone", async () => {
+    it("row level security is on, with no policies", async () => {
       const { rows: tables } = await db.query<{
         relname: string;
         relrowsecurity: boolean;
@@ -355,21 +339,10 @@ describe("access", () => {
       expect(tables.length).toBeGreaterThanOrEqual(ALL_TABLES.length);
       expect(tables.filter((table) => !table.relrowsecurity)).toEqual([]);
 
-      // This harness's owner has no BYPASSRLS, so the migration takes its policy path.
-      // backup-role.test.ts covers the other path.
       const { rows: policies } = await db.query(
-        `SELECT tablename, roles::text[] AS roles, cmd, qual
-         FROM pg_policies
-         ORDER BY tablename`,
+        `SELECT policyname FROM pg_policies`,
       );
-      expect(policies).toEqual(
-        BACKUP_TABLES.map((tablename) => ({
-          tablename,
-          roles: [BACKUP_ROLE],
-          cmd: "SELECT",
-          qual: "true",
-        })),
-      );
+      expect(policies).toEqual([]);
     });
 
     it("the open-parent guard's comment says what it does for a removed channel", async () => {

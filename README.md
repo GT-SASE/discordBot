@@ -72,9 +72,6 @@ flowchart LR
   handlers -->|secret key| db[(Supabase Postgres)]
   daily -->|secret key| db
   client -->|managed channels only| discord
-
-  backup[Daily job in a private repo] -->|read-only role| db
-  backup --> encrypted[Backups encrypted with age]
 ```
 
 The bot receives Discord's HTTP interactions and opens no gateway connection. It sees only what it is sent, so it cannot react to messages, role changes or members leaving. [Record 2](docs/adr/0002-http-interactions-on-serverless.md) explains this choice.
@@ -92,7 +89,6 @@ Discord allows 3 seconds for the first reply. So the bot makes one database read
 | `src/db/`              | All database access                                        |
 | `src/lib/`             | Settings, permissions and dates                            |
 | `supabase/migrations/` | The schema, grants and database functions                  |
-| `backup/`              | Backup scripts and a workflow template for a separate repo |
 | `docs/adr/`            | Records of the design decisions and their costs            |
 
 ## Commands
@@ -172,7 +168,7 @@ No system is unhackable, and this one makes no such claim. The aim is to keep th
 
 **Backups**
 
-- A separate private repository runs `pg_dump` through `age` to two key holders, with a read-only role. It fails if row counts disagree or fall sharply, and if the reminder job has gone stale. See [docs/BACKUPS.md](docs/BACKUPS.md).
+- Supabase's own backups, and point-in-time restore where the plan has it, plus an occasional manual `pg_dump` export kept privately. Soft deletes and row history undo single mistakes. See [docs/RECOVERY.md](docs/RECOVERY.md).
 
 ## Risks that remain
 
@@ -186,12 +182,12 @@ These stay true with every control working:
 - **Who did it.** Officer edits, completions and deletes record no actor, so after a stolen officer account they may not be traceable to it. [SECURITY.md](SECURITY.md#what-can-be-attributed) says what can be.
 - **Autocomplete replay.** Discord takes autocomplete choices only in the HTTP response, so they cannot be deferred. Someone holding a captured signed request can replay it for 5 minutes and read current task or event text. Getting one needs a compromised host or proxy.
 - **Floods.** A flood of requests can use up Vercel Hobby's limits and take the bot offline, in most cases for 30 days. It costs availability, not money. Hobby's firewall rules reduce this, and do not stop it.
-- **Missed runs.** Vercel Cron is best effort with no retries. A second cron and the freshness check in the backup job reduce this, but a reminder can be late or, after a crash, sent twice. An event's step list or Food pickup reminder is never late: if both crons of its day miss, it is not sent.
+- **Missed runs.** Vercel Cron is best effort with no retries. A second cron reduces this, but a reminder can be late or, after a crash, sent twice. An event's step list or Food pickup reminder is never late: if both crons of its day miss, it is not sent.
 - **Held reminders.** If the bot loses Send Messages across a server while it can still read the forums, each event's reminders are held after three refused runs, and the job goes green with nothing sent. No alert fires. [The runbook](docs/RUNBOOK.md#reminders-held-while-the-job-is-green) says how to spot it.
 - **Dependencies.** A compromised dependency would run with full access to the secrets. Pinning and cooldowns lower the odds only.
-- **Backups.** A former key holder can still read old backups, and a former member's text stays in them until the old repository is deleted.
+- **Backups.** Whether the database has provider backups depends on its plan. A former member's text stays in backups and exports until they expire or are deleted.
 - **Short logs.** Hobby keeps logs for one hour, which limits what can be learned after an incident.
-- **Unproved.** Grants have only been tested on stand-ins, and backups on plain Postgres in CI, not on hosted Supabase. See [docs/STAGING_CHECKLIST.md](docs/STAGING_CHECKLIST.md).
+- **Unproved.** Grants have only been tested on stand-ins, and no restore has been tried on hosted Supabase. See [docs/STAGING_CHECKLIST.md](docs/STAGING_CHECKLIST.md).
 
 ## Local development
 
@@ -209,18 +205,17 @@ There is no local bot. Discord needs a public HTTPS URL, so tests stand in for i
 
 ### Tests and checks
 
-| Command                                                                     | What it does                                                                                                         | Needs                                                                                                                                                        |
-| --------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `npm run typecheck`                                                         | Type check                                                                                                           | Nothing                                                                                                                                                      |
-| `npm run lint`                                                              | ESLint (only the clients may call `fetch`), and a check that names no Discord host                                   | Nothing                                                                                                                                                      |
-| `npm run lint:lockfile`                                                     | lockfile-lint: every package from the npm registry over HTTPS, by its own name, with a sha512 hash                   | Nothing                                                                                                                                                      |
-| `npm run format:check`                                                      | Prettier                                                                                                             | Nothing                                                                                                                                                      |
-| `npm test`                                                                  | Unit tests                                                                                                           | Nothing                                                                                                                                                      |
-| `npm run test:db`                                                           | Migrations, grants and access layer on PGlite                                                                        | Nothing                                                                                                                                                      |
-| `npm run test:db:concurrency`                                               | Races: double Done clicks, retried interactions, overlapping reminder runs, deletes against inserts                  | `CONCURRENCY_DATABASE_URL`, a Postgres 17 superuser                                                                                                          |
-| `npm run test:postgrest`                                                    | Access layer on real PostgREST                                                                                       | `POSTGREST_URL` and related settings                                                                                                                         |
-| `bash scripts/test-backup-restore.sh`                                       | Backup and restore end to end. For disposable servers only: it changes their settings, roles and data                | Postgres 17 containers on ports 5432 to 5434 as in `db.yml`, Docker, `psql`, `pg_dump`, `age`, `BACKUP_RLS_PATH`, `POSTGRES_CONTAINER`, `RECOVERY_CONTAINER` |
-| `.tools/gitleaks git . --config .gitleaks.toml --redact --log-opts="--all"` | Scans every commit on every ref with the default rules, as CI does. CI then scans again with `.gitleaks-custom.toml` | gitleaks, a full clone                                                                                                                                       |
+| Command                                                                     | What it does                                                                                                         | Needs                                               |
+| --------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------- |
+| `npm run typecheck`                                                         | Type check                                                                                                           | Nothing                                             |
+| `npm run lint`                                                              | ESLint (only the clients may call `fetch`), and a check that names no Discord host                                   | Nothing                                             |
+| `npm run lint:lockfile`                                                     | lockfile-lint: every package from the npm registry over HTTPS, by its own name, with a sha512 hash                   | Nothing                                             |
+| `npm run format:check`                                                      | Prettier                                                                                                             | Nothing                                             |
+| `npm test`                                                                  | Unit tests                                                                                                           | Nothing                                             |
+| `npm run test:db`                                                           | Migrations, grants and access layer on PGlite                                                                        | Nothing                                             |
+| `npm run test:db:concurrency`                                               | Races: double Done clicks, retried interactions, overlapping reminder runs, deletes against inserts                  | `CONCURRENCY_DATABASE_URL`, a Postgres 17 superuser |
+| `npm run test:postgrest`                                                    | Access layer on real PostgREST                                                                                       | `POSTGREST_URL` and related settings                |
+| `.tools/gitleaks git . --config .gitleaks.toml --redact --log-opts="--all"` | Scans every commit on every ref with the default rules, as CI does. CI then scans again with `.gitleaks-custom.toml` | gitleaks, a full clone                              |
 
 [CI](.github/workflows/ci.yml) runs the main checks on each pull request and on pushes to `main` and `staging`. [Database](.github/workflows/db.yml) and [Deploy check](.github/workflows/deploy-check.yml) run on the same events but skip a change to `docs/`, `README.md` or `SECURITY.md` alone.
 
@@ -257,7 +252,7 @@ To add a command, write a file in `src/handlers/` that exports `handler`, add on
 
 - [docs/SETUP.md](docs/SETUP.md): from nothing to a test server, then production
 - [docs/STAGING_CHECKLIST.md](docs/STAGING_CHECKLIST.md): what only real services can prove
-- [docs/BACKUPS.md](docs/BACKUPS.md): backups, restore drills and recovery
+- [docs/RECOVERY.md](docs/RECOVERY.md): undoing a change, the provider's backups and manual exports
 - [docs/RUNBOOK.md](docs/RUNBOOK.md): held reminders, the bot removed from a server, a full database, deploy order and data retention
 - [docs/HANDOFF.md](docs/HANDOFF.md): passing the bot to the next maintainer
 - [docs/PUBLIC_RELEASE.md](docs/PUBLIC_RELEASE.md): going public

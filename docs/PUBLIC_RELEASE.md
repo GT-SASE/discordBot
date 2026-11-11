@@ -109,7 +109,7 @@ Do this on a normal branch, through a normal pull request.
 
 Go to Settings > General > Danger Zone > Change visibility. Do this at a quiet time.
 
-The backups repository stays private, always. Check it has not been changed.
+Manual database exports stay private, always, and never go in this repository.
 
 ## Step 6: Turn on the protections
 
@@ -153,7 +153,7 @@ Anyone can open a pull request on a public repository, and Actions may run on it
 Also check these:
 
 - Under Settings > Actions > General, fork pull request workflows need approval, and the default `GITHUB_TOKEN` permission is read-only. Check this in the dashboard.
-- No repository secret exists in this repository. Backups stay in their own repository, as [BACKUPS.md](BACKUPS.md) says, and CI needs none.
+- No repository secret exists in this repository. CI needs none.
 - `git push` from your clone still runs the pre-push hook.
 
 ## Step 8: After going public
@@ -211,6 +211,6 @@ Use this if a scan found anything, if you found text you do not want public, or 
    Then do Steps 4 to 8 on the new repository.
 
 6. Keep the old repository private. Do not delete it until you are sure, because it holds the review history.
-7. Vercel can stay on the private repository. If you move it, follow the Vercel part of [HANDOFF.md](HANDOFF.md) for the link, and keep the backups repository as it is.
+7. Vercel can stay on the private repository. If you move it, follow the Vercel part of [HANDOFF.md](HANDOFF.md) for the link.
 
 The published history then starts at one commit. Say so in the README if it helps a reader, and say the review history is kept privately.

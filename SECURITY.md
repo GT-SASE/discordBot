@@ -25,7 +25,7 @@ The project has not been deployed, so nothing below has been proved against real
 | Authorization     | Deny by default, with each action checked against the stored row rather than client-supplied values                        |
 | Database          | Server-side key only, row level security on, narrow grants with no `DELETE` or `TRUNCATE` on the bot's tables, row history |
 | Outgoing messages | One send helper, text escaped when rendered, mentions limited to named users, managed channels only                        |
-| Recovery          | Soft deletes, row history and encrypted daily backups                                                                      |
+| Recovery          | Soft deletes, row history, the provider's backups and occasional private exports                                           |
 
 Some of this also depends on settings in the services' dashboards, which the repository cannot enforce. [docs/SETUP.md](docs/SETUP.md) lists them.
 
@@ -66,8 +66,6 @@ The scan looks for known secret formats, numbers shaped like Discord IDs and ema
 | `SUPABASE_SECRET_KEY` | Create a new secret key in the Supabase dashboard, deploy it, then revoke the old one                                                            |
 | `CRON_SECRET`         | Generate a new value with `openssl rand -hex 32` and update it in Vercel                                                                         |
 | Database password     | Reset it in the Supabase dashboard. It belongs in a password manager only, never in Vercel                                                       |
-| `BACKUP_PGPASSWORD`   | Run `\password backup_ro` in `psql` and update it in the backups repository                                                                      |
-| age backup identity   | Generate a new identity, encrypt new backups to it, and treat backups readable with the old one as exposed                                       |
 
 Then update the new value in every environment that uses it and redeploy. Confirm that the old value is refused.
 
@@ -76,7 +74,7 @@ Then update the new value in every environment that uses it and redeploy. Confir
 ### 2. Check for misuse
 
 - Review Discord audit logs, and Supabase and Vercel logs, from before the leak to the time of rotation.
-- Compare data against row history. Restore from history or backup if needed. History covers `events` and `tasks` only.
+- Compare data against row history. Restore from history or backup if needed, as [docs/RECOVERY.md](docs/RECOVERY.md) describes. History covers `events` and `tasks` only.
 - If member data may have been exposed, tell the affected people and the organisation's leadership.
 
 #### After a database key leak

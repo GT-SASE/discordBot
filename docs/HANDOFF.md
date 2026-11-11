@@ -7,7 +7,7 @@ Start at least a month before the outgoing maintainer leaves. Do it together, on
 ## The order
 
 1. The incoming maintainer secures their accounts.
-2. The incoming maintainer gets a backup key and passes a restore. **Nothing else happens until this has passed.**
+2. A fresh manual export is taken, so nothing is lost if a step goes wrong.
 3. Move each account.
 4. Rotate every secret.
 5. Delete old deployments and remove the outgoing maintainer.
@@ -17,25 +17,17 @@ Start at least a month before the outgoing maintainer leaves. Do it together, on
 
 The incoming maintainer follows Part 1 of [SETUP.md](SETUP.md) on all four accounts. Use a long-lived personal email for recovery, not a university address.
 
-## Step 2: Backup key, with a restore first
+## Step 2: Take an export first
 
-This follows "Handoff" in [BACKUPS.md](BACKUPS.md).
-
-1. The incoming maintainer generates their own key. It goes in `AGE_RECIPIENT_3`, so three holders can decrypt for now.
-2. Wait for a backup encrypted to it. Its manifest lists three `recipient` lines.
-3. The incoming maintainer passes the "Restore drill" with that key, on their own machine, with no help from anyone's key. The script must print `OK`.
-4. Only then does the new key replace the outgoing one, and `AGE_RECIPIENT_3` goes back to empty.
-
-The outgoing key can still read every earlier backup, and this cannot be undone. If trust has ended rather than just a term, start a new backups repo. The incoming maintainer must also edit the `cron` line in the backups workflow themselves, because GitHub sends failure emails to whoever last changed it.
+The outgoing maintainer takes a manual export, as in [RECOVERY.md](RECOVERY.md#a-manual-export), and keeps it until Step 6 is done. Backups themselves come from Supabase, so there is no key or separate repository to hand over.
 
 ## Step 3: Move each account
 
 ### GitHub
 
 1. Move the main repo under Settings > General > Danger Zone > Transfer ownership. The new owner accepts by email. Check this in the dashboard.
-2. Move the backups repo the same way, keeping it private. Update its secrets in Step 4.
-3. The incoming maintainer clones the repo, then runs `npm ci --ignore-scripts`, `npm run gitleaks:install` and `npm run hooks:install`. Confirm `git config user.email` shows their noreply address.
-4. They also set up the clone's local excludes, as in "Before you start" in [SETUP.md](SETUP.md). The list belongs to one clone, so the outgoing maintainer passes on theirs privately, and it should not go in this repo. They can print it with `cat "$(git rev-parse --git-path info/exclude)"`.
+2. The incoming maintainer clones the repo, then runs `npm ci --ignore-scripts`, `npm run gitleaks:install` and `npm run hooks:install`. Confirm `git config user.email` shows their noreply address.
+3. They also set up the clone's local excludes, as in "Before you start" in [SETUP.md](SETUP.md). The list belongs to one clone, so the outgoing maintainer passes on theirs privately, and it should not go in this repo. They can print it with `cat "$(git rev-parse --git-path info/exclude)"`.
 
 Keep the repo on a personal account while it is private. Vercel Hobby cannot deploy a private repo owned by a GitHub organisation.
 
@@ -91,27 +83,24 @@ Do this even if nobody has done anything wrong. The outgoing maintainer knew eve
 
 The first three rows were generated for the new Vercel project in Step 3. Finish them here, including revoking the old Supabase key. If a value is set after a deployment, redeploy, because a deployment does not pick up new values.
 
-| Secret                     | Where                                        | Then                                                                                                                         |
-| -------------------------- | -------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
-| `DISCORD_BOT_TOKEN`        | Developer Portal > Bot > Reset Token         | Set in Vercel and redeploy. Reset cuts off the old one at once.                                                              |
-| `SUPABASE_SECRET_KEY`      | Supabase > Settings > API Keys, create new   | Set in Vercel, redeploy, then revoke the old key.                                                                            |
-| `CRON_SECRET`              | `openssl rand -hex 32 \| tr -d '\n'`         | Set in Vercel and redeploy.                                                                                                  |
-| Supabase database password | Supabase > database settings                 | Store it in the password manager only.                                                                                       |
-| `BACKUP_PGPASSWORD`        | `\password backup_ro` in `psql`              | Set in the backups repo. End the role's open sessions too, as "Database password exposed" in [BACKUPS.md](BACKUPS.md) shows. |
-| `BACKUP_HEARTBEAT_URL`     | The service you use, if any                  | Create a new one and set it in the backups repo.                                                                             |
-| age identity               | See Step 2                                   | The outgoing key leaves the workflow.                                                                                        |
-| Personal tokens            | GitHub, Vercel and Supabase account settings | The outgoing maintainer deletes any made for this bot.                                                                       |
+| Secret                     | Where                                        | Then                                                            |
+| -------------------------- | -------------------------------------------- | --------------------------------------------------------------- |
+| `DISCORD_BOT_TOKEN`        | Developer Portal > Bot > Reset Token         | Set in Vercel and redeploy. Reset cuts off the old one at once. |
+| `SUPABASE_SECRET_KEY`      | Supabase > Settings > API Keys, create new   | Set in Vercel, redeploy, then revoke the old key.               |
+| `CRON_SECRET`              | `openssl rand -hex 32 \| tr -d '\n'`         | Set in Vercel and redeploy.                                     |
+| Supabase database password | Supabase > database settings                 | Store it in the password manager only.                          |
+| Personal tokens            | GitHub, Vercel and Supabase account settings | The outgoing maintainer deletes any made for this bot.          |
 
 Do this for the test and production columns. Use different values in each.
 
 `DISCORD_APP_ID`, `DISCORD_PUBLIC_KEY`, `ALLOWED_GUILD_IDS` and `SUPABASE_URL` are not secret and stay the same.
 
-The outgoing maintainer also deletes any local `.env`, clones holding real data, and decrypted restores, and removes secrets from their password manager once this is finished.
+The outgoing maintainer also deletes any local `.env`, clones holding real data, and manual exports, and removes secrets from their password manager once this is finished.
 
 ## Step 5: Clean up
 
 1. If you kept any old Vercel project, delete every deployment made before the rotation, as described in [SECURITY.md](../SECURITY.md). Old deployments may hold old values.
-2. Remove the outgoing maintainer from the Supabase organisation, the Discord team and both GitHub repos.
+2. Remove the outgoing maintainer from the Supabase organisation, the Discord team and the GitHub repo.
 3. Check that no Vercel integration or GitHub app remains from the old account.
 
 ## Step 6: Test, and record it
@@ -125,8 +114,9 @@ The outgoing maintainer also deletes any local `.env`, clones holding real data,
    ```
 
 3. Confirm that the old values fail: a request using the old `sb_secret_` key gets a 401, and the old cron secret gets a 401 from the new project.
-4. Check `job_runs` for a good reminder run the next day, and that the next backup passes. A run can succeed and still leave something for you to look at: in its `results`, `threads_held` counts events whose post refused the bot, and `held_event_ids` lists up to 25 of them.
-5. Write the date and the name of the backup used in the drill somewhere the next maintainer will find it. Keep that note out of this repo if it names people.
+4. Check `job_runs` for a good reminder run the next day, and the Database > Backups page for a recent backup if the plan has them. A run can succeed and still leave something for you to look at: in its `results`, `threads_held` counts events whose post refused the bot, and `held_event_ids` lists up to 25 of them.
+5. The incoming maintainer takes their own manual export. The outgoing one then deletes theirs.
+6. Write the date somewhere the next maintainer will find it. Keep that note out of this repo if it names people.
 
 ## Yearly review
 
@@ -142,15 +132,14 @@ Once a year, ideally when officers change, the current maintainer checks:
 **Access**
 
 - [ ] The list of people holding Administrator, Manage Roles and the two bound roles is short and current. Discord's audit log keeps entries for 45 days only, and the bot is not told about grants. Do this each term if you can.
-- [ ] A second key holder is still reachable, and is still the right person.
+- [ ] A second trusted officer who can reach the manual exports is still reachable, and is still the right person.
 - [ ] The Discord team and Supabase organisation hold only current people.
 
 **Recovery**
 
-- [ ] A restore drill passed in the last six months, by each key holder.
-- [ ] The backups repo is still receiving commits, and is under about 800 MB. Start a new one each year as [BACKUPS.md](BACKUPS.md) describes.
-- [ ] Old backups repos past their 12 months have been deleted. This is the only way to remove a former member's text.
-- [ ] `PG_CLIENT_VERSION` and `age` were bumped this quarter.
+- [ ] The Database > Backups page shows what you expect for the plan. See [RECOVERY.md](RECOVERY.md).
+- [ ] A manual export was taken this term, and older ones beyond the last two are deleted.
+- [ ] A restore was rehearsed on the test project this year.
 
 **Service**
 

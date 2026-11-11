@@ -176,7 +176,7 @@ supabase db push --remote
 **If it fails:**
 
 - It stops at the failing migration. Read the error, fix the cause and run it again. Do not use `--include-all`.
-- An error mentioning `backup_ro` and `BYPASSRLS` needs [BACKUPS.md](BACKUPS.md). That migration expects either success or error code `42501`.
+- An error mentioning `backup_ro` and `BYPASSRLS` comes from `20261104000009_backup_role.sql`, which expects either success or error code `42501`. That role belonged to a backup job that no longer exists, and `20261113000020_drop_backup_role_access.sql` removes it again.
 - The repo has no `supabase/config.toml`. Supabase's docs say only `supabase start` needs it, but this has not been tried here. If `link` or `db push` asks for it, run `supabase init` and do not commit the file it creates.
 
 Then open Advisors > Security in the dashboard and read each finding. "RLS enabled, no policy" is expected, because the bot's role is limited by grants.
@@ -495,9 +495,9 @@ Repeat the parts above with new values. Each row is a real difference.
 
 ## Part 12: Backups
 
-Follow [BACKUPS.md](BACKUPS.md) from its Setup section. It needs a separate private repository, two key holders and a real restore.
+Backups come from Supabase. On the production project's Database > Backups page, check what its plan includes, as [RECOVERY.md](RECOVERY.md) says. If it has no backups, the manual export is the only one.
 
-`/setup` must have run first, because the backup job fails until `guild_config` has a row. Do this before real data arrives, and treat the bot as not launched until each key holder has restored a backup.
+Once `/setup` has run, take the first manual export from [RECOVERY.md](RECOVERY.md#a-manual-export) and store it privately. Rehearse a restore on the test project before real data arrives.
 
 ## When you are done
 
