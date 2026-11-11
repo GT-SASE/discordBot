@@ -794,5 +794,5 @@ Look at each one on the dashboard. Repeat on production.
 
 These stay open after this list is finished, because no staging run can answer them.
 
-- **Mutation testing** stopped early, with many mutants not run, and it did not touch workflow files, gitleaks configs or hook scripts.
+- **Mutation testing** stopped early, with many mutants not run, and it did not touch workflow files, the gitleaks config or the hook script.
 - **Actions logs and pull request edit histories** were not all read for leaks, and commit messages were only scanned by pattern, so an unusual real name could be missed. [PUBLIC_RELEASE.md](PUBLIC_RELEASE.md) requires a person to read these before going public.

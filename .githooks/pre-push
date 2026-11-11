@@ -1,5 +1,16 @@
 #!/bin/sh
-# Activated with: npm run hooks:install
-# Exits non-zero, which blocks the push, if the scan script is missing.
+# Scans commits that no remote has yet for secrets, and blocks the push on a
+# finding. Activate with: npm run hooks:install
 repo_root="$(git rev-parse --show-toplevel)" || exit 1
-exec bash "${repo_root}/scripts/gitleaks-pre-push.sh" "$@"
+gitleaks="${repo_root}/.tools/gitleaks"
+if [ ! -x "${gitleaks}" ]; then
+  echo "pre-push: gitleaks is not installed. Run: npm run gitleaks:install" >&2
+  exit 1
+fi
+# Two passes: the default rules, then the project's own rules, which must not
+# inherit the default allowlist (it skips lockfiles and binary files).
+for config in .gitleaks.toml .gitleaks-custom.toml; do
+  "${gitleaks}" git "${repo_root}" --config "${repo_root}/${config}" \
+    --redact --ignore-gitleaks-allow --no-banner \
+    --log-opts="--all --not --remotes -m --text --no-color" || exit 1
+done

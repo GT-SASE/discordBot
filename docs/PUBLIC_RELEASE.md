@@ -20,7 +20,7 @@ git log --all --oneline -i --grep="<club-name>"
 git log --all --oneline -i -G"<club-name>"
 ```
 
-When this guide was written, the name was in the repository's name and in `package.json`, `package-lock.json`, `.gitleaks.toml`, `.gitleaks-custom.toml`, `scripts/register-commands.ts`, `src/discord/client.ts` and `src/discord/client.test.ts`. The last three use it as part of the bot's `User-Agent`. Git history also holds older files that name it.
+When this guide was written, the name was in the repository's name and in `package.json`, `package-lock.json`, `.gitleaks.toml`, `scripts/register-commands.ts`, `src/discord/client.ts` and `src/discord/client.test.ts`. The last three use it as part of the bot's `User-Agent`. Git history also holds older files that name it.
 
 Also look for the university's name and any abbreviation of the club or university. A short abbreviation needs a case-sensitive, whole-word search, because ignoring case also matches ordinary code such as `-gt`:
 
@@ -43,12 +43,12 @@ git fetch origin '+refs/pull/*:refs/remotes/pull/*'
 npm ci --ignore-scripts
 npm run gitleaks:install
 git rev-list --count --all
-bash scripts/gitleaks-full-history.sh
+.tools/gitleaks git . --config .gitleaks.toml --redact --ignore-gitleaks-allow --log-opts="--all -m --text --no-color"
 ```
 
-**Expect:** `No secrets found.`, and a commit count above your branch's, which shows the pull request refs were included.
+**Expect:** `no leaks found`, and a commit count above your branch's, which shows the pull request refs were included.
 
-The script scans contents and messages of every ref with both configurations. It looks for known secret formats, numbers shaped like Discord IDs, and email addresses.
+The scan reads the contents of every commit on every ref. It looks for known secret formats, numbers shaped like Discord IDs, and email addresses. It does not read commit messages or identities, so the checks below cover those.
 
 **If it reports a finding:** treat a secret as compromised. Rotate it first by following [SECURITY.md](../SECURITY.md), then publish from a new repository. GitHub's `refs/pull/*` refs are read-only, so you cannot rewrite them yourself.
 
@@ -73,10 +73,9 @@ gh api --paginate 'repos/{owner}/{repo}/pulls/comments' > ../release-text/review
 gh api --paginate 'repos/{owner}/{repo}/comments' > ../release-text/commit-comments.json
 gh issue list --state all --limit 1000 --json number,title,body,comments > ../release-text/issues.json
 .tools/gitleaks dir ../release-text --config .gitleaks.toml --redact
-.tools/gitleaks dir ../release-text --config .gitleaks-custom.toml --redact
 ```
 
-**Expect:** both scans report no leaks. Then **read** all of this by hand. Look for:
+**Expect:** the scan reports no leaks. Then **read** all of this by hand. Look for:
 
 - Names of members and officers, and the club's name if you have no permission.
 - Screenshots, and any link to a private document.
@@ -91,7 +90,7 @@ gh run list --limit 200 --json databaseId,name,createdAt > ../release-text/runs.
 gh run view <run-id> --log > ../release-text/run-<run-id>.log
 ```
 
-Read a sample of each workflow, and every failed run. Then scan the folder again with the two `gitleaks dir` commands. Also check workflow artifacts, the wiki, releases, repository secrets' names, deployments and Dependabot's pull requests.
+Read a sample of each workflow, and every failed run. Then scan the folder again with the `gitleaks dir` command. Also check workflow artifacts, the wiki, releases, repository secrets' names, deployments and Dependabot's pull requests.
 
 If you find something that needs removing, editing a pull request body does not clear its edit history. Publish from a new repository.
 
@@ -191,10 +190,9 @@ Use this if a scan found anything, if you found text you do not want public, or 
    ```sh
    git log --format='%an %ae %cn %ce'
    ../<old-clone>/.tools/gitleaks dir . --config .gitleaks.toml --redact
-   ../<old-clone>/.tools/gitleaks dir . --config .gitleaks-custom.toml --redact
    ```
 
-   **Expect:** one line from `git log`, with your username and noreply address in both places, and no leaks from either scan.
+   **Expect:** one line from `git log`, with your username and noreply address in both places, and no leaks from the scan.
 
    **If the identity is wrong, or a scan reports an email address under `.git/`:** run `rm -rf .git` here and go back to `git init` in step 3. Do not amend, because the reflog keeps the old address.
 
@@ -208,7 +206,7 @@ Use this if a scan found anything, if you found text you do not want public, or 
    git push -u origin main
    ```
 
-   **Expect:** a `pre-push: scanning` line, then a normal push. A push refused for exposing your email means the identity is wrong, so use the fix in step 4.
+   **Expect:** gitleaks reports `no leaks found`, then a normal push.
 
    Then do Steps 4 to 8 on the new repository.
 

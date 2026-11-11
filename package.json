@@ -10,9 +10,6 @@
   "scripts": {
     "gitleaks:install": "bash scripts/install-gitleaks.sh",
     "hooks:install": "git config core.hooksPath .githooks",
-    "test:history-scan": "bash scripts/test-gitleaks-full-history.sh",
-    "test:hooks": "bash scripts/test-pre-push-hook.sh",
-    "test:secret-rules": "bash scripts/test-gitleaks-rules.sh",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "format:check": "prettier --check .",

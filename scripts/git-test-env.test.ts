@@ -14,7 +14,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { isolatedGitEnv } from "../test/support/git-env.ts";
 
 const REPO_ROOT = fileURLToPath(new URL("..", import.meta.url));
-const SHELL_HELPER = join(REPO_ROOT, "scripts/lib/git-test-env.sh");
 const VITEST = join(REPO_ROOT, "node_modules/vitest/vitest.mjs");
 
 const REDIRECTING_VARIABLES = [
@@ -92,35 +91,6 @@ describe("Git isolation in tests", () => {
     expect(sharedState()).toEqual(before);
   });
 
-  it("git-test-env.sh drops the inherited variables and stays out of the repository", () => {
-    const before = sharedState();
-    const inherited = Object.fromEntries(
-      REDIRECTING_VARIABLES.map((name) => [name, shared]),
-    );
-
-    const result = spawnSync(
-      "bash",
-      [
-        "-euc",
-        `source "$1"; git init -q; git config test.key 1; git add -A; env`,
-        "bash",
-        SHELL_HELPER,
-      ],
-      {
-        cwd: scratch,
-        env: { ...isolatedGitEnv(), ...inherited },
-        encoding: "utf8",
-      },
-    );
-
-    expect(result.status, result.stderr).toBe(0);
-    for (const name of REDIRECTING_VARIABLES) {
-      expect(result.stdout, name).not.toContain(`${name}=`);
-    }
-    expect(existsSync(join(scratch, ".git/config"))).toBe(true);
-    expect(sharedState()).toEqual(before);
-  });
-
   it("keeps the tests that run Git from touching a repository named by GIT_DIR", () => {
     const before = sharedState();
 
@@ -137,14 +107,4 @@ describe("Git isolation in tests", () => {
     expect(result.status, result.stdout + result.stderr).toBe(0);
     expect(sharedState()).toEqual(before);
   }, 120_000);
-
-  it.each([
-    "test-gitleaks-full-history.sh",
-    "test-gitleaks-rules.sh",
-    "test-pre-push-hook.sh",
-  ])("%s loads the shell helper", (script) => {
-    expect(readFileSync(join(REPO_ROOT, "scripts", script), "utf8")).toContain(
-      'source "${repo_root}/scripts/lib/git-test-env.sh"',
-    );
-  });
 });

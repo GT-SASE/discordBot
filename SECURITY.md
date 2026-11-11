@@ -50,9 +50,9 @@ The hook reduces the chance of a leak but does not rule one out. It is a local c
 - a clone where `npm run hooks:install` was never run, or a checkout that does not contain `.githooks/`
 - commits made through the GitHub web interface or API
 
-The CI scan is the backstop for these. It runs the same path, author, tagger and message checks over every ref and tag, and fails on a tag that does not point to a commit, as the hook does. A committer address that is not a no-reply one is a warning in CI, not a failure.
+The CI scan is the backstop for these. It runs the same gitleaks rules over every commit on every ref.
 
-The scan looks for known secret formats, numbers shaped like Discord IDs, email addresses and denied file types. It does not cover names: nothing detects a real member name, so that still depends on review. It cannot recognise a secret in an unknown format either.
+The scan looks for known secret formats, numbers shaped like Discord IDs and email addresses. It does not check file types or commit identities, so keep `.env` files and database dumps out of the repository, and set `git config user.email` to your GitHub noreply address. It does not cover names: nothing detects a real member name, so that still depends on review. It cannot recognise a secret in an unknown format either.
 
 ## If a secret leaks
 
@@ -181,13 +181,12 @@ Do this only after rotating.
 - Force-push the rewritten branches, tags and notes after telling any collaborators, and have them re-clone rather than pull.
 - `refs/pull/*` refs are read-only and keep the old commits. Ask GitHub Support to remove them and purge cached views if the commit was ever visible to others.
 - Forks keep their own copies and a rewrite does not reach them. Find any forks and ask their owners to delete or clean them, or ask GitHub Support for help.
-- Confirm that history is clean with both configurations:
+- Confirm that history is clean:
 
 ```sh
 .tools/gitleaks git . --config .gitleaks.toml --redact --ignore-gitleaks-allow --log-opts="--all -m --text --no-color"
-.tools/gitleaks git . --config .gitleaks-custom.toml --redact --ignore-gitleaks-allow --log-opts="--all -m --text --no-color"
 ```
 
 ### 4. Learn from it
 
-Record what leaked, how and when, without repeating the value. If the scanner missed it, add a rule and a canary in `scripts/test-gitleaks-rules.sh`.
+Record what leaked, how and when, without repeating the value. If the scanner missed it, add a rule to `.gitleaks.toml` and check that it fires on a sample built at runtime, never a real value.

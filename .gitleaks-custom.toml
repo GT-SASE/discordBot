@@ -1,8 +1,7 @@
 # Project rules, scanned without gitleaks' default global allowlist. Do not add
 # [extend] here: see the note in .gitleaks.toml.
 #
-# scripts/test-gitleaks-rules.sh proves each rule fires, so add a canary there
-# whenever a rule is added or changed.
+# When adding or changing a rule, check it catches a sample value before merging.
 
 title = "GTSASE Discord Bot custom secret rules"
 

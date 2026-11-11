@@ -1,9 +1,6 @@
 #!/usr/bin/env bash
 # Fails if a tracked file outside the Discord client and tests names a Discord
 # host, so that only src/discord/client.ts sends to Discord.
-#
-# The excluded shell scripts hold canaries for the secret rules, built to look
-# like real Discord URLs.
 
 set -euo pipefail
 
@@ -19,8 +16,7 @@ git grep -nIiE 'discord(app)?\.com|discord\.gg' -- . \
   ':(exclude,glob)**/*.test.js' \
   ':(exclude,glob)**/*.test.jsx' \
   ':(exclude,glob)**/*.test.mjs' \
-  ':(exclude,glob)**/*.test.cjs' \
-  ':(exclude,glob)scripts/test-*.sh' || status=$?
+  ':(exclude,glob)**/*.test.cjs' || status=$?
 
 case "${status}" in
   0)
