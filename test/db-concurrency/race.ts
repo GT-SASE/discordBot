@@ -1,7 +1,12 @@
 import { randomBytes } from "node:crypto";
 import pg from "pg";
 import { afterAll, afterEach, beforeAll, beforeEach, inject } from "vitest";
-import { closeDb, createDbClient, type DbClient } from "../../src/db/client.ts";
+import {
+  JOB_POOL,
+  closeDb,
+  createDbClient,
+  type DbClient,
+} from "../../src/db/client.ts";
 import { poolDatabase } from "../../src/db/pool.ts";
 import { pgConnection, type Connection } from "../db/harness.ts";
 import { botUrlForDatabase, urlForDatabase } from "./global-setup.ts";
@@ -94,7 +99,7 @@ export function raceDatabase(): RaceDatabase {
     await client.connect();
     observer = client;
     cleanups.unshift(() => client.end());
-    const db = createDbClient(poolDatabase(botUrl));
+    const db = createDbClient(poolDatabase(botUrl, JOB_POOL));
     bot = db;
     cleanups.unshift(() => closeDb(db));
   });

@@ -14,6 +14,8 @@ import { DATABASE_ROLE, getDatabaseUrl } from "../lib/env.ts";
 import type { EventResource, TaskResource } from "../lib/permissions.ts";
 import {
   INTERACTION_DEADLINE_MS,
+  INTERACTION_POOL,
+  JOB_POOL,
   createDbClient,
   withDeadline,
   type DbClient,
@@ -183,6 +185,14 @@ describe("client", () => {
 
     vi.stubEnv("DATABASE_URL", testDatabaseUrl());
     expect(getDb()).toBe(getDb());
+  });
+
+  it("gives up connecting for an interaction before Discord's deadline does", () => {
+    expect(INTERACTION_POOL.connectionTimeoutMillis).toBeLessThan(
+      INTERACTION_DEADLINE_MS,
+    );
+    expect(INTERACTION_POOL.attachToInstance).toBe(true);
+    expect(JOB_POOL.attachToInstance).toBe(false);
   });
 
   it("gives pg the role, host, database and TLS that the settings check passed", () => {

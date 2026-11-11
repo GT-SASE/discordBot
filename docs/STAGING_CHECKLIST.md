@@ -513,7 +513,7 @@ Run the SQL in this section as the owner, in Neon's SQL editor or `psql "$OWNER_
 
 - [ ] **The bot's connection string works, and connections are as expected.**
   - Do: `/config` loads and saves. During a by-hand cron run, read `SELECT usename, state, count(*) FROM pg_stat_activity GROUP BY 1, 2;` as the owner. If Neon's string came with `channel_binding=require`, note whether the bot connects with it left in.
-  - Success: the panel works, with no `Invalid configuration for DATABASE_URL` in Logs, and `bot_app` holds a few connections at most, 3 per function instance. Unverified: whether the owner can see other roles' sessions on Neon. Write down what it shows.
+  - Success: the panel works, with no `Invalid configuration for DATABASE_URL` in Logs, and `bot_app` holds a few connections at most, 10 per function instance. Unverified: whether the owner can see other roles' sessions on Neon. Write down what it shows.
   - If it fails: check that `DATABASE_URL` names `bot_app`, the pooled host, the database and `sslmode`, and that the password is the one set with `ALTER ROLE bot_app PASSWORD`.
 
 - [ ] **Migrations on Neon.**
