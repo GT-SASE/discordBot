@@ -31,7 +31,11 @@ function get(
 
 const fetchMock = vi.fn<typeof fetch>();
 
-const clients = vi.hoisted(() => ({ options: [] as unknown[] }));
+const clients = vi.hoisted(() => ({
+  options: [] as unknown[],
+  made: [] as unknown[],
+}));
+const databases = vi.hoisted(() => ({ made: [] as unknown[] }));
 
 vi.mock("../discord/client.ts", async (original) => {
   const actual = await original<typeof import("../discord/client.ts")>();
@@ -41,7 +45,21 @@ vi.mock("../discord/client.ts", async (original) => {
       options: Parameters<typeof actual.createDiscordClient>[0],
     ) => {
       clients.options.push(options);
-      return actual.createDiscordClient(options);
+      const client = actual.createDiscordClient(options);
+      clients.made.push(client);
+      return client;
+    },
+  };
+});
+
+vi.mock("../db/client.ts", async (original) => {
+  const actual = await original<typeof import("../db/client.ts")>();
+  return {
+    ...actual,
+    createDbFromEnv: () => {
+      const db = actual.createDbFromEnv();
+      databases.made.push(db);
+      return db;
     },
   };
 });
@@ -95,6 +113,8 @@ function jobRow(status: string, error: string | null) {
 
 beforeEach(() => {
   clients.options = [];
+  clients.made = [];
+  databases.made = [];
   fetchMock.mockReset();
   vi.stubGlobal("fetch", fetchMock);
   vi.stubEnv("CRON_SECRET", SECRET);
@@ -275,15 +295,22 @@ describe("an authorized request", () => {
     expect(JSON.stringify(warn.mock.calls)).toContain("ALLOWED_GUILD_IDS");
   });
 
-  it("makes a new Discord client for each invocation", async () => {
-    // A 401 on one invocation must not be remembered by the next.
-    const row = candidateRow();
-    let discordCalls = 0;
-    fetchMock.mockImplementation((input) => {
+  it("builds a new Discord client and database handle on each run", async () => {
+    // The first run's token is refused. The second must ask Discord afresh, and send.
+    let tokenRefused = true;
+    fetchMock.mockImplementation((input, init) => {
       const url = input as string;
       if (url.startsWith("https://discord.com")) {
-        discordCalls += 1;
-        return Promise.resolve(new Response("{}", { status: 401 }));
+        if (tokenRefused) {
+          return Promise.resolve(new Response("{}", { status: 401 }));
+        }
+        return Promise.resolve(
+          Response.json(
+            init?.method === "POST"
+              ? { id: FORUM }
+              : { id: THREAD, type: 11, guild_id: GUILD, parent_id: FORUM },
+          ),
+        );
       }
       if (url.includes("rpc/claim_reminders")) {
         return Promise.resolve(Response.json(CLAIMED_ONE));
@@ -292,23 +319,42 @@ describe("an authorized request", () => {
         return Promise.resolve(Response.json(RUN_ID));
       }
       if (url.includes("/tasks?")) {
-        return Promise.resolve(Response.json([row]));
+        return Promise.resolve(Response.json([candidateRow()]));
       }
-      if (
-        url.includes("/managed_channels?") ||
-        url.includes("/events?") ||
-        url.includes("/reminder_log?")
-      ) {
+      if (url.includes("/managed_channels?")) {
+        return Promise.resolve(
+          Response.json([
+            { guild_id: GUILD, channel_id: FORUM, status: "active" },
+          ]),
+        );
+      }
+      if (url.includes("/events?") || url.includes("/reminder_log?")) {
         return Promise.resolve(Response.json([]));
       }
-      return Promise.resolve(
-        Response.json([jobRow("failed", "discord_unauthorized:401")]),
-      );
+      return Promise.resolve(Response.json([jobRow("succeeded", null)]));
     });
     vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const discordCalls = () =>
+      fetchMock.mock.calls.filter(([url]) =>
+        (url as string).startsWith("https://discord.com"),
+      );
+
     await get(authorized);
+    expect(discordCalls()).toHaveLength(1);
+
+    tokenRefused = false;
+    fetchMock.mockClear();
     await get(authorized);
-    expect(discordCalls).toBe(2);
+    expect(
+      discordCalls()
+        .filter(([, init]) => init?.method === "POST")
+        .map(([url]) => url),
+    ).toEqual([expect.stringContaining(`/channels/${THREAD}/messages`)]);
+
+    expect(clients.made).toHaveLength(2);
+    expect(clients.made[1]).not.toBe(clients.made[0]);
+    expect(databases.made).toHaveLength(2);
+    expect(databases.made[1]).not.toBe(databases.made[0]);
   });
 });
 

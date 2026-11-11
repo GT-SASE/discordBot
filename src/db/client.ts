@@ -101,20 +101,24 @@ export function withDeadline(db: DbClient, deadlineMs: number): DbClient {
   return rebuildWithDeadline(db, deadlineMs);
 }
 
+/** A new client from the environment's settings, shared with no other caller. */
+export function createDbFromEnv(): DbClient {
+  const url = process.env.SUPABASE_URL?.trim();
+  const secretKey = process.env.SUPABASE_SECRET_KEY?.trim();
+  if (url === undefined || url === "") {
+    throw new ConfigError("SUPABASE_URL", "must be set");
+  }
+  if (secretKey === undefined || secretKey === "") {
+    throw new ConfigError("SUPABASE_SECRET_KEY", "must be set");
+  }
+  return createDbClient({ url, secretKey });
+}
+
 let client: DbClient | undefined;
 
+/** One client for the life of the function instance, for interaction handlers. */
 export function getDb(): DbClient {
-  if (client === undefined) {
-    const url = process.env.SUPABASE_URL?.trim();
-    const secretKey = process.env.SUPABASE_SECRET_KEY?.trim();
-    if (url === undefined || url === "") {
-      throw new ConfigError("SUPABASE_URL", "must be set");
-    }
-    if (secretKey === undefined || secretKey === "") {
-      throw new ConfigError("SUPABASE_SECRET_KEY", "must be set");
-    }
-    client = createDbClient({ url, secretKey });
-  }
+  client ??= createDbFromEnv();
   return client;
 }
 

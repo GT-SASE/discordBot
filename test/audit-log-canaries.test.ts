@@ -29,6 +29,9 @@ vi.mock("../src/db/client.ts", async (original) => ({
   getDb: () => {
     throw failure.thrown;
   },
+  createDbFromEnv: () => {
+    throw failure.thrown;
+  },
 }));
 
 const { publicKey, privateKey } = generateKeyPairSync("ed25519");

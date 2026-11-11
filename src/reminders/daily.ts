@@ -3,7 +3,7 @@
  * outcome into a fixed response.
  */
 
-import { getDb, withDeadline, type DbClient } from "../db/client.ts";
+import { createDbFromEnv, withDeadline, type DbClient } from "../db/client.ts";
 import { errorSummary } from "../db/errors.ts";
 import { expireInteractionClaims } from "../db/interaction-claims.ts";
 import { createDiscordClient, type DiscordClient } from "../discord/client.ts";
@@ -28,9 +28,12 @@ function log(line: string): void {
   console.warn(line);
 }
 
-/** Built on each call, so a warm function cannot carry a client's memory to tomorrow. */
+/**
+ * Built on each call, database handle included, so a warm function cannot carry a
+ * client's memory, such as a refused token, to the next run.
+ */
 function productionDependencies(): DailyDependencies {
-  const db = getDb();
+  const db = createDbFromEnv();
   return {
     db,
     client: createDiscordClient({
