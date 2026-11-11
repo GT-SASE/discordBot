@@ -396,6 +396,18 @@ async function runInsert(
   return rows.map((row) => row.row);
 }
 
+/**
+ * An array argument as Postgres array text, which the cast then reads. PGlite only turns
+ * a JavaScript array into one for types it knows, and not for an enum's array type.
+ */
+function arrayLiteral(values: readonly unknown[]): string {
+  const element = (value: unknown) =>
+    value === null
+      ? "NULL"
+      : `"${(typeof value === "string" ? value : JSON.stringify(value)).replaceAll("\\", "\\\\").replaceAll('"', '\\"')}"`;
+  return `{${values.map(element).join(",")}}`;
+}
+
 async function runFunction(
   db: PGlite,
   name: string,
@@ -423,7 +435,7 @@ async function runFunction(
   const list = args
     .map(
       ({ key, value, type }) =>
-        `${identifier(key)} => ${query.bind(value)}::${type}`,
+        `${identifier(key)} => ${query.bind(Array.isArray(value) ? arrayLiteral(value) : value)}::${type}`,
     )
     .join(", ");
   const result = await queryAs<{ value: unknown }>(

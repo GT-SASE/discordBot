@@ -18,6 +18,8 @@ const SECRET = "c".repeat(40);
 const URL_BASE = "https://bot.example.test/api/cron/reminders";
 const ROOT = join(import.meta.dirname, "..", "..");
 const RUN_ID = "00000000-0000-4000-8000-000000000001";
+/** claim_reminders' answer for one reminder, claimed. */
+const CLAIMED_ONE = [{ claim_token: RUN_ID, changed: false }];
 
 function get(
   headers: Record<string, string> = {},
@@ -282,6 +284,9 @@ describe("an authorized request", () => {
         discordCalls += 1;
         return Promise.resolve(new Response("{}", { status: 401 }));
       }
+      if (url.includes("rpc/claim_reminders")) {
+        return Promise.resolve(Response.json(CLAIMED_ONE));
+      }
       if (url.includes("rpc/begin_job_run") || url.includes("rpc/claim")) {
         return Promise.resolve(Response.json(RUN_ID));
       }
@@ -324,6 +329,9 @@ describe("the Discord client the function builds", () => {
               : { id: THREAD, type: 11, guild_id: GUILD, parent_id: FORUM },
           ),
         );
+      }
+      if (url.includes("rpc/claim_reminders")) {
+        return Promise.resolve(Response.json(CLAIMED_ONE));
       }
       if (url.includes("rpc/begin_job_run") || url.includes("rpc/claim")) {
         return Promise.resolve(Response.json(RUN_ID));

@@ -1388,7 +1388,7 @@ describe("a failed morning and the recovery cron", () => {
     const { eventId } = await eventWithThread(guild);
     await task(guild, eventId, dateOffset(3));
     dbGate = (url) =>
-      url.includes("rpc/claim_reminder")
+      url.includes("rpc/claim_reminders")
         ? new Response("{}", { status: 503 })
         : undefined;
     expect(await run({ guilds: [guild] })).toMatchObject({
@@ -2619,7 +2619,7 @@ describe("the worst case for time", () => {
     const start = Date.now();
     let elapsed = 0;
     dbGate = (url) => {
-      if (url.includes("rpc/claim_reminder")) {
+      if (url.includes("rpc/claim_reminders")) {
         elapsed = 60_000;
       }
       return undefined;
@@ -2628,8 +2628,8 @@ describe("the worst case for time", () => {
     await run({ guilds: [guild], now: () => new Date(start + elapsed) });
 
     const rows = (await Promise.all(ids.map(logRows))).flat();
-    // Only the calls already started when the time ran out.
-    expect(rows.length).toBeLessThanOrEqual(8);
+    // Only the first message's claims, made in one call before the time ran out.
+    expect(rows.length).toBeLessThanOrEqual(5);
     expect((await jobRow()).results.deferred_deadline).toBe(20 - rows.length);
   });
 });
@@ -2800,7 +2800,7 @@ describe("what a failure leaves behind", () => {
     const { eventId } = await eventWithThread(guild);
     await task(guild, eventId, dateOffset(3));
     dbGate = (url) =>
-      url.includes("rpc/claim_reminder")
+      url.includes("rpc/claim_reminders")
         ? Response.json({ code: "XX000", message: CANARY }, { status: 500 })
         : undefined;
 
@@ -2817,7 +2817,7 @@ describe("what a failure leaves behind", () => {
       await task(guild, eventId, dateOffset(3));
     }
     dbGate = (url) =>
-      url.includes("rpc/claim_reminder")
+      url.includes("rpc/claim_reminders")
         ? Response.json({ code: "XX000" }, { status: 500 })
         : undefined;
 
@@ -2834,7 +2834,7 @@ describe("what a failure leaves behind", () => {
     const { eventId } = await eventWithThread(guild);
     const taskId = await task(guild, eventId, dateOffset(3));
     dbGate = (url) =>
-      url.includes("rpc/mark_reminder_sent")
+      url.includes("rpc/mark_reminders_sent")
         ? Response.json({ code: "XX000" }, { status: 500 })
         : undefined;
 
@@ -2860,5 +2860,49 @@ describe("what a failure leaves behind", () => {
       error: "unavailable:XX000",
     });
     expect(requests).toEqual([]);
+  });
+});
+
+describe("round trips", () => {
+  it("claims and marks each message's reminders in one call", async () => {
+    const guild = await guildInZone();
+    const { eventId, threadId } = await eventWithThread(guild);
+    const taskIds: string[] = [];
+    for (let index = 0; index < 20; index += 1) {
+      taskIds.push(await task(guild, eventId, dateOffset(3)));
+    }
+    const database: string[] = [];
+    dbGate = (url, init) => {
+      database.push(`${init?.method ?? "GET"} ${new URL(url).pathname}`);
+      return undefined;
+    };
+
+    const result = await run({ guilds: [guild] });
+
+    expect(result.status).toBe("succeeded");
+    const rows = (await Promise.all(taskIds.map(logRows))).flat();
+    expect(rows.map((row) => row.state)).toEqual(taskIds.map(() => "sent"));
+    const count = (line: string) =>
+      database.filter((each) => each === line).length;
+    // Four messages of five, each with one claim call, one check and one mark call.
+    expect(sent).toHaveLength(4);
+    expect(count("POST /rest/v1/rpc/claim_reminders")).toBe(4);
+    expect(count("POST /rest/v1/rpc/mark_reminders_sent")).toBe(4);
+    expect(database.filter((line) => line.endsWith("/events"))).toHaveLength(
+      // The four checks, and the event reminders' own read.
+      5,
+    );
+    // The post's parent is never asked of Discord.
+    expect(requests).toEqual(
+      sent.map(() => ({
+        method: "POST",
+        path: `/channels/${threadId}/messages`,
+      })),
+    );
+    // Before: 54 database requests, 20 claims and 20 marks among them, and 8 to Discord.
+    expect({ database: database.length, discord: requests.length }).toEqual({
+      database: 18,
+      discord: 4,
+    });
   });
 });

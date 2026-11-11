@@ -13,7 +13,12 @@
  */
 
 import { withDeadline, type DbClient } from "../db/client.ts";
-import { errorSummary, type DbError } from "../db/errors.ts";
+import {
+  errorSummary,
+  failure,
+  type DbError,
+  type DbResult,
+} from "../db/errors.ts";
 import { getEvent, markEventThreadMissing } from "../db/events.ts";
 import {
   MAX_EVENT_IDS_IN_RESULTS,
@@ -29,11 +34,12 @@ import {
 } from "../db/managed-channels.ts";
 import {
   claimReminder,
+  claimReminders,
   clearThreadRefusals,
   closeStaleClaim,
   listReminderCandidates,
   listStaleClaims,
-  markReminderSent,
+  markRemindersSent,
   markReminderSkipped,
   recordReminderRefused,
   recordThreadRefusal,
@@ -937,14 +943,9 @@ class Run {
     const key = keyOf(ref);
     const stale = this.#staleClaims.get(key);
     if (stale === undefined) {
-      const claim = await claimReminder(this.#db, { ...ref, asRead });
-      if (!claim.ok) {
-        this.#countClaimError(claim.error);
-        return null;
-      }
-      return claim.value === null
-        ? null
-        : { claimToken: claim.value, possibleDeliveries: 1 };
+      return this.#freshClaim(
+        await claimReminder(this.#db, { ...ref, asRead }),
+      );
     }
     this.#staleClaims.delete(key);
     const resolved = await resolveStaleClaim(this.#db, {
@@ -975,24 +976,58 @@ class Run {
     return { ...item, line: { ...item.line, mentionUserIds: [] } };
   }
 
-  /** Nothing starts past the deadline, and what did not start stays unclaimed. */
+  /** What a claim of a reminder with no earlier claim came to. */
+  #freshClaim(claim: DbResult<string | null>): ClaimHeld | null {
+    if (!claim.ok) {
+      this.#countClaimError(claim.error);
+      return null;
+    }
+    return claim.value === null
+      ? null
+      : { claimToken: claim.value, possibleDeliveries: 1 };
+  }
+
+  /**
+   * Nothing starts past the deadline, and what did not start stays unclaimed. Reminders
+   * with no earlier claim are claimed in one call, each with the answer a call of its own
+   * would have had. A stale claim is taken over by itself.
+   */
   async #claimAll(items: readonly Item[]): Promise<Claimed[]> {
     const claimed: (Claimed | null)[] = items.map(() => null);
+    const keep = (item: Item, index: number, held: ClaimHeld | null) => {
+      if (held === null) {
+        this.counts.add("claim_lost");
+      } else {
+        claimed[index] = {
+          ...this.#withoutRepeatPing(item, held.possibleDeliveries),
+          claimToken: held.claimToken,
+        };
+      }
+    };
+    const indexed = items.map((item, index) => ({ item, index }));
+    const isStale = ({ item }: { item: Item }) =>
+      this.#staleClaims.has(keyOf(item.ref));
+    const fresh = indexed.filter((entry) => !isStale(entry));
     let started = 0;
+    if (fresh.length > 0 && !this.#pastDeadline()) {
+      started += fresh.length;
+      const answers = await claimReminders(
+        this.#db,
+        fresh.map(({ item }) => ({ ...item.ref, asRead: item.asRead })),
+      );
+      for (const [position, { item, index }] of fresh.entries()) {
+        const answer = answers.ok
+          ? (answers.value[position] ?? failure("bad_row"))
+          : answers;
+        keep(item, index, this.#freshClaim(answer));
+      }
+    }
     await forEachLimited(
-      items.map((item, index) => ({ item, index })),
+      indexed.filter(isStale),
       () => !this.#pastDeadline(),
       async ({ item, index }) => {
         started += 1;
-        const held = await this.#claim(item.ref, item.asRead);
-        if (held === null) {
-          this.counts.add("claim_lost");
-        } else {
-          claimed[index] = {
-            ...this.#withoutRepeatPing(item, held.possibleDeliveries),
-            claimToken: held.claimToken,
-          };
-        }
+        keep(item, index, await this.#claim(item.ref, item.asRead));
       },
     );
     this.#countIncomplete("deferred_deadline", items.length - started);
@@ -1166,25 +1201,26 @@ class Run {
    * one repeat, which is better than the platform killing the run mid-way.
    */
   async #markSent(items: readonly Claimed[], messageId: string): Promise<void> {
-    let started = 0;
-    await forEachLimited(
-      items,
-      () => this.#now().getTime() < this.#hardStop,
-      async (item) => {
-        started += 1;
-        const marked = await markReminderSent(this.#db, {
-          ...item.ref,
-          claimToken: item.claimToken,
-          messageId,
-        });
-        if (marked.ok && marked.value) {
-          this.counts.add("reminders_sent");
-        } else {
-          this.#countIncomplete("mark_failed");
-        }
-      },
-    );
-    this.#countIncomplete("mark_failed", items.length - started);
+    if (items.length === 0) {
+      return;
+    }
+    if (this.#now().getTime() >= this.#hardStop) {
+      this.#countIncomplete("mark_failed", items.length);
+      return;
+    }
+    // One call for them all. Failing as a whole, it marked none of them.
+    const marked = await markRemindersSent(this.#db, {
+      keys: items.map((item) => ({ ...item.ref, claimToken: item.claimToken })),
+      messageId,
+    });
+    for (const [index] of items.entries()) {
+      const answer = marked.ok ? marked.value[index] : marked;
+      if (answer?.ok === true && answer.value) {
+        this.counts.add("reminders_sent");
+      } else {
+        this.#countIncomplete("mark_failed");
+      }
+    }
   }
 
   async #handleSendFailure(

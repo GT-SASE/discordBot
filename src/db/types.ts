@@ -348,6 +348,16 @@ export interface Database {
         };
         Returns: string | null;
       };
+      claim_reminders: {
+        Args: {
+          p_task_ids: string[];
+          p_kinds: ReminderKind[];
+          p_due_dates: string[];
+          p_assignee_ids: (string | null)[];
+          p_updated_ats: (string | null)[];
+        };
+        Returns: Json;
+      };
       record_reminder_refused: {
         Args: {
           p_task_id: string;
@@ -385,6 +395,16 @@ export interface Database {
           p_message_id: string;
         };
         Returns: boolean;
+      };
+      mark_reminders_sent: {
+        Args: {
+          p_task_ids: string[];
+          p_kinds: ReminderKind[];
+          p_due_dates: string[];
+          p_claim_tokens: string[];
+          p_message_id: string;
+        };
+        Returns: Json;
       };
       mark_reminder_skipped: {
         Args: {

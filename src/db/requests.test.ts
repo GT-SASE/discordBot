@@ -52,9 +52,11 @@ import {
 } from "./managed-channels.ts";
 import {
   claimReminder,
+  claimReminders,
   listReminderCandidates,
   listStaleClaims,
   markReminderSent,
+  markRemindersSent,
   markReminderSkipped,
   recordReminderRefused,
   recordThreadRefusal,
@@ -712,6 +714,27 @@ describe("exact requests", () => {
       }),
     ],
     [
+      "claimReminders",
+      (db) =>
+        claimReminders(db, [
+          reminderKey,
+          { ...reminderKey, asRead: { assigneeId: OTHER, updatedAt: VERSION } },
+        ]),
+      {
+        body: [
+          { claim_token: TOKEN, changed: false },
+          { claim_token: null, changed: true },
+        ],
+      },
+      rpc("claim_reminders", {
+        p_task_ids: [ID, ID],
+        p_kinds: ["one_day", "one_day"],
+        p_due_dates: [DATE, DATE],
+        p_assignee_ids: [null, OTHER],
+        p_updated_ats: [null, VERSION],
+      }),
+    ],
+    [
       "recordReminderRefused",
       (db) => recordReminderRefused(db, { ...reminderKey, claimToken: TOKEN }),
       { body: true },
@@ -761,6 +784,22 @@ describe("exact requests", () => {
         p_kind: "one_day",
         p_due_date: DATE,
         p_claim_token: TOKEN,
+        p_message_id: OTHER,
+      }),
+    ],
+    [
+      "markRemindersSent",
+      (db) =>
+        markRemindersSent(db, {
+          keys: [{ ...reminderKey, claimToken: TOKEN }],
+          messageId: OTHER,
+        }),
+      { body: [true] },
+      rpc("mark_reminders_sent", {
+        p_task_ids: [ID],
+        p_kinds: ["one_day"],
+        p_due_dates: [DATE],
+        p_claim_tokens: [TOKEN],
         p_message_id: OTHER,
       }),
     ],
@@ -1725,4 +1764,85 @@ describe("searching by the start of an ID", () => {
       expect(requests).toEqual([]);
     },
   );
+});
+
+describe("reminder batches", () => {
+  const key = {
+    taskId: "11111111-1111-4111-8111-111111111111",
+    kind: "one_day" as const,
+    dueDate: "2030-01-10" as DateOnly,
+  };
+  const TOKEN_ID = "22222222-2222-4222-8222-222222222222";
+
+  it.each([
+    ["too few answers", []],
+    ["too many answers", [true, true]],
+    ["an answer that is not a boolean", ["true"]],
+    ["no list", { ok: true }],
+  ])("reads %s as a bad row", async (_label, body) => {
+    const { db } = mockPostgrest(() => ({ body }));
+
+    const marked = await markRemindersSent(db, {
+      keys: [{ ...key, claimToken: TOKEN_ID }],
+      messageId: testSnowflake(),
+    });
+
+    expect(
+      marked.ok ? marked.value[0] : { ok: false, error: marked.error },
+    ).toMatchObject({ ok: false, error: { category: "bad_row" } });
+  });
+
+  it.each([
+    ["a token that is not a UUID", { claim_token: "x", changed: false }],
+    ["changed with a token", { claim_token: TOKEN_ID, changed: true }],
+    ["no changed flag", { claim_token: TOKEN_ID }],
+    ["no object", TOKEN_ID],
+  ])("reads a claim with %s as a bad row", async (_label, answer) => {
+    const { db } = mockPostgrest(() => ({ body: [answer] }));
+
+    const claimed = await claimReminders(db, [key]);
+
+    expect(claimed.ok && claimed.value[0]).toMatchObject({
+      ok: false,
+      error: { category: "bad_row" },
+    });
+  });
+
+  it("fails every item when the call fails", async () => {
+    const { db } = mockPostgrest(() => ({
+      status: 500,
+      body: { code: "XX000", message: "canary" },
+    }));
+
+    const claimed = await claimReminders(db, [key, key]);
+
+    expect(claimed).toMatchObject({ ok: false });
+  });
+
+  it("makes no call when no item is valid, and refuses each", async () => {
+    const { db, requests } = mockPostgrest();
+
+    const marked = await markRemindersSent(db, {
+      keys: [{ ...key, claimToken: TOKEN_ID }],
+      messageId: "../1",
+    });
+
+    expect(marked).toEqual({
+      ok: true,
+      value: [{ ok: false, error: { category: "invalid_input", code: null } }],
+    });
+    expect(requests).toEqual([]);
+  });
+
+  it("refuses more than one batch can hold, with no call", async () => {
+    const { db, requests } = mockPostgrest();
+
+    const claimed = await claimReminders(
+      db,
+      Array.from({ length: 101 }, () => key),
+    );
+
+    expect(claimed.ok).toBe(false);
+    expect(requests).toEqual([]);
+  });
 });

@@ -2,7 +2,12 @@ import type { DateOnly } from "../lib/dates.ts";
 import { isSnowflake } from "../lib/snowflake.ts";
 import { REMINDER_KINDS } from "../reminders/plan.ts";
 import type { DbClient } from "./client.ts";
-import { failure, refused, type DbResult } from "./errors.ts";
+import {
+  failure,
+  failureFromResponse,
+  refused,
+  type DbResult,
+} from "./errors.ts";
 import { rest } from "./internal.ts";
 import {
   booleanValue,
@@ -11,6 +16,7 @@ import {
   nullableUuidValue,
   oneOrNone,
   rowList,
+  type ApiResponse,
   type CappedList,
 } from "./result.ts";
 import {
@@ -171,6 +177,102 @@ export async function claimReminder(
   );
 }
 
+/** The most reminders one batch call takes. A run's batch is one message, far fewer. */
+export const MAX_REMINDER_BATCH = 100;
+
+/**
+ * Runs a batch call for the items that pass `isValid`, and gives each item the answer
+ * the single-item call would have given it: a refusal for an invalid item, and otherwise
+ * that item's part of the batch's answer. A batch that fails fails every item it held.
+ */
+async function perItem<K, T>(
+  keys: readonly K[],
+  isValid: (key: K) => boolean,
+  call: (valid: readonly K[]) => Promise<DbResult<readonly DbResult<T>[]>>,
+): Promise<DbResult<readonly DbResult<T>[]>> {
+  // A loop and not .filter(), which is a query method the lint keeps out of this folder.
+  const valid: K[] = [];
+  for (const key of keys) {
+    if (isValid(key)) {
+      valid.push(key);
+    }
+  }
+  if (valid.length > MAX_REMINDER_BATCH) {
+    return refused();
+  }
+  const answers = valid.length === 0 ? null : await call(valid);
+  if (answers !== null && !answers.ok) {
+    return answers;
+  }
+  let next = 0;
+  return {
+    ok: true,
+    value: keys.map((key) => {
+      if (!isValid(key)) {
+        return refused();
+      }
+      const answer = answers?.value[next];
+      next += 1;
+      return answer ?? failure("bad_row");
+    }),
+  };
+}
+
+/** A JSON array with exactly one element per item, each read by `read`. */
+function batchAnswers<T>(
+  response: ApiResponse,
+  count: number,
+  read: (element: unknown) => DbResult<T>,
+): DbResult<readonly DbResult<T>[]> {
+  if (response.error !== null) {
+    return failureFromResponse(response.error, response.status);
+  }
+  const { data } = response;
+  return Array.isArray(data) && data.length === count
+    ? { ok: true, value: data.map(read) }
+    : failure("bad_row");
+}
+
+function claimAnswer(element: unknown): DbResult<string | null> {
+  if (typeof element !== "object" || element === null) {
+    return failure("bad_row");
+  }
+  const { claim_token: token, changed } = element as Record<string, unknown>;
+  if (changed === true && token === null) {
+    return failure("task_changed", "CF412");
+  }
+  return changed === false && (token === null || isUuid(token))
+    ? { ok: true, value: token }
+    : failure("bad_row");
+}
+
+/**
+ * `claimReminder` for each of several reminders, in one call. Each item's answer is the
+ * one `claimReminder` would give it, a `task_changed` failure included. Failing as a
+ * whole means no item was claimed.
+ */
+export async function claimReminders(
+  db: DbClient,
+  keys: readonly (ReminderKey & { asRead?: TaskAsRead | undefined })[],
+): Promise<DbResult<readonly DbResult<string | null>[]>> {
+  return perItem(
+    keys,
+    (key) => isReminderKey(key) && isTaskAsRead(key.asRead),
+    async (valid) =>
+      batchAnswers(
+        await rest(db).rpc("claim_reminders", {
+          p_task_ids: valid.map((key) => key.taskId),
+          p_kinds: valid.map((key) => key.kind),
+          p_due_dates: valid.map((key) => key.dueDate),
+          p_assignee_ids: valid.map((key) => key.asRead?.assigneeId ?? null),
+          p_updated_ats: valid.map((key) => key.asRead?.updatedAt ?? null),
+        }),
+        valid.length,
+        claimAnswer,
+      ),
+  );
+}
+
 /** Takes over a stale claim given its last token. Null if that is no longer possible. */
 export async function reclaimReminder(
   db: DbClient,
@@ -306,6 +408,42 @@ export async function markReminderSent(
       p_claim_token: key.claimToken,
       p_message_id: key.messageId,
     }),
+  );
+}
+
+/**
+ * `markReminderSent` for each of several claims, all ended by the one message, in one
+ * call. Failing as a whole means no item was marked.
+ */
+export async function markRemindersSent(
+  db: DbClient,
+  {
+    keys,
+    messageId,
+  }: {
+    keys: readonly (ReminderKey & { claimToken: string })[];
+    messageId: string;
+  },
+): Promise<DbResult<readonly DbResult<boolean>[]>> {
+  return perItem(
+    keys,
+    (key) =>
+      isReminderKey(key) && isUuid(key.claimToken) && isSnowflake(messageId),
+    async (valid) =>
+      batchAnswers(
+        await rest(db).rpc("mark_reminders_sent", {
+          p_task_ids: valid.map((key) => key.taskId),
+          p_kinds: valid.map((key) => key.kind),
+          p_due_dates: valid.map((key) => key.dueDate),
+          p_claim_tokens: valid.map((key) => key.claimToken),
+          p_message_id: messageId,
+        }),
+        valid.length,
+        (element) =>
+          typeof element === "boolean"
+            ? { ok: true, value: element }
+            : failure("bad_row"),
+      ),
   );
 }
 
