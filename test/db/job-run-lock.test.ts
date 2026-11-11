@@ -171,7 +171,7 @@ describe("begin_job_run", () => {
     });
   });
 
-  it("is closed to the anon role", async () => {
+  it("is closed to a role with no grants", async () => {
     await expect(
       queryAs(
         database,
@@ -317,7 +317,7 @@ describe("begin_job_run", () => {
       }
     });
 
-    it("is closed to the anon role", async () => {
+    it("is closed to a role with no grants", async () => {
       await expect(
         queryAs(
           database,
@@ -332,7 +332,7 @@ describe("begin_job_run", () => {
     const CHECK_VIOLATION = "23514";
     const FUTURE = "2099-01-01T00:00:00Z";
 
-    /** Writes a row as a restored backup could hold it, with the trigger off. */
+    /** Writes a row as a restored database could hold it, with the trigger off. */
     const insertForged = async (sql: string) => {
       await database.exec(
         "ALTER TABLE public.job_runs DISABLE TRIGGER job_runs_refuse_future_times",

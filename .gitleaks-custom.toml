@@ -6,12 +6,6 @@
 title = "GTSASE Discord Bot custom secret rules"
 
 [[rules]]
-id = "supabase-secret-key"
-description = "Supabase server-side secret key"
-regex = '''\bsb_secret_[A-Za-z0-9_-]{16,}'''
-keywords = ["sb_secret_"]
-
-[[rules]]
 id = "age-secret-key"
 description = "age encryption identity, classic or post-quantum"
 regex = '''AGE-SECRET-KEY-(?:PQ-)?1[0-9A-Z]{20,}'''
@@ -52,7 +46,7 @@ secretGroup = 1
 [[rules]]
 id = "named-secret-env-assignment"
 description = "Value assigned to a secret environment variable used by this project"
-regex = '''(?i)\b(?:DISCORD_BOT_TOKEN|SUPABASE_SECRET_KEY|CRON_SECRET|BACKUP_PGPASSWORD|PGPASSWORD)\b["']?[ \t]*[:=][ \t]*["']?([^\s"']{8,})'''
+regex = '''(?i)\b(?:DISCORD_BOT_TOKEN|DATABASE_URL|CRON_SECRET|PGPASSWORD|BOT_APP_PASSWORD|OWNER_PASSWORD)\b["']?[ \t]*[:=][ \t]*["']?([^\s"']{8,})'''
 secretGroup = 1
 
 # Reading a variable or calling a function is not a literal secret.
@@ -63,6 +57,8 @@ regexes = [
   '''^(?:process\.env|import\.meta\.env)(?:\.[A-Za-z_][A-Za-z0-9_]*[!,;)]*|\[)$''',
   '''^[A-Za-z_][A-Za-z0-9_.]*\(.*$''',
   '''^CANARY_[A-Z_]+,?$''',
+  # A Postgres URL that names a user and no password: its password comes from elsewhere.
+  '''^postgres(?:ql)?://[^:@/\s]+@[^\s"']*$''',
   '''^/g\)\)\.toHaveLength\([0-9]+\);?$''',
 ]
 

@@ -44,7 +44,6 @@ keys.txt
 key.txt
 age.txt
 identity.txt
-backup-identity*
 
 # Credential files
 secrets.json

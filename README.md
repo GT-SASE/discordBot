@@ -2,9 +2,9 @@
 
 A Discord bot for the SASE at Georgia Tech events team. It stores events, tasks and deadlines, creates a forum post for each event, and reminds each person about their own tasks.
 
-It runs on free tiers: TypeScript functions on Vercel Hobby and Postgres on Supabase. It has no always-on server and no website.
+It runs on free tiers: TypeScript functions on Vercel Hobby and Postgres 17 on Neon. It has no always-on server and no website.
 
-**Status: v2, in testing.** The bot runs on a private test server, where `/setup`, event steps, the Done buttons and the role pings have been tried. The daily reminders have not run there yet. [docs/STAGING_CHECKLIST.md](docs/STAGING_CHECKLIST.md) lists everything still to check before it joins the club server.
+**Status: v2, in testing.** The bot runs on a private test server, where `/setup`, event steps, the Done buttons and the role pings have been tried. The daily reminders have not run there yet, and the Neon setup has not yet been tried live. [docs/STAGING_CHECKLIST.md](docs/STAGING_CHECKLIST.md) lists everything still to check before it joins the club server.
 
 ## What it does
 
@@ -69,8 +69,8 @@ flowchart LR
     daily --> client
   end
 
-  handlers -->|secret key| db[(Supabase Postgres)]
-  daily -->|secret key| db
+  handlers -->|bot_app role| db[(Neon Postgres)]
+  daily -->|bot_app role| db
   client -->|managed channels only| discord
 ```
 
@@ -78,18 +78,19 @@ The bot receives Discord's HTTP interactions and opens no gateway connection. It
 
 Discord allows 3 seconds for the first reply. So the bot makes one database read, sends a private acknowledgement, and finishes the work with `waitUntil`.
 
-| Path                   | Holds                                                      |
-| ---------------------- | ---------------------------------------------------------- |
-| `api/`                 | The two public endpoints. Every file here becomes a route. |
-| `src/discord/`         | Signature checks, safe text, message builders, REST client |
-| `src/handlers/`        | The router and each command                                |
-| `src/tasks/`           | The `/task` subcommands                                    |
-| `src/events/`          | Event input checks, the overview and the event's steps     |
-| `src/reminders/`       | The daily run, its plan and the health check               |
-| `src/db/`              | All database access                                        |
-| `src/lib/`             | Settings, permissions and dates                            |
-| `supabase/migrations/` | The schema, grants and database functions                  |
-| `docs/adr/`            | Records of the design decisions and their costs            |
+| Path             | Holds                                                      |
+| ---------------- | ---------------------------------------------------------- |
+| `api/`           | The two public endpoints. Every file here becomes a route. |
+| `src/discord/`   | Signature checks, safe text, message builders, REST client |
+| `src/handlers/`  | The router and each command                                |
+| `src/tasks/`     | The `/task` subcommands                                    |
+| `src/events/`    | Event input checks, the overview and the event's steps     |
+| `src/reminders/` | The daily run, its plan and the health check               |
+| `src/db/`        | All database access                                        |
+| `src/lib/`       | Settings, permissions and dates                            |
+| `db/migrations/` | The schema, grants and database functions                  |
+| `scripts/`       | Migrations, command registration and the repo's checks     |
+| `docs/adr/`      | Records of the design decisions and their costs            |
 
 ## Commands
 
@@ -149,10 +150,11 @@ No system is unhackable, and this one makes no such claim. The aim is to keep th
 
 **Database**
 
-- Only the server-side `sb_secret_` key is used, with no browser client.
-- Row level security is on with no policies for the API. Row level security does not limit that key, so grants do. The bot's role has no `DELETE` or `TRUNCATE` on its tables, can update `events` and `tasks` only in listed columns, and can only read config tables. Config changes go through functions that check a version and write an audit row. `interaction_claims` is reached only through functions, and its expired rows are removed by one.
-- Triggers copy old rows into `history.row_versions`, in a schema the API cannot reach.
-- Deletes are soft. CI checks the grants, on a stand-in for hosted Supabase.
+- The bot logs in as `bot_app`, a role that owns nothing, belongs to no role, cannot create anything or make temporary tables, and does not bypass row level security. Any other role in `DATABASE_URL` is refused at startup, and a non-local host needs TLS.
+- `bot_app` has no `DELETE` or `TRUNCATE` anywhere. It can read the app's tables, insert named columns of `events` and `tasks`, and update only listed columns of them. A task's text, date or person changes only through `edit_task`, which counts a new person against the officer's daily limit. Every other write goes through functions that check a version, a claim or a limit, and config changes also write an audit row.
+- Row level security is on for every table, with one policy per table and command `bot_app` is granted, so any other role sees nothing even if a grant is added by mistake.
+- Triggers copy every changed or removed row of the main tables into `history.row_versions`, which `bot_app` cannot reach. `TRUNCATE` is refused on those tables too.
+- Deletes are soft. The one hard delete is `expire_interaction_claims`, which removes day-old interaction claims, short-lived tokens rather than club data. CI checks the grants on PGlite and on Postgres 17.
 
 **Outgoing messages**
 
@@ -164,19 +166,19 @@ No system is unhackable, and this one makes no such claim. The aim is to keep th
 **Secrets and supply chain**
 
 - Nothing logs a request body or interaction token. Logs hold fixed text, IDs and error codes.
-- Gitleaks, with the default rules and the project's own in `.gitleaks.toml`, scans every commit in CI and unpushed commits in a pre-push hook. The lockfile is committed and checked by lockfile-lint, install scripts are off, Actions are pinned by SHA, and Dependabot has a 7-day cooldown with no auto-merge.
+- Gitleaks scans every commit in CI and unpushed commits in a pre-push hook, in two passes: the default rules in `.gitleaks.toml`, which holds nothing else, and the project's own rules in `.gitleaks-custom.toml`. `pnpm-lock.yaml` is committed and checked so every package comes from the registry with a sha512 hash, install scripts are off, Actions are pinned by SHA, and Dependabot has a 7-day cooldown with no auto-merge.
 
 **Backups**
 
-- Supabase's own backups, and point-in-time restore where the plan has it, plus an occasional manual `pg_dump` export kept privately. Soft deletes and row history undo single mistakes. See [docs/RECOVERY.md](docs/RECOVERY.md).
+- Neon's point-in-time restore and branching, within the plan's restore window, plus an occasional manual `pg_dump` export kept privately. Soft deletes and row history undo single mistakes. See [docs/RECOVERY.md](docs/RECOVERY.md).
 
 ## Risks that remain
 
 These stay true with every control working:
 
 - **Discord admins.** A Discord Administrator can give themselves every tier. Anyone who can manage roles can grant a bound role below their own, and the bot is not told when that happens.
-- **Stolen secrets.** A leaked bot token or Supabase secret key bypasses this code. Rotating stops further use, but what was done with it stays done: role bindings, managed forums and skipped reminders are not undone, and row history does not cover them. Data read before then stays exposed. [SECURITY.md](SECURITY.md#2-check-for-misuse) lists the checks to make after a leak. Row history and backups recover events and tasks, which the secret key can still overwrite.
-- **Account takeover.** A takeover of the maintainer's GitHub, Vercel, Supabase or Discord account defeats all of this. So does a platform incident. Supabase's login offers only authenticator codes, not a passkey or hardware key.
+- **Stolen secrets.** A leaked bot token or `DATABASE_URL` bypasses this code. Rotating stops further use, but what was done with it stays done: changed role bindings, managed forums and skipped reminders are not undone. Row history keeps the old bindings and forums, not the reminder log. Data read before then stays exposed. [SECURITY.md](SECURITY.md#2-check-for-misuse) lists the checks to make after a leak. Row history and Neon's restore recover events and tasks, which `bot_app` can still overwrite.
+- **Account takeover.** A takeover of the maintainer's GitHub, Vercel, Neon or Discord account defeats all of this. So does a platform incident.
 - **A trusted officer.** An officer, or a stolen officer account, can still ping people with persuasive plain text and a URL. It cannot be clicked, but it can be copied. Only a person can judge such text.
 - **What officers can read.** An officer can see events through the bot in forums they cannot open in Discord.
 - **Who did it.** Officer edits, completions and deletes record no actor, so after a stolen officer account they may not be traceable to it. [SECURITY.md](SECURITY.md#what-can-be-attributed) says what can be.
@@ -185,37 +187,47 @@ These stay true with every control working:
 - **Missed runs.** Vercel Cron is best effort with no retries. A second cron reduces this, but a reminder can be late or, after a crash, sent twice. An event's step list or Food pickup reminder is never late: if both crons of its day miss, it is not sent.
 - **Held reminders.** If the bot loses Send Messages across a server while it can still read the forums, each event's reminders are held after three refused runs, and the job goes green with nothing sent. No alert fires. [The runbook](docs/RUNBOOK.md#reminders-held-while-the-job-is-green) says how to spot it.
 - **Dependencies.** A compromised dependency would run with full access to the secrets. Pinning and cooldowns lower the odds only.
-- **Backups.** Whether the database has provider backups depends on its plan. A former member's text stays in backups and exports until they expire or are deleted.
+- **Backups.** How far back Neon can restore depends on its plan. A former member's text stays in that history and in exports until they expire or are deleted.
 - **Short logs.** Hobby keeps logs for one hour, which limits what can be learned after an incident.
-- **Unproved.** Grants have only been tested on stand-ins, and no restore has been tried on hosted Supabase. See [docs/STAGING_CHECKLIST.md](docs/STAGING_CHECKLIST.md).
+- **Unproved.** Grants have been tested on PGlite and on Postgres 17 in CI, not on Neon, and no restore has been tried on Neon. See [docs/STAGING_CHECKLIST.md](docs/STAGING_CHECKLIST.md).
 
 ## Local development
 
-You need Node.js 24, Git, Bash and curl 7.71 or later, on macOS or Linux.
+You need Node.js 24, Git, Bash and curl 7.71 or later, on macOS or Linux. The package manager is pnpm, pinned in `package.json` by version and hash. If pnpm is not installed, run `corepack enable`, which ships with Node 24 and then runs exactly the pinned version.
 
 ```sh
-npm ci --ignore-scripts
-npm run gitleaks:install
-npm run hooks:install
+pnpm install --frozen-lockfile
+pnpm gitleaks:install
+pnpm hooks:install
 ```
 
-The committed `.npmrc` sets `ignore-scripts=true`, so package install scripts stay off in every install, including Vercel's. `hooks:install` turns on a pre-push hook that runs gitleaks over the commits no remote has yet and blocks the push on a finding. [SECURITY.md](SECURITY.md) lists its limits.
+The committed `.npmrc` holds only `ignore-scripts=true`, which pnpm reads, so package install scripts stay off in every install, including Vercel's. pnpm 10 also runs no dependency's build script unless `pnpm.onlyBuiltDependencies` in `package.json` lists it, and that list is empty. `hooks:install` turns on a pre-push hook that runs gitleaks over the commits no remote has yet and blocks the push on a finding. [SECURITY.md](SECURITY.md) lists its limits.
 
 There is no local bot. Discord needs a public HTTPS URL, so tests stand in for it, and real runs happen on the test deployment. `.env.example` lists every setting. Copy it to `.env` only when you need to register commands.
 
 ### Tests and checks
 
-| Command                                                                     | What it does                                                                                                         | Needs                                               |
-| --------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------- |
-| `npm run typecheck`                                                         | Type check                                                                                                           | Nothing                                             |
-| `npm run lint`                                                              | ESLint (only the clients may call `fetch`), and a check that names no Discord host                                   | Nothing                                             |
-| `npm run lint:lockfile`                                                     | lockfile-lint: every package from the npm registry over HTTPS, by its own name, with a sha512 hash                   | Nothing                                             |
-| `npm run format:check`                                                      | Prettier                                                                                                             | Nothing                                             |
-| `npm test`                                                                  | Unit tests                                                                                                           | Nothing                                             |
-| `npm run test:db`                                                           | Migrations, grants and access layer on PGlite                                                                        | Nothing                                             |
-| `npm run test:db:concurrency`                                               | Races: double Done clicks, retried interactions, overlapping reminder runs, deletes against inserts                  | `CONCURRENCY_DATABASE_URL`, a Postgres 17 superuser |
-| `npm run test:postgrest`                                                    | Access layer on real PostgREST                                                                                       | `POSTGREST_URL` and related settings                |
-| `.tools/gitleaks git . --config .gitleaks.toml --redact --log-opts="--all"` | Scans every commit on every ref with the default rules, as CI does. CI then scans again with `.gitleaks-custom.toml` | gitleaks, a full clone                              |
+| Command                                 | What it does                                                                                        | Needs                                                                         |
+| --------------------------------------- | --------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
+| `pnpm typecheck`                        | Type check                                                                                          | Nothing                                                                       |
+| `pnpm lint`                             | ESLint (only the clients may call `fetch`), and a check that names no Discord host                  | Nothing                                                                       |
+| `pnpm lint:lockfile`                    | Every package in `pnpm-lock.yaml` from the registry, with a sha512 hash                             | Nothing                                                                       |
+| `pnpm format:check`                     | Prettier                                                                                            | Nothing                                                                       |
+| `pnpm test`                             | Unit tests                                                                                          | Nothing                                                                       |
+| `pnpm test:db`                          | Migrations, grants and access layer on PGlite, logged in as `bot_app`                               | Nothing                                                                       |
+| `pnpm test:db:concurrency`              | Races: double Done clicks, retried interactions, overlapping reminder runs, deletes against inserts | `CONCURRENCY_DATABASE_URL` to a Postgres 17 superuser, and `BOT_APP_PASSWORD` |
+| `node scripts/check-migration-sql.ts`   | Refuses dynamic `EXECUTE` and repeated versions in `db/migrations`                                  | Nothing                                                                       |
+| `bash scripts/check-deploy-settings.sh` | The settings that decide what Vercel installs and publishes                                         | Nothing                                                                       |
+| `pnpm db:migrate`                       | Applies new files in `db/migrations`, in order                                                      | `DATABASE_URL` for the database's owner role, never `bot_app`                 |
+
+The concurrency tests need real Postgres 17. CI's database workflow starts one with password logins, makes an owner and a database, runs `pnpm db:migrate` twice to show the second run applies nothing, sets `bot_app`'s password, then runs those tests and a test logged in as `bot_app`.
+
+Gitleaks scans every commit on every ref in two passes, as CI does. You need a full clone.
+
+```sh
+.tools/gitleaks git . --config .gitleaks.toml --redact --ignore-gitleaks-allow --no-banner --log-opts="--all -m --text --no-color"
+.tools/gitleaks git . --config .gitleaks-custom.toml --redact --ignore-gitleaks-allow --no-banner --log-opts="--all -m --text --no-color"
+```
 
 [CI](.github/workflows/ci.yml) runs the main checks on each pull request and on pushes to `main` and `staging`. [Database](.github/workflows/db.yml) and [Deploy check](.github/workflows/deploy-check.yml) run on the same events but skip a change to `docs/`, `README.md` or `SECURITY.md` alone.
 
@@ -228,7 +240,7 @@ Commit messages and pull request titles follow [Conventional Commits](https://ww
 Commands are registered per server, never globally. Set `DISCORD_APP_ID`, `DISCORD_BOT_TOKEN` and `ALLOWED_GUILD_IDS` in `.env`, then run:
 
 ```sh
-npm run commands:register -- <guild-id>
+pnpm commands:register <guild-id>
 ```
 
 The script stops before sending anything if an ID is not in `ALLOWED_GUILD_IDS`. It replaces the server's whole command list with the one built from `src/handlers/modules.ts`, so run it again after changing a command.
@@ -237,14 +249,22 @@ To add a command, write a file in `src/handlers/` that exports `handler`, add on
 
 ## Deployment
 
-[docs/SETUP.md](docs/SETUP.md) has the full steps. These settings in the repo are easy to break:
+[docs/SETUP.md](docs/SETUP.md) has the full steps. For the database, in short:
+
+1. Create a Neon project on Postgres 17.
+2. Apply the schema as the project's owner role, such as the default `neondb_owner`, never as `bot_app`: `DATABASE_URL='<owner connection string>' pnpm db:migrate`. Neon's Connect dialog shows the owner's connection string. The direct one, with pooling off, is the better choice for migrations.
+3. Once, as the owner, in Neon's SQL editor or `psql`, give `bot_app` a long random password: `ALTER ROLE bot_app PASSWORD '<password>';`. The baseline creates `bot_app` with no password.
+4. In Vercel, set `DATABASE_URL` to `bot_app`'s pooled connection string, from the Connect dialog with role `bot_app` and pooling on. It has the shape `postgresql://bot_app:<password>@<pooled-host>/<database>?sslmode=verify-full`, where `<password>` is the one set with `ALTER ROLE` in step 3, percent-encoded.
+
+These settings in the repo are easy to break:
 
 - `engines` in `package.json` selects the Node.js version.
 - Keep `outputDirectory` set to `public`, and keep `public/robots.txt`, because Vercel refuses an empty output directory. Without a `public` directory, Vercel publishes the repository's files. The [deploy check](.github/workflows/deploy-check.yml) fails if anything but `robots.txt` is published, or if an unexpected function is built.
 - Do not add tests or helpers under `api/`.
 - `git.deploymentEnabled` deploys `main` and `staging` and nothing else. The rule is `**`, because `*` does not match a branch name containing a slash.
 - `vercel.json` applies to every Vercel project linked to the repo. The production project also builds `staging` as a preview, which holds no secrets.
-- Vercel's function builder ignores `installCommand`, so `.npmrc` is what keeps install scripts off.
+- Vercel installs with pnpm from `pnpm-lock.yaml`. Set the Vercel environment variable `ENABLE_EXPERIMENTAL_COREPACK=1`, so it uses exactly the pnpm that `packageManager` in `package.json` pins.
+- Vercel's function builder ignores `installCommand`, so `.npmrc` is what keeps install scripts off. `bash scripts/check-deploy-settings.sh` checks these settings.
 - `.vercelignore` keeps local `.env` files out of a deployment made with the Vercel CLI.
 - The two cron schedules must stay in step with `begin_job_run` and `SLOT_START_HOUR_UTC`. The second cron only recovers a failed first run.
 
@@ -252,9 +272,8 @@ To add a command, write a file in `src/handlers/` that exports `handler`, add on
 
 - [docs/SETUP.md](docs/SETUP.md): from nothing to a test server, then production
 - [docs/STAGING_CHECKLIST.md](docs/STAGING_CHECKLIST.md): what only real services can prove
-- [docs/RECOVERY.md](docs/RECOVERY.md): undoing a change, the provider's backups and manual exports
+- [docs/RECOVERY.md](docs/RECOVERY.md): undoing a change, Neon's point-in-time restore and manual exports
 - [docs/RUNBOOK.md](docs/RUNBOOK.md): held reminders, the bot removed from a server, a full database, deploy order and data retention
 - [docs/HANDOFF.md](docs/HANDOFF.md): passing the bot to the next maintainer
-- [docs/PUBLIC_RELEASE.md](docs/PUBLIC_RELEASE.md): going public
 - [docs/adr/](docs/adr/): decision records
 - [SECURITY.md](SECURITY.md): reporting a problem and handling a leak

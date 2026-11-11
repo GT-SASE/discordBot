@@ -1324,12 +1324,12 @@ describe("a failed morning and the recovery cron", () => {
       status: "failed",
       error: "reminders_incomplete",
     });
-    // What the backup job's freshness alert reads.
+    // What the health check's freshness alert reads.
     expect(
       await getLatestSucceededJobRun(db, { jobName: "reminders" }),
     ).toEqual({ ok: true, value: null });
 
-    // The 16:00 cron, by which time a morning claim has gone stale.
+    // The 17:00 cron, by which time a morning claim has gone stale.
     discordGate = () => undefined;
     await database.exec(
       `UPDATE public.reminder_log SET claimed_at = now() - interval '2 hours'`,
@@ -1454,7 +1454,7 @@ describe("a rerun soon after a failed run", () => {
         await getLatestSucceededJobRun(db, { jobName: "reminders" }),
       ).toEqual({ ok: true, value: null });
 
-      // The 16:00 cron, by which time the morning's claim has gone stale.
+      // The 17:00 cron, by which time the morning's claim has gone stale.
       await database.exec(
         `UPDATE public.reminder_log SET claimed_at = now() - interval '2 hours'`,
       );

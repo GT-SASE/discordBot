@@ -1,6 +1,6 @@
 # Staging checklist
 
-The tests in this repo use stand-ins for Discord, Vercel and Supabase. Everything here can only be proved against the real services. None of it has been run yet. Expected results come from the code and those stand-ins, so a real error code or message may differ. When it does, record what you saw.
+The tests in this repo use stand-ins for Discord, Vercel and Neon: mocks for Discord, and PGlite and Postgres 17 for the database. Everything here can only be proved against the real services. The bot runs on a private test server, where some Discord items have been tried, and the Neon setup has not yet been tried live. Nothing here is ticked yet. Expected results come from the code and those stand-ins, so a real error code or message may differ. When it does, record what you saw.
 
 Do this on the test setup from [SETUP.md](SETUP.md), with made-up data. Tick an item only when you have seen the result yourself. If you accept a failure, write down why.
 
@@ -8,15 +8,16 @@ The last section lists settings to confirm. Repeat that section on production.
 
 ## Before you start
 
-Set these in the terminal. `read -rs` waits for you to paste a value, and keeps it out of your shell history and off the screen. Paste the test project's `sb_publishable_` key, then its `sb_secret_` key, then its cron secret, pressing Enter after each.
+Set these in the terminal. `read -rs` waits for you to paste a value, and keeps it out of your shell history and off the screen. Paste the test project's `DATABASE_URL`, which is `bot_app`'s pooled connection string, then the owner's direct connection string, then the cron secret, pressing Enter after each. Clear them with `unset BOT_URL OWNER_URL CRON` when you finish.
 
 ```sh
 URL=https://<name>.vercel.app
-SUPABASE=https://<test-project-ref>.supabase.co
-read -rs PUBLISHABLE
-read -rs SECRET_KEY
+read -rs BOT_URL
+read -rs OWNER_URL
 read -rs CRON
 ```
+
+Where an item gives SQL with no other instruction, run it as the owner, in Neon's SQL editor or `psql "$OWNER_URL"`.
 
 You need a second Discord account, called the member here, with no bot role. You also need a task on an event, made with `/event create` and `/task assign`.
 
@@ -32,7 +33,7 @@ curl -i -H "Authorization: Bearer $CRON" "$URL/api/cron/reminders"
 
 Each job, `reminders` and `health_check`, can succeed once per slot. A slot runs from 15:00 UTC to the next 15:00 UTC. After a success, a later run in that slot does nothing and still answers 200 `ok`. A failed run does not close the slot. So `ok` proves nothing, and a by-hand run after the daily cron usually tests nothing.
 
-Before a by-hand run, check the slot in the SQL Editor. A row means that job's slot is closed.
+Before a by-hand run, check the slot as the owner. A row means that job's slot is closed.
 
 ```sql
 SELECT job_name, status, started_at, results
@@ -291,12 +292,12 @@ These need the Treasury Committee and Marketing Committee roles chosen in `/setu
 - [ ] **Food pickup waits for the budget.**
   - Do: on a new event, run `/event pickup time:5:30 PM` and `/event assign step:Food pickup`.
   - Success: both are refused with `Food pickup can only be set up once the budget is approved.`, and nothing changes.
-  - If it fails: check `set_event_pickup_time` and `assign_event_step` in the event workflow migration.
+  - If it fails: check `NOT_APPROVED` and its callers in `src/events/workflow.ts`. The database no longer enforces this, so the bot's own check is the only one.
 
 - [ ] **The step option's choices show on desktop and mobile.**
   - Do: start typing `/event assign` on both.
   - Success: the step option offers Budget Sheet, Engage post and Food pickup, and nothing else can be entered.
-  - If it fails: run `npm run commands:register` again.
+  - If it fails: run `pnpm commands:register <test-server-id>` again.
 
 ## Attacks against the live URL
 
@@ -383,14 +384,14 @@ Run these from your own computer.
 - [ ] **Source and config files are not served.**
 
   ```sh
-  for target in src src/lib/env.ts package.json vercel.json .env api/interactions.ts api/interactions.js.map api/cron/reminders.js.map supabase/migrations; do
+  for target in src src/lib/env.ts package.json vercel.json .env api/interactions.ts api/interactions.js.map api/cron/reminders.js.map db/migrations; do
     curl -s -o /dev/null -w "%{http_code} /$target\n" "$URL/$target"
   done
   curl -s -o /dev/null -w "%{http_code} /robots.txt\n" "$URL/robots.txt"
   ```
 
   - Success: 404 for all but `robots.txt`, which gives 200. The "Only known paths" firewall rule turns those 404s into 403, which is also fine. `/api/interactions.ts` may answer 405 with the rule off, because Vercel routes that path to the function, which refuses a GET. That serves nothing. Note what the two `.js.map` paths give. Nothing has checked them on a real deployment.
-  - If it fails: a 200 with file contents means that file is public. Check `outputDirectory` in `vercel.json`. Rotate anything that was served. A `.js.map` that is served exposes the source, and the source is private for now.
+  - If it fails: a 200 with file contents means that file is public. Check `outputDirectory` in `vercel.json`. Rotate anything that was served. A `.js.map` that is served exposes the built code, so note it even though the source is public.
 
 - [ ] **A pasted newline in a setting.** Whether Vercel's dashboard keeps a trailing newline is unverified. The code trims every setting, including `CRON_SECRET`.
   - Do: on the test project, copy a new secret with `openssl rand -hex 32 | pbcopy`, as Part 5 of the setup guide does, and paste it as `CRON_SECRET`. Redeploy, and run the cron by hand with that value in `CRON`.
@@ -398,7 +399,7 @@ Run these from your own computer.
   - If it fails: check `isCronAuthorized` in `src/lib/cron-auth.ts`, and fix the copy command in the setup guide.
 
 - [ ] **What Vercel's logs keep.** An interaction token lets its holder reply as the bot, and the bot's requests to Discord carry it in the URL. Whether Vercel records that is unverified.
-  - Do: run `/config`, `/mytasks` and a by-hand cron. In Logs, open each entry, including any list of outgoing requests. Search for `webhooks`, `interactions`, `Bearer` and `sb_secret_`. Check whether the full query string of the fourth request in the cron item shows.
+  - Do: run `/config`, `/mytasks` and a by-hand cron. In Logs, open each entry, including any list of outgoing requests. Search for `webhooks`, `interactions`, `Bearer`, `postgres` and `bot_app`. Check whether the full query string of the fourth request in the cron item shows.
   - Success: no token, secret or message text appears. Write down what the logs do keep.
   - If it fails: if a token shows, anyone who can read the logs can reply as the bot for its 15-minute life. Limit who can read them, and add this to `SECURITY.md`. If a secret shows, rotate it.
 
@@ -412,105 +413,126 @@ Run these from your own computer.
   - Success: the request shows as denied in the Firewall overview, with no function invocation in Logs. Discord commands still work.
   - If it fails: put the rule back to Log and fix its condition. Check that commands work before making it final.
 
-## Supabase
+## Neon and the bot's role
 
-- [ ] **The publishable key reads nothing.**
+Run the SQL in this section as the owner, in Neon's SQL editor or `psql "$OWNER_URL"`, unless an item says to log in as `bot_app`. `test/db/grants.test.ts` is the reference for what the grants should be.
 
-  ```sh
-  for table in guild_config managed_channels events tasks reminder_log job_runs config_audit interaction_claims task_reassignments; do
-    curl -s -w " %{http_code} $table\n" "$SUPABASE/rest/v1/$table?select=*&limit=1" -H "apikey: $PUBLISHABLE"
-  done
-  curl -s -w " %{http_code} rpc\n" -X POST "$SUPABASE/rest/v1/rpc/claim_interaction" -H "apikey: $PUBLISHABLE" -H "content-type: application/json" -d '{"p_interaction_id":"x"}'
-  curl -s -w " %{http_code} root\n" "$SUPABASE/rest/v1/" -H "apikey: $PUBLISHABLE"
+- [ ] **`bot_app` is a plain login.**
+
+  ```sql
+  SELECT rolsuper, rolcreatedb, rolcreaterole, rolreplication, rolbypassrls, rolcanlogin, rolconfig
+  FROM pg_roles WHERE rolname = 'bot_app';
+
+  SELECT granted.rolname
+  FROM pg_auth_members AS m
+  JOIN pg_roles AS granted ON granted.oid = m.roleid
+  JOIN pg_roles AS member ON member.oid = m.member
+  WHERE member.rolname = 'bot_app';
+
+  SELECT count(*) AS owned FROM pg_class WHERE relowner = 'bot_app'::regrole;
+
+  SELECT has_database_privilege('bot_app', current_database(), 'CREATE') AS can_create,
+    has_database_privilege('bot_app', current_database(), 'TEMPORARY') AS can_make_temp,
+    has_schema_privilege('bot_app', 'public', 'CREATE') AS can_create_in_public,
+    has_schema_privilege('bot_app', 'history', 'USAGE') AS can_reach_history;
   ```
 
-  - Success: every table and `rpc` gets a refusal (401, 403 or 404) with no rows. For `root`, a refusal is fine, and so is a 200 whose document lists no table or function under `paths`. PostgREST on its own answers 200 with an empty OpenAPI document. What Supabase's gateway does at this path is unverified, so write it here.
-  - If it fails: rows, or a table name in the `root` document, are a live data leak. Revoke the grant at once, then add it to a migration and find out how it got there.
+  - Success: only `rolcanlogin` is true, and `rolconfig` holds `statement_timeout=10s`, `idle_in_transaction_session_timeout=15s` and `TimeZone=UTC`. No memberships, `owned` is 0, and all four rights are false.
+  - If it fails: someone changed the role by hand, or the platform adds memberships. Find out which before launch, and fix it with a migration.
 
-- [ ] **A hard delete fails at the database.**
+- [ ] **Grants are as designed on Neon.** The test harness runs on PGlite and Postgres 17, and assumes who granted what. Neon may add its own roles and defaults.
+
+  ```sql
+  SELECT grantee, table_schema, table_name,
+    string_agg(privilege_type, ', ' ORDER BY privilege_type) AS privileges
+  FROM information_schema.role_table_grants
+  WHERE grantee <> current_user AND table_schema IN ('public', 'history')
+  GROUP BY 1, 2, 3 ORDER BY 1, 2, 3;
+
+  SELECT grantee, table_name, privilege_type,
+    string_agg(column_name, ', ' ORDER BY column_name) AS columns
+  FROM information_schema.role_column_grants
+  WHERE grantee <> current_user AND table_schema IN ('public', 'history')
+    AND privilege_type <> 'SELECT'
+  GROUP BY 1, 2, 3 ORDER BY 1, 2, 3;
+
+  SELECT grantee, routine_schema, routine_name
+  FROM information_schema.role_routine_grants
+  WHERE grantee NOT IN (current_user, 'bot_app')
+    AND routine_schema IN ('public', 'history');
+
+  SELECT relname
+  FROM pg_class AS c
+  JOIN pg_namespace AS n ON n.oid = c.relnamespace
+  WHERE n.nspname IN ('public', 'history') AND c.relkind = 'r' AND NOT c.relrowsecurity;
+
+  SELECT defaclrole::regrole, defaclnamespace::regnamespace, defaclobjtype, defaclacl
+  FROM pg_default_acl;
+  ```
+
+  - Success: in the first query, only `bot_app`, with `SELECT` and nothing else on `config_audit`, `event_reminder_log`, `event_step_assignees`, `event_steps`, `events`, `guild_config`, `job_runs`, `managed_channels`, `reminder_log`, `setup_drafts` and `tasks`. Nothing on `interaction_claims`, `task_reassignments`, `schema_migrations` or `history`. In the second, only `bot_app`: `INSERT` on `events` (`channel_id`, `created_by`, `event_date`, `guild_id`, `name`, `thread_id`, `thread_status`), `UPDATE` on `events` (`event_date`, `name`, `overview_message_id`, `status`, `thread_id`, `thread_status`), `INSERT` on `tasks` (`assignee_id`, `created_by`, `description`, `due_date`, `event_id`, `guild_id`) and `UPDATE` on `tasks` (`completed_at`, `deleted_at`, `status`). No `DELETE`, `TRUNCATE`, `REFERENCES` or `TRIGGER` anywhere. No rows from the third or fourth. Default privileges name no role but the owner.
+  - If it fails: the migrations ran as a different role, or the platform's defaults differ. Revoke the extra grant at once, then add the fix to a migration and find out how it got there.
+
+- [ ] **What `bot_app` can and cannot do, logged in as it.**
 
   ```sh
+  for table in guild_config managed_channels events tasks event_steps event_step_assignees event_reminder_log setup_drafts reminder_log job_runs config_audit interaction_claims task_reassignments; do
+    printf '%s: ' "$table"
+    psql "$BOT_URL&sslrootcert=system" -Atc "SELECT count(*) FROM public.$table" 2>&1 | tail -1
+  done
   ZERO=00000000-0000-0000-0000-000000000000
-  for target in "events?id=eq.$ZERO" "tasks?id=eq.$ZERO" "job_runs?id=eq.$ZERO" "guild_config?guild_id=eq.0"; do
-    curl -s -w " %{http_code} $target\n" -X DELETE "$SUPABASE/rest/v1/$target" -H "apikey: $SECRET_KEY"
-  done
+  psql "$BOT_URL&sslrootcert=system" -c "DELETE FROM public.events WHERE id = '$ZERO';"
+  psql "$BOT_URL&sslrootcert=system" -c "DELETE FROM public.tasks WHERE id = '$ZERO';"
+  psql "$BOT_URL&sslrootcert=system" -c "TRUNCATE public.job_runs;"
+  psql "$BOT_URL&sslrootcert=system" -c "UPDATE public.tasks SET description = 'x' WHERE id = '$ZERO';"
+  psql "$BOT_URL&sslrootcert=system" -c "SELECT * FROM history.row_versions LIMIT 1;"
+  psql "$BOT_URL&sslrootcert=system" -c "CREATE TEMP TABLE scratch (x int);"
   ```
 
-  - Success: 403 with code `42501` for all four. An empty 204 means the delete was allowed, even though it matched no row. `guild_config` has no `id` column, so it filters on `guild_id`. A 400 with `42703` means a filter names a missing column, and says nothing about the grant.
-  - If it fails: run the grants check below and revoke `DELETE`.
+  - Success: a count for every table but `interaction_claims` and `task_reassignments`, which say `permission denied`. Each of the last six is refused with `permission denied`, even though no row matches. `sslrootcert=system` needs `psql` 16 or later, and lets it check Neon's certificate against the system's roots.
+  - If it fails: a count of rows for one of the two refused tables, or any of the last six succeeding, is a live hole. Revoke the grant at once, then add the fix to a migration.
 
-- [ ] **`history` cannot be reached.**
+- [ ] **The role's time limits and zone hold through the pooler.**
 
   ```sh
-  curl -s -w " %{http_code}\n" "$SUPABASE/rest/v1/row_versions?select=*&limit=1" -H "apikey: $SECRET_KEY" -H "Accept-Profile: history"
-  curl -s -w " %{http_code}\n" "$SUPABASE/graphql/v1" -H "apikey: $PUBLISHABLE"
+  psql "$BOT_URL&sslrootcert=system" -c 'SHOW statement_timeout;' -c 'SHOW idle_in_transaction_session_timeout;' -c 'SHOW TimeZone;'
+  psql "$BOT_URL&sslrootcert=system" -c 'SELECT pg_sleep(12);'
   ```
 
-  - Success: the first is refused, normally 406 with code `PGRST106`. The second is refused, or has no schema to query.
-  - If it fails: take `history` out of Exposed schemas, and turn `pg_graphql` off.
+  - Success: `10s`, `15s` and `UTC`, then the sleep is cancelled with `canceling statement due to statement timeout`.
+  - If it fails: the pooler does not pass on role settings. The bot's own deadlines of 1.5 and 8 seconds still apply, but nothing bounds work left on the server. Record it and decide before launch.
 
-- [ ] **What the secret key reaches beyond the tables.** Whether Storage and the Auth admin API answer to an `sb_secret_` key is unverified. A leak of that key would reach whatever they hold.
-  - Do: run these on the test project, and repeat the read on production.
+- [ ] **Connections need TLS.**
 
-    ```sh
-    curl -s -w " %{http_code} storage\n" "$SUPABASE/storage/v1/bucket" -H "apikey: $SECRET_KEY"
-    curl -s -w " %{http_code} auth\n" "$SUPABASE/auth/v1/admin/users?per_page=1" -H "apikey: $SECRET_KEY"
-    ```
+  ```sh
+  psql "${BOT_URL/sslmode=verify-full/sslmode=disable}" -c 'SELECT 1;'
+  ```
 
-  - Success: each is refused, or lists no bucket and no user. Write down which. If they answer, add them to the post-leak checks in `SECURITY.md`.
-  - If it fails: a bucket or a user you did not make means someone has been in the project. Rotate the key and read the project's logs.
+  - Success: Neon refuses the connection. The bot itself refuses a non-local `DATABASE_URL` without `sslmode=require`, `verify-ca` or `verify-full` at startup.
+  - If it fails: Neon accepts plain connections. The bot still asks for TLS, but record it.
 
-- [ ] **Legacy keys and sign-ups are off.**
-  - Do: try a request with the legacy `anon` key from Settings > API Keys. Then try a sign-up:
+- [ ] **The bot's connection string works, and connections are as expected.**
+  - Do: `/config` loads and saves. During a by-hand cron run, read `SELECT usename, state, count(*) FROM pg_stat_activity GROUP BY 1, 2;` as the owner. If Neon's string came with `channel_binding=require`, note whether the bot connects with it left in.
+  - Success: the panel works, with no `Invalid configuration for DATABASE_URL` in Logs, and `bot_app` holds a few connections at most, 3 per function instance. Unverified: whether the owner can see other roles' sessions on Neon. Write down what it shows.
+  - If it fails: check that `DATABASE_URL` names `bot_app`, the pooled host, the database and `sslmode`, and that the password is the one set with `ALTER ROLE bot_app PASSWORD`.
 
-    ```sh
-    curl -s -w " %{http_code}\n" -X POST "$SUPABASE/auth/v1/signup" -H "apikey: $PUBLISHABLE" -H "content-type: application/json" -d '{"email":"test@example.com","password":"correct-horse-battery"}'
-    ```
+- [ ] **Migrations on Neon.**
+  - Do: run `DATABASE_URL="$OWNER_URL" pnpm db:migrate` twice, with the direct owner string. Then `SELECT version, name, applied_at FROM public.schema_migrations;`.
+  - Success: the second run prints `Nothing to apply.`, and the table lists each file in `db/migrations` once.
+  - If it fails: read the error code it prints, and see [SETUP.md](SETUP.md#run-the-migrations).
 
-  - Success: the legacy key gets a 401, and the sign-up is refused. Supabase's docs do not give the exact response for a turned-off key, so check this in the dashboard and note what you see.
-  - If it fails: repeat Part 4 of the setup guide. Even a signed-up user should have no access, because of the grants, so also check the publishable key test with that user's token.
-
-- [ ] **Grants are as designed on hosted Supabase.** The test harness runs on PGlite and assumes who granted what. Hosted projects may differ.
-  - Do: run these in the SQL Editor.
-
-    ```sql
-    SELECT grantee, table_schema, table_name,
-      string_agg(privilege_type, ', ' ORDER BY privilege_type) AS privileges
-    FROM information_schema.role_table_grants
-    WHERE grantee IN ('PUBLIC', 'anon', 'authenticated', 'service_role')
-      AND table_schema IN ('public', 'history')
-    GROUP BY 1, 2, 3 ORDER BY 1, 2, 3;
-
-    SELECT grantee, table_name, column_name, privilege_type
-    FROM information_schema.role_column_grants
-    WHERE grantee IN ('PUBLIC', 'anon', 'authenticated', 'service_role')
-      AND table_schema IN ('public', 'history')
-    ORDER BY 1, 2, 3;
-
-    SELECT grantee, routine_schema, routine_name
-    FROM information_schema.role_routine_grants
-    WHERE grantee IN ('PUBLIC', 'anon', 'authenticated')
-      AND routine_schema IN ('public', 'history');
-
-    SELECT defaclrole::regrole, defaclnamespace::regnamespace, defaclobjtype, defaclacl
-    FROM pg_default_acl;
-    ```
-
-  - Success: `anon`, `authenticated` and `PUBLIC` have no rows in the first three. `service_role` has no `DELETE`, `TRUNCATE`, `REFERENCES` or `TRIGGER`, and nothing in `history`. It has `SELECT` on `guild_config`, `managed_channels`, `reminder_log` and `config_audit`, `SELECT` on `events`, `tasks` and `job_runs`, and no direct write on `job_runs`, which it changes only through `begin_job_run` and `finish_job_run`. Its writes to `events` and `tasks` show only in the column grants: `INSERT` on `events` (`guild_id`, `channel_id`, `name`, `event_date`, `created_by`, `thread_id`, `thread_status`), `INSERT` on `tasks` (`event_id`, `guild_id`, `assignee_id`, `description`, `due_date`, `created_by`), and `UPDATE` only on listed columns. It also has column `INSERT` on `task_reassignments` (`guild_id`, `actor_id`, `task_id`) and no table grant there. `test/db/grants.test.ts` is the reference. Default privileges for `postgres` must not name `anon` or `authenticated` on `public`.
-  - If it fails: the migrations ran as a different role, or the platform's defaults differ. Fix the migration and rerun this.
-
-- [ ] **The bot's key and URL work, and connections are as expected.**
-  - Do: `/config` loads and saves.
-  - Success: the panel works, with no `SUPABASE_` errors in Logs. The key goes in the `apikey` header, because `sb_secret_` keys are not JWTs.
-  - If it fails: check the setting names. The code refuses a key without the `sb_secret_` prefix.
+- [ ] **A stopped compute wakes in time.** On the Free plan the compute stops after a few minutes with no queries.
+  - Do: leave the bot idle until the Neon console shows the compute as idle or suspended. Then run `/config`, `/mytasks` and `/event status`. Repeat on three days.
+  - Success: no "did not respond". The router allows 1.5 seconds for its database read. Write down how long the first reply took.
+  - If it fails: the start does not fit. Record how often it happens, and decide whether to keep the compute awake, which may cost money, or accept it.
 
 - [ ] **Database size and full-disk behaviour.**
-  - Do: read the current Free plan database size limit in Supabase's docs and write it here. Note the current size on the project's usage page. Do not fill the database on purpose unless you are ready to recreate the test project.
+  - Do: read the current Free plan storage limit in Neon's docs and write it here. Note the current size on the project's usage page. Do not fill the database on purpose unless you are ready to recreate the test project.
   - Success: you know the limit, and how much room you have. Row history has no retention, so it grows.
   - If it fails: if size is growing fast, look at `history.row_versions` and `job_runs`.
 
-- [ ] **A database that is full.** Nothing shows whether reminders fail loudly or quietly at the Free plan's limit, or what Supabase does at that point.
-  - Do: only on a test project you are ready to recreate, because no role may remove these rows afterwards. With a task due and the slot open, fill it by running this until the usage page shows the limit reached. It adds to `history.row_versions`, so the schema does not change.
+- [ ] **A database that is full.** Nothing shows whether reminders fail loudly or quietly at the Free plan's limit, or what Neon does at that point.
+  - Do: only on a test project you are ready to recreate, because these rows are never deleted afterwards. With a task due and the slot open, fill it by running this until the usage page shows the limit reached. It adds to `history.row_versions`, so the schema does not change.
 
     ```sql
     INSERT INTO history.row_versions (source_table, operation, row_id, old_row)
@@ -521,13 +543,8 @@ Run these from your own computer.
 
     Then run the cron by hand and try `/task assign`, `/config` and `/mytasks`.
 
-  - Success: you have recorded what Supabase did. The cron answers 500 `internal error`, or the run is `failed`, and no reminder is marked sent without a message in the post. Commands answer with the fixed `Something went wrong` text, and reads either still work or fail the same way. The freshness alert fires after 30 hours.
+  - Success: you have recorded what Neon did. The cron answers 500 `internal error`, or the run is `failed`, and no reminder is marked sent without a message in the post. Commands answer with the fixed `Something went wrong` text, and reads either still work or fail the same way. The freshness alert fires after 30 hours.
   - If it fails: a `succeeded` row with nothing sent, a reminder marked sent that never posted, or a command with no reply needs a fix before launch. Afterwards, delete the project and make a new one.
-
-- [ ] **The project stays awake.**
-  - Do: leave the test project with only the daily cron for 8 days. Supabase may pause Free projects after 7 days of low activity. Its docs list API calls as activity, but not direct connections.
-  - Success: not paused.
-  - If it fails: a paused project fails the bot. Find out what counts, and add it.
 
 ## Cron and reminders
 
@@ -552,7 +569,7 @@ Read [Running the cron by hand](#running-the-cron-by-hand) first. Each item here
 - [ ] **The second cron recovers a failed morning.**
   - Do: with a task due, set a wrong `DISCORD_BOT_TOKEN` on the test project before 15:00 UTC and redeploy. Put the right one back after the morning run, before 17:00 UTC, and redeploy.
   - Success: a `failed` row in the 15:00 hour, a `succeeded` row in the 17:00 hour, and the reminder sent with its ping. The `started_at` of that row is also a measured time for the second cron.
-  - If it fails: if the failed run sent reminders, or the recovery run does not start, see the lock in `20261104000008_job_run_lock.sql`.
+  - If it fails: if the failed run sent reminders, or the recovery run does not start, see `begin_job_run` in `db/migrations/0001_baseline.sql`.
 
 - [ ] **Running cron twice sends nothing twice.**
   - Do: check that the slot is open, then run the cron by hand twice, with a task due and reminders on.
@@ -634,28 +651,23 @@ Read [Running the cron by hand](#running-the-cron-by-hand) first. Each item here
     - The next day's run adds a new `succeeded` row and sends the overdue reminder. In `reminder_log`, the task has `due_day` as `skipped` and `overdue` as `sent`.
   - If it fails: do not launch if anything sends while off. This is your emergency stop.
 
-## Backups
+## Restore and exports
 
 These come from [RECOVERY.md](RECOVERY.md), which holds the steps.
 
-- [ ] **The old backup role is gone.**
-  - Do: after `supabase db push`, run `SELECT rolname FROM pg_roles WHERE rolname = 'backup_ro';` and `SELECT policyname FROM pg_policies WHERE schemaname IN ('public', 'history');`.
-  - Success: no rows from either. If the role is still listed, the migration logged a notice that it was kept, and `SELECT rolcanlogin FROM pg_roles WHERE rolname = 'backup_ro';` returns `f`.
-  - If it fails: read the notice from `20261113000020_drop_backup_role_access.sql`, and find what still holds the role.
+- [ ] **How far back Neon can restore.**
+  - Do: on the production project, find the restore window in the project's settings, and note how long it is.
+  - Success: written down in the owner's own notes, and [RECOVERY.md](RECOVERY.md) still matches.
+  - If it fails: if the window is short, take the manual export more often.
 
-- [ ] **What the plan's backups include.**
-  - Do: open Database > Backups on the production project, and note whether it has daily backups and point-in-time restore, and how long they are kept.
-  - Success: written down in the owner's private notes, and [RECOVERY.md](RECOVERY.md) still matches.
-  - If it fails: if there are no backups, take the manual export more often.
-
-- [ ] **A restore from the provider's backups.**
-  - Do: on the test project, follow "The provider's backups" in [RECOVERY.md](RECOVERY.md), if its plan has backups.
-  - Success: the bot works afterwards, with the schema up to date.
+- [ ] **A branch from a past time, and a point-in-time restore.**
+  - Do: on the test project, make a change you can recognise, such as closing an event. Create a branch from a moment before it and check that the branch shows the event open. Then follow "Neon's point-in-time restore" in [RECOVERY.md](RECOVERY.md) on the test project's main branch. Note whether the bot's connection string still works afterwards, and whether `bot_app`'s password is the one from that time.
+  - Success: the bot works afterwards, with the schema up to date and the event open again.
   - If it fails: correct `docs/RECOVERY.md`.
 
 - [ ] **A manual export and its restore.**
   - Do: take an export as in [RECOVERY.md](RECOVERY.md#a-manual-export). Run `pg_dump --version` first and record it. Then restore it into a new, empty project and point a test deployment at it.
-  - Success: the bot works on the restored project, and the grants item in the Supabase section passes on it.
+  - Success: the bot works on the restored project, and the grants item in the Neon section passes on it.
   - If it fails: write the steps that work into `docs/RECOVERY.md`. Do not launch until one restore has worked.
 
 - [ ] **A stopped cron gets noticed.**
@@ -665,10 +677,10 @@ These come from [RECOVERY.md](RECOVERY.md), which holds the steps.
 
 ## Build and runtime
 
-- [ ] **Install scripts stay off in the real build.**
+- [ ] **The real build installs as the repo says.**
   - Do: read the deployment's build log.
-  - Success: the install respects `.npmrc`, and no package install script runs.
-  - If it fails: stop deploying, and check the root `.npmrc` for `ignore-scripts=true`.
+  - Success: the install uses pnpm 10.34.9, as `packageManager` pins, from `pnpm-lock.yaml` with no changes to it, and no package install or build script runs.
+  - If it fails: stop deploying. Check that `ENABLE_EXPERIMENTAL_COREPACK` is `1` in Vercel, and run `bash scripts/check-deploy-settings.sh`.
 
 - [ ] **The runtime Node version is current.**
   - Do: temporarily log `process.version` on `staging`, or read it from the deployment details. Compare it with Node's latest 24.x security release.
@@ -678,7 +690,7 @@ These come from [RECOVERY.md](RECOVERY.md), which holds the steps.
 - [ ] **Cold starts fit in 3 seconds.**
   - Do: run `/config` after an hour idle, several times over a day. Do the same with `/event status`, `/event close`, `/event delete` and its Confirm button, which used to make two database reads before answering, and with an autocomplete field in `/task done`, which still can.
   - Success: no "did not respond". The router allows 1.5 seconds for its database read, and the event routes now load their row after answering.
-  - If it fails: move Supabase or Vercel to closer regions. After a "did not respond" on `/event close` or Confirm, check whether the close or delete still happened, because the work can go on after a late answer.
+  - If it fails: move the Neon project or Vercel's function region closer together. After a "did not respond" on `/event close` or Confirm, check whether the close or delete still happened, because the work can go on after a late answer.
 
 - [ ] **A late answer and a slow finish.** Whether `waitUntil` keeps work alive after a late answer, what Discord shows then, and what happens when a function is stopped at 60 seconds are all unverified.
   - Do: on `staging` only, in `handle` in `api/interactions.ts`, add `await new Promise((resolve) => setTimeout(resolve, 3500));` just before `return respond(reply);`, and deploy. Run `/task done`. Then remove that line, change `waitUntil(after());` to `waitUntil(new Promise((resolve) => setTimeout(resolve, 70_000)).then(after));`, deploy and run `/mytasks`. Put the code back and deploy.
@@ -691,17 +703,10 @@ These come from [RECOVERY.md](RECOVERY.md), which holds the steps.
   - If it fails: redeploy the current commit. Never roll back past a security fix.
 
 - [ ] **Code and schema released in the wrong order.** Current code is known to break on an older schema after a restore. A normal release has not been tried, and neither has a rollback onto a newer schema.
-  - Do: take a change with a migration, on the test project. First deploy the code without pushing the migration, and run `/config`, `/mytasks`, `/task assign` and the cron by hand. Then push the migration to the test project. The CLI may still be linked to production from the last release, so link it first and read the target before the real push:
+  - Do: take a change with a migration, on the test project. First deploy the code without applying the migration, and run `/config`, `/mytasks`, `/task assign` and the cron by hand. Then apply the migration to the test project, with the test owner's direct string. Read the host in it first, so you do not apply it to production:
 
     ```sh
-    supabase link --project-ref <test-project-ref>
-    supabase db push --remote --dry-run
-    ```
-
-    The first line of the output should start with `Target:` and name the test project. Stop if it names production or says `local stack`. The exact wording for a linked project has not been seen, so correct this line when you see it. If the CLI rejects `--remote`, it is older than 3.0.0, so run `brew upgrade supabase`. If the target is right, push:
-
-    ```sh
-    supabase db push --remote
+    DATABASE_URL="$OWNER_URL" pnpm db:migrate
     ```
 
     Run `/config`, `/mytasks`, `/task assign` and the cron by hand again. Then use Instant Rollback to the deployment from before the change, and run them a third time. Roll forward.
@@ -709,8 +714,8 @@ These come from [RECOVERY.md](RECOVERY.md), which holds the steps.
   - Success: you have recorded which commands fail in each state, and what the person sees. Reminders are not marked sent without a message. Then write the release order into the handoff guide: which goes first, migration or merge, and how long the gap may be.
   - If it fails: a state that loses data or sends duplicates means that kind of migration must be made in two steps. Do not release it as one.
 
-- [ ] **Normal use and a flood, measured.** Nothing has measured Vercel usage, Discord's global rate limit or Supabase connections.
-  - Do: note the numbers on Vercel's and Supabase's usage pages. Give the test event 40 more tasks, due tomorrow, on the test project only:
+- [ ] **Normal use and a flood, measured.** Nothing has measured Vercel usage, Discord's global rate limit or Neon connections.
+  - Do: note the numbers on Vercel's and Neon's usage pages. Give the test event 40 more tasks, due tomorrow, on the test project only:
 
     ```sql
     INSERT INTO public.tasks (event_id, guild_id, assignee_id, description, due_date, created_by)
@@ -734,24 +739,24 @@ These come from [RECOVERY.md](RECOVERY.md), which holds the steps.
 
 Look at each one on the dashboard. Repeat on production.
 
-- [ ] **All four accounts** use a passkey or hardware key, or for Supabase two authenticator factors. Recovery codes are saved, and the recovery email is long-lived.
+- [ ] **All four accounts** use a passkey or hardware key, or for Neon the strongest login it offers. Recovery codes are saved, and the recovery email is long-lived.
 - [ ] **Vercel secrets** have type Secret, and their values cannot be read after saving. Rotate any that were stored otherwise.
 - [ ] **Vercel settings** exist only in the Production environment. Production values exist only in the production project.
-- [ ] **No database password or connection string** is in Vercel or in this repo's Actions secrets.
+- [ ] **Database strings.** The only one in Vercel is `bot_app`'s pooled string, as `DATABASE_URL`, of type Secret. The owner's string is in no Vercel project, and no connection string or password is in this repo's Actions secrets.
 - [ ] **Branches.** Pushing a branch other than `main` or `staging` creates no deployment in either project. The production project may build `staging` as a preview.
 - [ ] **Deployment Protection** is Standard Protection, and Discord points at the production domain.
 - [ ] **No bypass.** No Protection Bypass for Automation secret exists, and `VERCEL_AUTOMATION_BYPASS_SECRET` is absent.
 - [ ] **Firewall rules** are active, and usage notifications are on.
-- [ ] **Vercel integrations and Supabase organisation members** are only those you expect.
-- [ ] **Supabase** has legacy keys off, GraphQL off, sign-ups off and Exposed schemas set to `public` only.
+- [ ] **Vercel integrations and Neon project members** are only those you expect.
+- [ ] **Neon** has no role but its owner and `bot_app` that can log in to the project, and features the bot does not use, such as the Data API and Neon Auth, are off. Check this in the dashboard.
 - [ ] **Discord app** has Public Bot off, User Install off and Install Link set to None, and its endpoint URL is yours. Anyone who can change that URL can receive every interaction token.
-- [ ] **Discord roles.** The groups holding Administrator, Manage Roles, and the two bound roles are small. Review them each term, because the bot is not told about grants.
+- [ ] **Discord roles.** The groups holding Administrator, Manage Roles, and the five bound roles are small. Review them each term, because the bot is not told about grants.
 - [ ] **A stolen officer account.** Talk through it once: use `/config` to turn reminders off, find the task through `/event status`, remove it, then tell members.
 - [ ] **Handoff.** A second trusted officer can reach the manual exports, and the next maintainer knows where to find the handoff guide.
 - [ ] **The owner is away.** Ask a second trusted officer to answer these from the guides alone, without your help: where are the accounts, how do I turn reminders off, and how do I restore. Fix what they could not find. Nobody has tried this.
 - [ ] **What a leaked bot token can change.** On the test app only, read the bot's token with `read -rs BOT`, then send a `PATCH` to `/api/v10/applications/@me` on Discord's API host, with the header `Authorization: Bot $BOT` and the JSON body `{"description":"staging check"}`. Reset the token in the portal and check whether the description survives. Then put the new token in `DISCORD_BOT_TOKEN` on the test project and in `.env`, redeploy, and read it into `BOT` again, or the test bot's calls to Discord fail and so does the restore below. If the call works, a leaked token can probably change the endpoint URL too, and a reset does not undo it. So add a check of the endpoint URL and intents to the rotation steps in `SECURITY.md`. Restore the description.
-- [ ] **Vendor changes.** Write down the versions in use today: the Supabase CLI, the PostgREST version, if the dashboard shows it, the Discord API version in `src/discord/client.ts`, Vercel's Node version and the Hobby and Free plan limits you read. Dependabot does not watch these. Put a check in the calendar each term, with the date these were last read, and repeat a sample of this list after any change.
-- [ ] **Member data.** The docs set no retention period, and no process for a deletion request or a member who has left. Row history and backups keep old values. Find out what is really kept: make a task with a made-up marker word, edit it and delete it with `/task delete`, then run the query below. Then look for the word in a restored manual export. Ask the club and the university whether they have rules for this, and write down a retention period and who answers a request. This is unsettled until someone decides it.
+- [ ] **Vendor changes.** Write down the versions in use today: Neon's Postgres version, from `SELECT version();`, the pnpm version in `package.json`, the Discord API version in `src/discord/client.ts`, Vercel's Node version and the Hobby and Free plan limits you read. Dependabot does not watch these. Put a check in the calendar each term, with the date these were last read, and repeat a sample of this list after any change.
+- [ ] **Member data.** The docs set no retention period, and no process for a deletion request or a member who has left. Row history, Neon's restore history and exports keep old values. Find out what is really kept: make a task with a made-up marker word, edit it and delete it with `/task delete`, then run the query below. Then look for the word in a restored manual export. Ask the club and the university whether they have rules for this, and write down a retention period and who answers a request. This is unsettled until someone decides it.
 
   ```sql
   SELECT source_table, operation, row_id, changed_at
@@ -765,4 +770,4 @@ Look at each one on the dashboard. Repeat on production.
 These stay open after this list is finished, because no staging run can answer them.
 
 - **Mutation testing** stopped early, with many mutants not run, and it did not touch workflow files, the gitleaks config or the hook script.
-- **Actions logs and pull request edit histories** were not all read for leaks, and commit messages were only scanned by pattern, so an unusual real name could be missed. [PUBLIC_RELEASE.md](PUBLIC_RELEASE.md) requires a person to read these before going public.
+- **Actions logs and pull request edit histories** were not all read for leaks, and commit messages were only scanned by pattern, so an unusual real name could be missed. The repository is public, so a person should read them, and rotate any secret found there.

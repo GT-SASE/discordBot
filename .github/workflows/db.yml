@@ -3,7 +3,7 @@ name: Database
 # A change to prose alone cannot affect this workflow, so it does not spend Actions
 # minutes on one. ci.yml always runs, because it scans and checks those files. A check
 # GitHub skips this way never reports, so these lines have to go before these checks
-# are made required, as docs/PUBLIC_RELEASE.md says.
+# are made required in the branch protection rules.
 on:
   pull_request:
     paths-ignore:
