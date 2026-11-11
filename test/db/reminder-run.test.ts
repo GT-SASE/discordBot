@@ -30,7 +30,11 @@ import {
   type RunResult,
 } from "../../src/reminders/run.ts";
 import { TEST_ORIGIN, TEST_SECRET_KEY } from "../support/mock-postgrest.ts";
-import { insertGuild, type GuildFixture } from "./fixtures.ts";
+import {
+  finishEventSteps,
+  insertGuild,
+  type GuildFixture,
+} from "./fixtures.ts";
 import { createMigratedDb, fakeId, present, queryAs } from "./harness.ts";
 import { postgrestShim } from "./postgrest-shim.ts";
 
@@ -201,7 +205,10 @@ async function eventWithThread(
      RETURNING id`,
     [guild.guildId, guild.channelId, name, fakeId(), threadId],
   );
-  return { eventId: present(rows[0]).id, threadId };
+  const eventId = present(rows[0]).id;
+  // These tests are about task reminders, so the event's step list has nothing to say.
+  await finishEventSteps(database, eventId);
+  return { eventId, threadId };
 }
 
 async function task(
@@ -302,6 +309,7 @@ beforeEach(async () => {
   await database.exec(`
     UPDATE public.tasks SET deleted_at = now() WHERE deleted_at IS NULL;
     DELETE FROM public.reminder_log;
+    DELETE FROM public.event_reminder_log;
     DELETE FROM public.job_runs;
   `);
 });

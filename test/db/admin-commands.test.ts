@@ -11,9 +11,11 @@ import {
   componentPayload,
   dependenciesFor,
   fakeDiscord,
+  firstCustomId,
   GUILD_ID,
   MEMBER_ID,
   run,
+  setupCommandPayload,
 } from "../support/interactions.ts";
 import { testSnowflake } from "../support/mock-postgrest.ts";
 import { openBackend, type Backend } from "./backend.ts";
@@ -21,14 +23,36 @@ import { MIGRATION_OWNER, queryAs } from "./harness.ts";
 import { insertEvent, insertTask } from "./fixtures.ts";
 
 const OFFICER = testSnowflake();
-const ADMIN = testSnowflake();
 const OTHER = testSnowflake();
+const EBOARD = testSnowflake();
+const COMMITTEE = testSnowflake();
+const TREASURY = testSnowflake();
+const MARKETING = testSnowflake();
 
 function role(id: string): GuildRole {
   return { id, name: "Role", permissions: 0n, position: 1, managed: false };
 }
 
-const ROLES = [role(GUILD_ID), role(OFFICER), role(ADMIN), role(OTHER)];
+const ROLES = [
+  GUILD_ID,
+  OFFICER,
+  OTHER,
+  EBOARD,
+  COMMITTEE,
+  TREASURY,
+  MARKETING,
+].map(role);
+
+/** The /setup choice, with this role as Events Directors. E-board is also the admin. */
+function chosen(directors: string) {
+  return {
+    eboard_role: role(EBOARD),
+    events_directors_role: role(directors),
+    events_committee_role: role(COMMITTEE),
+    treasury_role: role(TREASURY),
+    marketing_role: role(MARKETING),
+  };
+}
 
 describe("admin commands on the real functions", () => {
   let backend: Backend;
@@ -61,6 +85,17 @@ describe("admin commands on the real functions", () => {
     return rows[0]?.version;
   }
 
+  /** Runs /setup against the real draft table and returns its Confirm custom_id. */
+  async function showSetup(directors: string): Promise<string> {
+    const { discord, edits } = fakeDiscord({ roles: ROLES });
+    await run(
+      ROUTER,
+      setupCommandPayload(chosen(directors), { member: ADMINISTRATOR }),
+      dependenciesFor(backend.db, discord),
+    );
+    return firstCustomId(edits[0]);
+  }
+
   async function race(customId: string) {
     const { discord, edits } = fakeDiscord({ roles: ROLES });
     const dependencies = dependenciesFor(backend.db, discord);
@@ -84,7 +119,7 @@ describe("admin commands on the real functions", () => {
   }
 
   it("lets one of two admins win the first setup, with one audit row", async () => {
-    const texts = await race(`setup.confirm:0:${OFFICER}:${ADMIN}`);
+    const texts = await race(await showSetup(OFFICER));
 
     expect(winners(texts, "Saved.")).toBe(1);
     expect(winners(texts, "Someone else changed the roles")).toBe(1);
@@ -92,10 +127,28 @@ describe("admin commands on the real functions", () => {
     expect(await auditRows()).toEqual([
       { actor_id: MEMBER_ID, action: "role_bindings", version_after: 1 },
     ]);
+    const rows = await queryAs<Record<string, string>>(
+      backend.connection,
+      MIGRATION_OWNER,
+      `SELECT officer_role_id, admin_role_id, eboard_role_id, events_committee_role_id,
+              treasury_role_id, marketing_role_id
+       FROM public.guild_config WHERE guild_id = $1`,
+      [GUILD_ID],
+    );
+    expect(rows).toEqual([
+      {
+        officer_role_id: OFFICER,
+        admin_role_id: EBOARD,
+        eboard_role_id: EBOARD,
+        events_committee_role_id: COMMITTEE,
+        treasury_role_id: TREASURY,
+        marketing_role_id: MARKETING,
+      },
+    ]);
   });
 
   it("lets one of two admins win a rebind", async () => {
-    const texts = await race(`setup.confirm:1:${OTHER}:${ADMIN}`);
+    const texts = await race(await showSetup(OTHER));
 
     expect(winners(texts, "Saved.")).toBe(1);
     expect(winners(texts, "Someone else changed the roles")).toBe(1);
@@ -103,7 +156,10 @@ describe("admin commands on the real functions", () => {
   });
 
   it("refuses a Confirm shown before the last save, without calling the function", async () => {
-    const texts = await race(`setup.confirm:1:${OFFICER}:${ADMIN}`);
+    // Shown at version 1, which the rebind above has since moved past.
+    const texts = await race(
+      `setup.confirm:1:${(await showSetup(OFFICER)).split(":")[2] ?? ""}`,
+    );
 
     expect(winners(texts, "Someone else changed the roles")).toBe(2);
     expect(await configVersion()).toBe(2);
@@ -113,7 +169,7 @@ describe("admin commands on the real functions", () => {
     const { discord, edits } = fakeDiscord({ roles: ROLES });
     const dependencies = dependenciesFor(backend.db, discord);
     const before = (await auditRows()).length;
-    const payload = componentPayload(`setup.confirm:2:${OFFICER}:${ADMIN}`, {
+    const payload = componentPayload(await showSetup(OFFICER), {
       member: ADMINISTRATOR,
     });
 
@@ -198,7 +254,7 @@ describe("admin commands on the real functions", () => {
       const fixture = {
         guildId: GUILD_ID,
         officerRoleId: OFFICER,
-        adminRoleId: ADMIN,
+        adminRoleId: EBOARD,
         channelId: FORUM,
       };
       const event = await insertEvent(backend.connection, fixture);
@@ -287,7 +343,7 @@ describe("admin commands on the real functions", () => {
       const closed = await insertEvent(backend.connection, {
         guildId: GUILD_ID,
         officerRoleId: OFFICER,
-        adminRoleId: ADMIN,
+        adminRoleId: EBOARD,
         channelId: READDED_FORUM,
       });
       await queryAs(

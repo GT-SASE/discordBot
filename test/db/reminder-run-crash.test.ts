@@ -18,7 +18,12 @@ import { createDbClient, type DbClient } from "../../src/db/client.ts";
 import { createDiscordClient } from "../../src/discord/client.ts";
 import { managedChannelCheck, runReminders } from "../../src/reminders/run.ts";
 import { TEST_ORIGIN, TEST_SECRET_KEY } from "../support/mock-postgrest.ts";
-import { insertEvent, insertGuild, type GuildFixture } from "./fixtures.ts";
+import {
+  finishEventSteps,
+  insertEvent,
+  insertGuild,
+  type GuildFixture,
+} from "./fixtures.ts";
 import { createMigratedDb, fakeId, queryAs } from "./harness.ts";
 import { postgrestShim } from "./postgrest-shim.ts";
 
@@ -100,6 +105,7 @@ afterAll(() => database.close());
 beforeEach(async () => {
   posts = [];
   const eventId = await insertEvent(database, guild);
+  await finishEventSteps(database, eventId);
   const threadId = fakeId();
   await database.query(
     `UPDATE public.events SET thread_id = $2, thread_status = 'active' WHERE id = $1`,

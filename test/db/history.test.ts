@@ -120,6 +120,13 @@ describe("row history", () => {
 
   it("records the old row when the owning role hard-deletes an event", async () => {
     const eventId = await insertEvent(db, guild);
+    // Its steps hold it by a foreign key with no cascade, so they have to go first.
+    await queryAs(
+      db,
+      MIGRATION_OWNER,
+      `DELETE FROM public.event_steps WHERE event_id = $1`,
+      [eventId],
+    );
     await queryAs(
       db,
       MIGRATION_OWNER,

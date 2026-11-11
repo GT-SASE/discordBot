@@ -1021,7 +1021,7 @@ describe("/event create", () => {
     it.each([
       ["the claim", /rpc\/claim_interaction/],
       ["reading the forums", /GET .*managed_channels/],
-      ["looking for the event", /GET .*events/],
+      ["looking for the event", /GET \/rest\/v1\/events\?/],
       ["the insert", /POST .*events/],
     ])("posts nothing and says so when %s fails", async (_label, pattern) => {
       await world.addManagedForum();

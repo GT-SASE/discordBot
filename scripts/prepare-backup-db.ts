@@ -87,6 +87,42 @@ async function seed(db: Connection, canary: string): Promise<void> {
     `SELECT public.claim_event_post_attempt($1, $2)`,
     [eventId, guild.guildId],
   );
+  // The event's steps come from a trigger. An assignment that is then removed puts a row in
+  // history as well.
+  const stepUser = fakeId();
+  await queryAs(
+    db,
+    "service_role",
+    `SELECT public.assign_event_step($1, $2, 'budget_sheet', $3, $3)`,
+    [eventId, guild.guildId, stepUser],
+  );
+  await queryAs(
+    db,
+    "service_role",
+    `SELECT public.unassign_event_step($1, $2, 'budget_sheet', $3, $3)`,
+    [eventId, guild.guildId, stepUser],
+  );
+  await queryAs(
+    db,
+    "service_role",
+    `SELECT public.claim_event_reminder($1, 'daily_steps', '2030-01-15')`,
+    [eventId],
+  );
+  await queryAs(
+    db,
+    "service_role",
+    `SELECT public.save_setup_draft($1, $2, $3, $4, $5, $6, $7, $8, 'abcdefgh12345678')`,
+    [
+      guild.guildId,
+      fakeId(),
+      guild.officerRoleId,
+      guild.adminRoleId,
+      guild.eboardRoleId,
+      guild.eventsCommitteeRoleId,
+      guild.treasuryRoleId,
+      guild.marketingRoleId,
+    ],
+  );
   await queryAs(
     db,
     "service_role",

@@ -52,6 +52,43 @@ const RELATIONS = new Map<string, Relation>([
     "tasks.reminder_log",
     { table: "reminder_log", many: true, on: [["id", "task_id"]] },
   ],
+  [
+    "events.event_steps",
+    {
+      table: "event_steps",
+      many: true,
+      on: [
+        ["id", "event_id"],
+        ["guild_id", "guild_id"],
+      ],
+    },
+  ],
+  [
+    "events.event_step_assignees",
+    {
+      table: "event_step_assignees",
+      many: true,
+      on: [
+        ["id", "event_id"],
+        ["guild_id", "guild_id"],
+      ],
+    },
+  ],
+  [
+    "events.event_reminder_log",
+    { table: "event_reminder_log", many: true, on: [["id", "event_id"]] },
+  ],
+  [
+    "event_step_assignees.events",
+    {
+      table: "events",
+      many: false,
+      on: [
+        ["event_id", "id"],
+        ["guild_id", "guild_id"],
+      ],
+    },
+  ],
 ]);
 
 const IDENTIFIER = /^[a-z_]+$/;
@@ -152,6 +189,8 @@ class Query {
         return `${column} <> ${this.bind(filter.value)}`;
       case "lt":
         return `${column} < ${this.bind(filter.value)}`;
+      case "gt":
+        return `${column} > ${this.bind(filter.value)}`;
       case "gte":
         return `${column} >= ${this.bind(filter.value)}`;
       case "lte":

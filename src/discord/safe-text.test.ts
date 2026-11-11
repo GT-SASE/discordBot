@@ -15,6 +15,7 @@ import {
   safeTextValue,
   textLength,
   truncateUserText,
+  roleMention,
   userMention,
 } from "./safe-text.ts";
 import type { ChunkLine, SafeText } from "./safe-text.ts";
@@ -512,6 +513,9 @@ describe("mentions and links", () => {
   it("renders live mention syntax only for a valid ID", () => {
     expect(safeTextValue(userMention(ID))).toBe(`<@${ID}>`);
     expect(safeTextValue(channelMention(ID))).toBe(`<#${ID}>`);
+    expect(safeTextValue(roleMention(ID))).toBe(`<@&${ID}>`);
+    expect(() => roleMention("everyone")).toThrow(SafeTextError);
+    expect(() => roleMention(`${ID}><@1`)).toThrow(SafeTextError);
     expect(() => userMention("everyone")).toThrow(SafeTextError);
     expect(() => userMention(`${ID}><@&1`)).toThrow(SafeTextError);
     expect(() => channelMention("1")).toThrow(SafeTextError);
@@ -603,6 +607,7 @@ describe("the length validator", () => {
       content: 2000,
       threadName: 100,
       mentionedUsers: 100,
+      mentionedRoles: 100,
       buttonLabel: 80,
       customId: 100,
       selectOptionLabel: 100,

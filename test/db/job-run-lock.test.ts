@@ -74,14 +74,14 @@ describe("begin_job_run", () => {
     expect(ids.filter((id) => id !== null)).toHaveLength(1);
   });
 
-  /** The start of the current slot: the latest 14:00 UTC that has passed. */
+  /** The start of the current slot: the latest 15:00 UTC that has passed. */
   const slotStart = (): Date => {
     const now = new Date();
     const today = Date.UTC(
       now.getUTCFullYear(),
       now.getUTCMonth(),
       now.getUTCDate(),
-      14,
+      15,
     );
     return new Date(today <= now.getTime() ? today : today - 86_400_000);
   };

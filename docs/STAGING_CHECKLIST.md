@@ -30,7 +30,7 @@ Where an item says to run the cron by hand, it means this:
 curl -i -H "Authorization: Bearer $CRON" "$URL/api/cron/reminders"
 ```
 
-Each job, `reminders` and `health_check`, can succeed once per slot. A slot runs from 14:00 UTC to the next 14:00 UTC. After a success, a later run in that slot does nothing and still answers 200 `ok`. A failed run does not close the slot. So `ok` proves nothing, and a by-hand run after the daily cron usually tests nothing.
+Each job, `reminders` and `health_check`, can succeed once per slot. A slot runs from 15:00 UTC to the next 15:00 UTC. After a success, a later run in that slot does nothing and still answers 200 `ok`. A failed run does not close the slot. So `ok` proves nothing, and a by-hand run after the daily cron usually tests nothing.
 
 Before a by-hand run, check the slot in the SQL Editor. A row means that job's slot is closed.
 
@@ -38,16 +38,16 @@ Before a by-hand run, check the slot in the SQL Editor. A row means that job's s
 SELECT job_name, status, started_at, results
 FROM public.job_runs
 WHERE status = 'succeeded'
-  AND started_at >= date_trunc('day', now() - interval '14 hours', 'UTC') + interval '14 hours';
+  AND started_at >= date_trunc('day', now() - interval '15 hours', 'UTC') + interval '15 hours';
 ```
 
-To open the slot, wait for the next 14:00 UTC, or on the test project only, move the slot's rows back a day. This keeps the rows but makes their dates false. A moved row can be over 26 hours old, so a later health check row can show `reminders_stale: 1`, with `no recent successful run` in Logs, and that is not a fault. Moved rows also spoil the one-row-a-day evidence in "Each cron really fires". Never do it on production.
+To open the slot, wait for the next 15:00 UTC, or on the test project only, move the slot's rows back a day. This keeps the rows but makes their dates false. A moved row can be over 26 hours old, so a later health check row can show `reminders_stale: 1`, with `no recent successful run` in Logs, and that is not a fault. Moved rows also spoil the one-row-a-day evidence in "Each cron really fires". Never do it on production.
 
 ```sql
 UPDATE public.job_runs
 SET started_at = started_at - interval '1 day'
 WHERE status = 'succeeded'
-  AND started_at >= date_trunc('day', now() - interval '14 hours', 'UTC') + interval '14 hours';
+  AND started_at >= date_trunc('day', now() - interval '15 hours', 'UTC') + interval '15 hours';
 ```
 
 The daily crons can close the slot while you test. To stop that, use Settings > Cron Jobs > Disable Cron Jobs on the test project, and turn them back on afterwards.
@@ -104,9 +104,19 @@ A reminder tried less than an hour ago is left alone. That run is `failed`, with
   - If it fails: it stays on "thinking", and nothing appears in Logs. Check that `api/interactions.ts` still uses `waitUntil` from `@vercel/functions`. All deferred commands are broken until this works.
 
 - [ ] **`/setup` refuses `@everyone` and managed roles.**
-  - Do: run `/setup` and choose `@everyone` for each role in turn. Repeat with a role an integration manages, such as the role another bot brings.
-  - Success: `The officer role can't be @everyone...`, or the matching message for a managed role, and no Confirm button.
-  - If it fails: stop and fix `bindingProblem`. The database also refuses `@everyone`, but a managed role has no such backstop.
+  - Do: run `/setup` and choose `@everyone` for each of the five options in turn. Repeat with a role an integration manages, such as the role another bot brings.
+  - Success: a message naming that option, such as `The Treasury Committee role can't be @everyone...`, or the matching message for a managed role, and no Confirm button.
+  - If it fails: stop and fix `bindingProblem` in `src/handlers/setup.ts`. The database also refuses `@everyone`, but a managed role has no such backstop.
+
+- [ ] **`/setup` saves all five roles, and only the ones it showed.**
+  - Do: run `/setup` with the five test roles and click Confirm. Run `/config`. Then run `/setup` twice with different roles and click the first message's Confirm. Run `/setup` once more and have a second admin click your Confirm. Last, run `/setup`, wait over an hour and click Confirm.
+  - Success: the first Confirm says `Saved.` and lists the five roles, and `/config` shows them as role mentions that notify nobody, with E-board as `E-board (also admin)` and no separate `Admin:` line. Each later Confirm says `This Confirm no longer matches your latest /setup...` and changes nothing, which `/config`'s last changes confirm.
+  - If it fails: check `getSetupDraft` in `src/db/guild-config.ts` and the confirm route in `src/handlers/setup.ts`. Do not launch while a Confirm can apply roles it did not show.
+
+- [ ] **A server set up before the five roles still works.**
+  - Do: on a server whose config was saved with only the officer and admin roles, run `/config`, then `/setup` with all five.
+  - Success: `/config` first shows the old role on an `Admin:` line, then says `Run /setup to choose the E-board role.` and the same for Events Committee, Treasury Committee and Marketing Committee. After `/setup`, it lists all five with E-board as `E-board (also admin)`, and the last change reads `changed the roles: Admin, E-board, ...`.
+  - If it fails: check `roleLines` in `src/handlers/config.ts`.
 
 - [ ] **`/setup` is hidden from others, and the gate works anyway.**
   - Do: as the member, look for `/setup`. Then as an admin, use Server Settings > Integrations to allow it for the member, and run it as the member.
@@ -114,7 +124,7 @@ A reminder tried less than an hour ago is left alone. That run is `failed`, with
   - If it fails: the gate is wrong, which is critical. Do not launch.
 
 - [ ] **Ordinary members and officers get what the tiers say.**
-  - Do: as the member, try `/config`, `/task assign` and clicking another person's Mark done button. Then give the member `Test Officer` and repeat, then remove the role and click a button on a panel opened while holding it.
+  - Do: as the member, try `/config`, `/task assign` and clicking another person's Mark done button. Then give the member `Test Events Directors` and repeat, then remove the role and click a button on a panel opened while holding it.
   - Success: refused as a member, allowed as an officer except `/config`, and refused again at once after losing the role.
   - If it fails: check `COMMAND_POLICY` in `src/lib/permissions.ts` against record 4.
 
@@ -259,6 +269,35 @@ Use this as a task description. Replace the placeholders with real IDs copied fr
   - Success: nothing breaks. The bot cannot see that they left, so it keeps mentioning them. An officer should reassign the task.
   - If it fails: a crash here needs a fix. Record 2 accepts the mention.
 
+## Event steps
+
+These need the Treasury Committee and Marketing Committee roles chosen in `/setup`, an event made with `/event create`, and the member in neither role.
+
+- [ ] **A role ping reaches the role, once.** Only the test stand-in has seen `allowed_mentions.roles`.
+  - Do: put the member on Budget Sheet with `/event assign`. As the member, click **Budget Sheet done** on the overview, then click it again. Have someone in the Treasury Committee role watch their notifications.
+  - Success: one message in the post, `@Treasury Committee Budget Sheet for ... is done.`, and the Treasury member is notified once. The second click says it is already done and posts nothing.
+  - If it fails: check `handoffMessage` in `src/events/workflow.ts` and `mentionedRoles` in `src/discord/outbound.ts`. A ping that never arrives is lost for good, by design, so tell the role by hand.
+
+- [ ] **Buttons on the overview obey the rules.** The overview is a post's first message, and buttons there have only been tried on the stand-in.
+  - Do: as the member, who is on no step, click **Engage post done** and **Budget approved**. As a Treasury Committee member, click **Budget approved**. As a Marketing Committee member, click it on another event.
+  - Success: the member gets the fixed refusal privately for both, and the post does not change. Treasury approves, and the event's creator is pinged once with the `/event pickup` hint. Marketing is refused. Each done step loses its button, and the row goes once all three are done.
+  - If it fails: check `markStep` in `src/events/workflow.ts`. A click that changes the post for others is a bug.
+
+- [ ] **The checklist pings nobody.**
+  - Do: assign the member to all three steps that take people, set a pickup time, and watch the member's notifications while the overview redraws.
+  - Success: the checklist shows the member's name on each line and the time as `5:30 PM`, with no stray backslash, and the member gets no notification from the overview.
+  - If it fails: check `renderOverview` in `src/events/overview.ts`, whose `mentionUserIds` must stay empty.
+
+- [ ] **Food pickup waits for the budget.**
+  - Do: on a new event, run `/event pickup time:5:30 PM` and `/event assign step:Food pickup`.
+  - Success: both are refused with `Food pickup can only be set up once the budget is approved.`, and nothing changes.
+  - If it fails: check `set_event_pickup_time` and `assign_event_step` in the event workflow migration.
+
+- [ ] **The step option's choices show on desktop and mobile.**
+  - Do: start typing `/event assign` on both.
+  - Success: the step option offers Budget Sheet, Engage post and Food pickup, and nothing else can be entered.
+  - If it fails: run `npm run commands:register` again.
+
 ## Attacks against the live URL
 
 Run these from your own computer.
@@ -332,7 +371,7 @@ Run these from your own computer.
   ```sh
   curl -i "$URL/api/cron/reminders"
   curl -i -H "Authorization: Bearer wrong" "$URL/api/cron/reminders"
-  curl -i -A "vercel-cron/1.0" -H "x-vercel-cron-schedule: 0 14 * * *" "$URL/api/cron/reminders"
+  curl -i -A "vercel-cron/1.0" -H "x-vercel-cron-schedule: 0 15 * * *" "$URL/api/cron/reminders"
   curl -i "$URL/api/cron/reminders?secret=$CRON"
   curl -i -X POST "$URL/api/cron/reminders"
   ```
@@ -497,22 +536,22 @@ Read [Running the cron by hand](#running-the-cron-by-hand) first. Each item here
 - [ ] **Two crons on one path deploy on Hobby.**
   - Do: open Settings > Cron Jobs. Vercel's docs show this shape, but not on Hobby, where each schedule must run at most once a day.
   - Success: the deployment succeeded and both schedules are listed.
-  - If it fails: keep one schedule, and update `begin_job_run` and `SLOT_START_HOUR_UTC`, which both assume the 14:00 slot. The recovery run is then lost.
+  - If it fails: keep one schedule, and update `begin_job_run` and `SLOT_START_HOUR_UTC`, which both assume the 15:00 slot. The recovery run is then lost.
 
 - [ ] **Each cron really fires, in its hour.**
-  - Do: read `job_runs` after 15:00 UTC on seven days, and note each `started_at`. Then check that the 16:00 cron fires too. Open Logs filtered to `/api/cron/reminders` within the hour after it runs, between 16:00 and 17:59 UTC, on at least two days. Hobby keeps logs for one hour, and a cron can fire anywhere in its hour. Note any time between the two crons, and any duplicate delivery you see. These numbers have never been measured. Logs this short can only show a duplicate you happen to catch, so write down how many hours you watched.
+  - Do: read `job_runs` after 16:00 UTC on seven days, and note each `started_at`. Then check that the 17:00 cron fires too. Open Logs filtered to `/api/cron/reminders` within the hour after it runs, between 17:00 and 18:59 UTC, on at least two days. Hobby keeps logs for one hour, and a cron can fire anywhere in its hour. Note any time between the two crons, and any duplicate delivery you see. These numbers have never been measured. Logs this short can only show a duplicate you happen to catch, so write down how many hours you watched.
 
     ```sql
     SELECT job_name, status, started_at, error, results
     FROM public.job_runs ORDER BY started_at DESC LIMIT 10;
     ```
 
-  - Success: one `reminders` and one `health_check` row a day with status `succeeded`, started between 14:00 and 14:59 UTC. A second invocation shows in Logs with a 200 and adds no new `succeeded` row in the slot.
+  - Success: one `reminders` and one `health_check` row a day with status `succeeded`, started between 15:00 and 15:59 UTC. A second invocation shows in Logs with a 200 and adds no new `succeeded` row in the slot.
   - If it fails: no rows means the cron is not reaching the function. Check that `CRON_SECRET` is set and the deployment is Production. A row with `failed` shows a `category:code` in `error`.
 
 - [ ] **The second cron recovers a failed morning.**
-  - Do: with a task due, set a wrong `DISCORD_BOT_TOKEN` on the test project before 14:00 UTC and redeploy. Put the right one back after the morning run, before 16:00 UTC, and redeploy.
-  - Success: a `failed` row in the 14:00 hour, a `succeeded` row in the 16:00 hour, and the reminder sent with its ping. The `started_at` of that row is also a measured time for the second cron.
+  - Do: with a task due, set a wrong `DISCORD_BOT_TOKEN` on the test project before 15:00 UTC and redeploy. Put the right one back after the morning run, before 17:00 UTC, and redeploy.
+  - Success: a `failed` row in the 15:00 hour, a `succeeded` row in the 17:00 hour, and the reminder sent with its ping. The `started_at` of that row is also a measured time for the second cron.
   - If it fails: if the failed run sent reminders, or the recovery run does not start, see the lock in `20261104000008_job_run_lock.sql`.
 
 - [ ] **Running cron twice sends nothing twice.**
@@ -552,6 +591,28 @@ Read [Running the cron by hand](#running-the-cron-by-hand) first. Each item here
   - Success: each person gets the most urgent reminder that applies, in the event's post, and the time falls in the expected window. The cron is in UTC, so in Eastern time it moves one hour with daylight saving.
   - If it fails: check the guild's `timezone`, which defaults to `America/New_York`, and `src/reminders/plan.ts`.
 
+- [ ] **The daily step list.**
+  - Do: make three events dated a few days ahead, after `/setup` has chosen the Events Directors role. On the first, assign one person to Budget Sheet and nobody to Engage post. On the second, mark Budget Sheet and Engage post done and approve the budget, and set up nothing for Food pickup. On the third, finish every step and set up Food pickup. Let the morning run go.
+  - Success: the first post gets one message that pings the Budget Sheet person and the Events Directors role, and lists Budget approved without a ping. The second gets one message that pings the event's creator about Food pickup. The third gets nothing. Role holders are notified, and no one else is. The `reminders` row has `event_reminders_sent: 2`. A second by-hand run in the same slot sends nothing.
+  - If it fails: a role holder who was not notified means the role ping was dropped, so check `allowed_mentions.roles` in Logs and `mentionRoleIds` in `src/reminders/event-render.ts`. A message for the third event needs a fix in `src/reminders/event-plan.ts`.
+
+- [ ] **Food pickup reminders on the right days.**
+  - Do: approve the budget on an event three days ahead, put two people on Food pickup, and set the time to `5:30 PM`. Let a run go on each of the next four days.
+  - Success: nothing about pickup three days before or the day before. Two days before and on the day, one message pings both people and shows `5:30 PM`, with the day. The day after, nothing at all. In `event_reminder_log` there is one `pickup_two_days` and one `pickup_day` row, both `sent`.
+
+    ```sql
+    SELECT kind, reminder_date, state, attempts, sent_at
+    FROM public.event_reminder_log
+    WHERE event_id = '<event-id>' ORDER BY reminder_date, kind;
+    ```
+
+  - If it fails: a message on the wrong day is a bug in `kindsDueToday` in `src/reminders/event-plan.ts`. A wrong time means the guild's `timezone` or the stored `pickup_time` is off, since the time is shown as stored.
+
+- [ ] **Event reminders after a failed morning.**
+  - Do: as in "The second cron recovers a failed morning", with an event that has an open step instead of a task due.
+  - Success: the 17:00 run sends the step list once, with its pings, and `event_reminder_log` shows `attempts: 2`. An event whose list went out in the morning gets nothing more.
+  - If it fails: check `EventReminderStep` in `src/reminders/event-run.ts`.
+
 - [ ] **Two weeks on the real stack.** Long periods have only been simulated, in one time zone. A clock change has not been seen live.
   - Do: leave about 10 tasks on the test project, with due dates spread over two weeks. Each day, read `job_runs` and this. If a clock change falls before launch, keep it running across that too.
 
@@ -568,7 +629,7 @@ Read [Running the cron by hand](#running-the-cron-by-hand) first. Each item here
   - Success:
     - The off run adds a new `succeeded` row with nothing sent. This row is the evidence. Without it, nothing tested the switch.
     - The panel says that turning them on after the day's run does not reopen it.
-    - Turning on replies `Reminders are on. If the day's run (around 14:00 UTC) has already happened, they resume with the next day's run.`
+    - Turning on replies `Reminders are on. If the day's run (around 15:00 UTC) has already happened, they resume with the next day's run.`
     - The second by-hand run answers `ok`, adds no row and sends nothing. That is the design, not a failure.
     - The next day's run adds a new `succeeded` row and sends the overdue reminder. In `reminder_log`, the task has `due_day` as `skipped` and `overdue` as `sent`.
   - If it fails: do not launch if anything sends while off. This is your emergency stop.

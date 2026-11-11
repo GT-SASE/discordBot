@@ -42,7 +42,7 @@ const BANNED_METHODS = [
 ].join("|");
 
 const TABLES =
-  "guild_config|managed_channels|events|tasks|reminder_log|job_runs|config_audit|interaction_claims|task_reassignments";
+  "guild_config|managed_channels|events|tasks|reminder_log|job_runs|config_audit|interaction_claims|task_reassignments|setup_drafts|event_steps|event_step_assignees|event_reminder_log";
 
 // Every extension Node or the TypeScript compiler could load, so that a file cannot
 // step around these rules by its name.

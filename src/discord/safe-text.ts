@@ -7,8 +7,9 @@
  * from user data does not type-check where a message needs text.
  *
  * Member nicknames, global names and usernames are never rendered, because any
- * member controls them. Refer to a person with `userMention`. Role and channel
- * names go through `escapeUserText` like any other text.
+ * member controls them. Refer to a person with `userMention` and a role with
+ * `roleMention`. Role and channel names go through `escapeUserText` like any other
+ * text.
  */
 
 import { isSnowflake } from "../lib/snowflake.ts";
@@ -22,6 +23,7 @@ export const DISCORD_LIMITS = {
   content: 2000,
   threadName: 100,
   mentionedUsers: 100,
+  mentionedRoles: 100,
   buttonLabel: 80,
   customId: 100,
   selectOptionLabel: 100,
@@ -296,6 +298,14 @@ function idMention(prefix: string, id: string): SafeText {
  */
 export function userMention(userId: string): SafeText {
   return idMention("@", userId);
+}
+
+/**
+ * Shows a role. This alone pings nobody: the message's `mentionRoleIds` decides which
+ * roles are notified. Role IDs must come from the signed guild's config row.
+ */
+export function roleMention(roleId: string): SafeText {
+  return idMention("@&", roleId);
 }
 
 export function channelMention(channelId: string): SafeText {

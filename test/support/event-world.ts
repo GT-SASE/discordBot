@@ -64,6 +64,11 @@ export interface World {
     fields?: { description?: string; assignee?: string },
   ): Promise<string>;
   setForumStatus(channelId: string, status: string): Promise<void>;
+  /**
+   * Lets this test's messages ping these users and roles, and no others. Every other
+   * test may ping nobody at all.
+   */
+  allowPings(pings: { users?: string[]; roles?: string[] }): void;
 }
 
 export type StoredEvent = EventRow & { event_date: string };
@@ -81,6 +86,7 @@ export function eventWorld(): World {
   let errorSpy: MockInstance<typeof console.error>;
   let dbFailures: { pattern: RegExp; status: number; times: number }[] = [];
   let seen: string[] = [];
+  let allowed = { users: new Set<string>(), roles: new Set<string>() };
 
   const db = createDbClient({
     url: TEST_ORIGIN,
@@ -116,13 +122,13 @@ export function eventWorld(): World {
     await queryAs(
       pg,
       "service_role",
-      `SELECT public.apply_role_bindings($1, 0, $2, $3, $4)`,
+      `SELECT public.apply_role_bindings($1, 0, $2, $3, $4, NULL, NULL, NULL, NULL)`,
       [GUILD_ID, fakeId(), OFFICER_ROLE, ADMIN_ROLE],
     );
     await queryAs(
       pg,
       "service_role",
-      `SELECT public.apply_role_bindings($1, 0, $2, $3, $4)`,
+      `SELECT public.apply_role_bindings($1, 0, $2, $3, $4, NULL, NULL, NULL, NULL)`,
       [OTHER_GUILD, fakeId(), fakeId(), fakeId()],
     );
   });
@@ -143,6 +149,7 @@ export function eventWorld(): World {
     vi.stubGlobal("fetch", server.fetch);
     dbFailures = [];
     seen = [];
+    allowed = { users: new Set(), roles: new Set() };
     errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
   });
 
@@ -154,7 +161,17 @@ export function eventWorld(): World {
           ? body
           : (body.message as Record<string, unknown>);
       if (typeof message?.content === "string") {
-        expect(message.allowed_mentions).toEqual({ parse: [], users: [] });
+        const mentions = message.allowed_mentions as {
+          users: string[];
+          roles?: string[];
+        };
+        const named = {
+          users: mentions.users.filter((id) => allowed.users.has(id)),
+          ...(mentions.roles === undefined
+            ? {}
+            : { roles: mentions.roles.filter((id) => allowed.roles.has(id)) }),
+        };
+        expect(mentions).toEqual({ parse: [], ...named });
         expect(Number(message.flags) & 4).toBe(4);
       }
     }
@@ -222,6 +239,9 @@ export function eventWorld(): World {
         [eventId, GUILD_ID, assignee, description, fakeId()],
       );
       return (rows[0] as { id: string }).id;
+    },
+    allowPings({ users = [], roles = [] }) {
+      allowed = { users: new Set(users), roles: new Set(roles) };
     },
     async setForumStatus(channelId, status) {
       await queryAs(

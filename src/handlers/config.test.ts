@@ -133,6 +133,18 @@ function removePayload(
   });
 }
 
+const EBOARD = testSnowflake();
+
+/** All five roles bound, as /setup saves them, as a config row or an audit row's values. */
+const BOUND = {
+  officer_role_id: testSnowflake(),
+  admin_role_id: EBOARD,
+  eboard_role_id: EBOARD,
+  events_committee_role_id: testSnowflake(),
+  treasury_role_id: testSnowflake(),
+  marketing_role_id: testSnowflake(),
+};
+
 function change(fields: Partial<ChangeRow> = {}): ChangeRow {
   return {
     id: 1,
@@ -388,6 +400,56 @@ describe("/config", () => {
       expect(edits[0]?.content.length).toBeLessThanOrEqual(2000);
     });
 
+    it("lists fewer forums when the roles and role changes take the room", async () => {
+      const forums = Array.from({ length: 20 }, () => testSnowflake());
+      const long = (id: string) => id.padEnd(20, "0");
+      const sixRoles = () => ({
+        officer_role_id: long(testSnowflake()),
+        admin_role_id: long(testSnowflake()),
+        eboard_role_id: long(testSnowflake()),
+        events_committee_role_id: long(testSnowflake()),
+        treasury_role_id: long(testSnowflake()),
+        marketing_role_id: long(testSnowflake()),
+      });
+      const { dependencies, edits } = world(
+        {
+          config: configRow({
+            officer_role_id: long(testSnowflake()),
+            admin_role_id: long(testSnowflake()),
+          }),
+          channels: forums.map((id) => managedRow(long(id), "unavailable")),
+          changes: Array.from({ length: 5 }, (_, id) =>
+            change({
+              id,
+              actor_id: long(testSnowflake()),
+              action: "role_bindings",
+              old_values: sixRoles(),
+              new_values: sixRoles(),
+            }),
+          ),
+        },
+        { channels: "fail" },
+      );
+
+      await run(
+        ROUTER,
+        componentPayload("config.reminders-off:3"),
+        dependencies,
+      );
+
+      const content = edits[0]?.content ?? "";
+      expect(content).toContain("Reminders are off");
+      expect(content).toContain(
+        "Marketing Committee: Run /setup to choose the Marketing Committee role.",
+      );
+      expect(content).toContain(
+        "changed the roles: Admin, E-board, Events Directors, Events Committee, Treasury Committee, Marketing Committee",
+      );
+      expect(content).toMatch(/And 1[05] more\./);
+      expect(content.length).toBeLessThanOrEqual(2000);
+      expect(componentsOf(edits[0]).at(-1)?.options).toHaveLength(20);
+    });
+
     it("still draws the panel when Discord can't be read at all", async () => {
       const { dependencies, edits } = world(
         {},
@@ -446,6 +508,90 @@ describe("/config", () => {
     });
   });
 
+  describe("the roles", () => {
+    it("shows all five bound roles as mentions that ping nobody, with E-board as admin", async () => {
+      const { dependencies, edits } = world({
+        config: configRow({ ...BOUND }),
+      });
+
+      await run(ROUTER, commandPayload("config"), dependencies);
+
+      const content = edits[0]?.content ?? "";
+      expect(content).not.toContain("Admin:");
+      expect(content).toContain(
+        [
+          "**Roles**",
+          `E-board (also admin): <@&${BOUND.eboard_role_id}>`,
+          `Events Directors: <@&${BOUND.officer_role_id}>`,
+          `Events Committee: <@&${BOUND.events_committee_role_id}>`,
+          `Treasury Committee: <@&${BOUND.treasury_role_id}>`,
+          `Marketing Committee: <@&${BOUND.marketing_role_id}>`,
+        ].join("\n"),
+      );
+      expect(content).not.toContain("Run /setup");
+      expect(edits[0]).toMatchObject({
+        allowed_mentions: { parse: [], users: [] },
+      });
+      expect(
+        (edits[0] as { allowed_mentions?: { roles?: unknown } })
+          .allowed_mentions?.roles ?? [],
+      ).toEqual([]);
+    });
+
+    it("shows an admin role held apart from E-board on its own line", async () => {
+      const admin = testSnowflake();
+      const { dependencies, edits } = world({
+        config: configRow({ ...BOUND, admin_role_id: admin }),
+      });
+
+      await run(ROUTER, commandPayload("config"), dependencies);
+
+      const content = edits[0]?.content ?? "";
+      expect(content).toContain(
+        [
+          "**Roles**",
+          `Admin: <@&${admin}>`,
+          `E-board: <@&${BOUND.eboard_role_id}>`,
+          `Events Directors: <@&${BOUND.officer_role_id}>`,
+        ].join("\n"),
+      );
+      expect(content).not.toContain("(also admin)");
+    });
+
+    it("shows the admin role apart when E-board is unset", async () => {
+      const { dependencies, edits } = world({
+        config: configRow({ ...BOUND, eboard_role_id: null }),
+      });
+
+      await run(ROUTER, commandPayload("config"), dependencies);
+
+      expect(edits[0]?.content).toContain(
+        `Admin: <@&${BOUND.admin_role_id}>\nE-board: Run /setup to choose the E-board role.`,
+      );
+    });
+
+    it.each([
+      ["eboard_role_id", "E-board"],
+      ["events_committee_role_id", "Events Committee"],
+      ["treasury_role_id", "Treasury Committee"],
+      ["marketing_role_id", "Marketing Committee"],
+    ] as const)(
+      "says to run /setup when %s is unset",
+      async (column, label) => {
+        const { dependencies, edits } = world({
+          config: configRow({ ...BOUND, [column]: null }),
+        });
+
+        await run(ROUTER, commandPayload("config"), dependencies);
+
+        expect(edits[0]?.content).toContain(
+          `${label}: Run /setup to choose the ${label} role.`,
+        );
+        expect(edits[0]?.content.match(/Run \/setup/g)).toHaveLength(1);
+      },
+    );
+  });
+
   describe("the last changes", () => {
     it("names the actor by mention, without pinging", async () => {
       const actor = testSnowflake();
@@ -464,9 +610,63 @@ describe("/config", () => {
 
     it.each([
       [
-        "role bindings",
+        "the first role bindings",
         { action: "role_bindings", old_values: null },
-        "changed the roles",
+        "chose the roles",
+      ],
+      [
+        "one changed role, by the club's name for it",
+        {
+          action: "role_bindings",
+          old_values: { ...BOUND, officer_role_id: FORUM },
+          new_values: BOUND,
+        },
+        "changed the Events Directors role",
+      ],
+      [
+        "several changed roles, including the four added later",
+        {
+          action: "role_bindings",
+          old_values: {
+            ...BOUND,
+            eboard_role_id: null,
+            treasury_role_id: null,
+          },
+          new_values: BOUND,
+        },
+        "changed the roles: E-board, Treasury Committee",
+      ],
+      [
+        "E-board changed, with the admin role following it",
+        {
+          action: "role_bindings",
+          old_values: { ...BOUND, eboard_role_id: FORUM, admin_role_id: FORUM },
+          new_values: BOUND,
+        },
+        "changed the E-board role",
+      ],
+      [
+        "a separate admin role replaced by E-board",
+        {
+          action: "role_bindings",
+          old_values: { ...BOUND, admin_role_id: FORUM },
+          new_values: BOUND,
+        },
+        "changed the Admin role",
+      ],
+      [
+        "an older row that only knew two roles",
+        {
+          action: "role_bindings",
+          old_values: { officer_role_id: FORUM, admin_role_id: FORUM },
+          new_values: { officer_role_id: NEW_FORUM, admin_role_id: FORUM },
+        },
+        "changed the Events Directors role",
+      ],
+      [
+        "role bindings saved with no difference",
+        { action: "role_bindings", old_values: BOUND, new_values: BOUND },
+        "saved the roles unchanged",
       ],
       [
         "a removal",
@@ -804,7 +1004,7 @@ describe("reminders", () => {
     await run(ROUTER, componentPayload("config.reminders-on:3"), dependencies);
 
     expect(edits[0]?.content).toContain(
-      "If the day's run (around 14:00 UTC) has already happened, they resume with the next day's run.",
+      "If the day's run (around 15:00 UTC) has already happened, they resume with the next day's run.",
     );
   });
 

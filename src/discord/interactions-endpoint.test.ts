@@ -685,8 +685,11 @@ describe("work done after the reply", () => {
         type: ApplicationCommandType.ChatInput,
         name: "setup",
         options: [
-          { name: "officer_role", type: 8, value: ROLE_A },
-          { name: "admin_role", type: 8, value: ROLE_B },
+          { name: "eboard_role", type: 8, value: ROLE_B },
+          { name: "events_directors_role", type: 8, value: ROLE_A },
+          { name: "events_committee_role", type: 8, value: ROLE_A },
+          { name: "treasury_role", type: 8, value: ROLE_A },
+          { name: "marketing_role", type: 8, value: ROLE_A },
         ],
         resolved: {
           roles: { [ROLE_A]: roleRow(ROLE_A), [ROLE_B]: roleRow(ROLE_B) },
@@ -699,6 +702,9 @@ describe("work done after the reply", () => {
     send.mockReset();
     send.mockImplementation((input, init) => {
       const url = input as string;
+      if (url.includes("/rest/v1/rpc/save_setup_draft")) {
+        return Promise.resolve(Response.json(true));
+      }
       if (url.includes("/rest/v1/")) {
         return Promise.resolve(Response.json([]));
       }

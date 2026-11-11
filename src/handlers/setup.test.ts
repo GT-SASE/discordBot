@@ -8,12 +8,13 @@ import {
   ADMIN,
   ADMIN_ROLE,
   ADMINISTRATOR,
-  commandPayload,
+  ADMINISTRATOR_BIT as ADMINISTRATOR_PERMISSIONS,
   componentPayload,
   configRow,
   dependenciesFor,
   fakeDb,
   fakeDiscord,
+  firstCustomId,
   GUILD_ID,
   member,
   MEMBER_ID,
@@ -21,9 +22,13 @@ import {
   OFFICER_ROLE,
   PLAIN_MEMBER,
   run,
+  SETUP_OPTIONS,
+  setupCommandPayload,
   type FakeDiscordData,
+  type SetupOption,
 } from "../../test/support/interactions.ts";
 import { testSnowflake } from "../../test/support/mock-postgrest.ts";
+import { setupDraftFingerprint, type SetupRoles } from "../db/guild-config.ts";
 import type { GuildRole } from "../discord/client.ts";
 import { REFUSED } from "../lib/permissions.ts";
 import { COMMANDS, ROUTER } from "./registry.ts";
@@ -31,9 +36,6 @@ import { rolesThatMayGrant } from "./setup.ts";
 
 const ADMINISTRATOR_BIT = 1n << 3n;
 const MANAGE_ROLES_BIT = 1n << 28n;
-
-const NEW_OFFICER = testSnowflake();
-const NEW_ADMIN = testSnowflake();
 
 function role(id: string, fields: Partial<GuildRole> = {}): GuildRole {
   return {
@@ -46,46 +48,63 @@ function role(id: string, fields: Partial<GuildRole> = {}): GuildRole {
   };
 }
 
-function resolvedEntry(guildRole: GuildRole) {
-  return { ...guildRole, permissions: String(guildRole.permissions) };
+const LABELS: Record<SetupOption, string> = {
+  eboard_role: "E-board",
+  events_directors_role: "Events Directors",
+  events_committee_role: "Events Committee",
+  treasury_role: "Treasury Committee",
+  marketing_role: "Marketing Committee",
+};
+
+/** How the chosen roles are listed: E-board is saved as the admin role too. */
+const SHOWN: Record<SetupOption, string> = {
+  ...LABELS,
+  eboard_role: "E-board (also admin)",
+};
+
+const CHOSEN: Record<SetupOption, GuildRole> = {
+  eboard_role: role(testSnowflake(), { name: "Board" }),
+  events_directors_role: role(testSnowflake(), { name: "Directors" }),
+  events_committee_role: role(testSnowflake(), { name: "Committee" }),
+  treasury_role: role(testSnowflake(), { name: "Treasury" }),
+  marketing_role: role(testSnowflake(), { name: "Marketing" }),
+};
+
+function setupRolesOf(roles: Record<SetupOption, GuildRole>): SetupRoles {
+  return {
+    officerRoleId: roles.events_directors_role.id,
+    adminRoleId: roles.eboard_role.id,
+    eboardRoleId: roles.eboard_role.id,
+    eventsCommitteeRoleId: roles.events_committee_role.id,
+    treasuryRoleId: roles.treasury_role.id,
+    marketingRoleId: roles.marketing_role.id,
+  };
 }
 
+const FINGERPRINT = setupDraftFingerprint(setupRolesOf(CHOSEN));
+
+/** What apply_role_bindings is sent for CHOSEN. */
+const CHOSEN_BINDINGS = {
+  p_officer_role_id: CHOSEN.events_directors_role.id,
+  p_admin_role_id: CHOSEN.eboard_role.id,
+  p_eboard_role_id: CHOSEN.eboard_role.id,
+  p_events_committee_role_id: CHOSEN.events_committee_role.id,
+  p_treasury_role_id: CHOSEN.treasury_role.id,
+  p_marketing_role_id: CHOSEN.marketing_role.id,
+};
+
+const ROLE_LIST = [
+  role(GUILD_ID, { name: "@everyone", position: 0 }),
+  ...Object.values(CHOSEN),
+];
+
 function setupPayload(
-  officer: GuildRole,
-  admin: GuildRole,
+  roles: Partial<Record<SetupOption, GuildRole>> = {},
   fields: Record<string, unknown> = {},
   extraOptions: unknown[] = [],
 ) {
-  return commandPayload("setup", fields, {
-    options: [
-      {
-        name: "officer_role",
-        type: ApplicationCommandOptionType.Role,
-        value: officer.id,
-      },
-      {
-        name: "admin_role",
-        type: ApplicationCommandOptionType.Role,
-        value: admin.id,
-      },
-      ...extraOptions,
-    ],
-    resolved: {
-      roles: {
-        [officer.id]: resolvedEntry(officer),
-        [admin.id]: resolvedEntry(admin),
-      },
-    },
-  });
+  return setupCommandPayload({ ...CHOSEN, ...roles }, fields, extraOptions);
 }
-
-const OFFICER_ENTRY = role(NEW_OFFICER, { name: "Officers" });
-const ADMIN_ENTRY = role(NEW_ADMIN, { name: "Admins" });
-const ROLE_LIST = [
-  role(GUILD_ID, { name: "@everyone", position: 0 }),
-  OFFICER_ENTRY,
-  ADMIN_ENTRY,
-];
 
 function world(
   fields: Parameters<typeof fakeDb>[0] = {},
@@ -100,14 +119,21 @@ function world(
   };
 }
 
-function customIdIn(edit: { components?: unknown[] } | undefined): string {
-  const [row] = (edit?.components ?? []) as {
-    components: { custom_id: string }[];
-  }[];
-  return row?.components[0]?.custom_id ?? "";
+type World = ReturnType<typeof world>;
+
+/** Runs /setup as `who` and returns the Confirm button's custom_id. */
+async function showSetup(
+  { dependencies, edits }: World,
+  who: Record<string, unknown> = ADMINISTRATOR,
+  roles: Partial<Record<SetupOption, GuildRole>> = {},
+): Promise<string> {
+  const before = edits.length;
+  await run(ROUTER, setupPayload(roles, { member: who }), dependencies);
+  return firstCustomId(edits[before]);
 }
 
 const FIXED_REFUSAL_TEXT = REFUSED.message;
+const NO_DRAFT_TEXT = "no longer matches your latest /setup";
 
 const logged = vi.fn();
 
@@ -125,11 +151,16 @@ describe("registration", () => {
     COMMANDS as readonly {
       name: string;
       default_member_permissions?: string;
-      options?: readonly { name: string; type: number; required?: boolean }[];
+      options?: readonly {
+        name: string;
+        type: number;
+        required?: boolean;
+        description: string;
+      }[];
     }[]
   ).find((command) => command.name === "setup");
 
-  it("is hidden by default, top level, with two required role options", () => {
+  it("is hidden by default, top level, with five required role options", () => {
     expect(definition?.default_member_permissions).toBe("0");
     expect(
       definition?.options?.map(({ name, type, required }) => [
@@ -137,60 +168,92 @@ describe("registration", () => {
         type,
         required,
       ]),
-    ).toEqual([
-      ["officer_role", ApplicationCommandOptionType.Role, true],
-      ["admin_role", ApplicationCommandOptionType.Role, true],
-    ]);
+    ).toEqual(
+      SETUP_OPTIONS.map((name) => [
+        name,
+        ApplicationCommandOptionType.Role,
+        true,
+      ]),
+    );
+  });
+
+  it("describes each option within Discord's limit", () => {
+    for (const option of definition?.options ?? []) {
+      expect(option.description.length).toBeGreaterThan(0);
+      expect(option.description.length).toBeLessThanOrEqual(100);
+    }
   });
 });
 
 describe("/setup", () => {
-  it("defers privately and shows the roles and a Confirm button", async () => {
+  it("defers privately and shows the five roles, by the club's names, with a Confirm button", async () => {
     const { dependencies, edits } = world();
 
-    const { reply } = await run(
-      ROUTER,
-      setupPayload(OFFICER_ENTRY, ADMIN_ENTRY),
-      dependencies,
-    );
+    const { reply } = await run(ROUTER, setupPayload(), dependencies);
 
     expect(reply).toEqual({
       type: InteractionResponseType.DeferredChannelMessageWithSource,
       data: { flags: MessageFlags.Ephemeral },
     });
     expect(edits).toHaveLength(1);
-    expect(edits[0]?.content).toContain("Officer role: Officers");
-    expect(edits[0]?.content).toContain("Admin role: Admins");
-    expect(customIdIn(edits[0])).toBe(
-      `setup.confirm:0:${NEW_OFFICER}:${NEW_ADMIN}`,
-    );
+    for (const name of SETUP_OPTIONS) {
+      expect(edits[0]?.content).toContain(
+        `${SHOWN[name]}: ${CHOSEN[name].name}`,
+      );
+    }
+    expect(firstCustomId(edits[0])).toBe(`setup.confirm:0:${FINGERPRINT}`);
+  });
+
+  it("saves a draft for this member, with the fingerprint Confirm carries", async () => {
+    const { dependencies, state } = world();
+
+    await run(ROUTER, setupPayload(), dependencies);
+
+    expect(state.drafts).toEqual([
+      expect.objectContaining({
+        guild_id: GUILD_ID,
+        actor_id: MEMBER_ID,
+        officer_role_id: CHOSEN.events_directors_role.id,
+        admin_role_id: CHOSEN.eboard_role.id,
+        eboard_role_id: CHOSEN.eboard_role.id,
+        events_committee_role_id: CHOSEN.events_committee_role.id,
+        treasury_role_id: CHOSEN.treasury_role.id,
+        marketing_role_id: CHOSEN.marketing_role.id,
+        fingerprint: FINGERPRINT,
+      }),
+    ]);
+  });
+
+  it("keeps the custom_id well inside Discord's limit", async () => {
+    const w = world({ config: configRow({ version: 1_999_999_999 }) });
+
+    const customId = await showSetup(w);
+
+    expect(customId).toBe(`setup.confirm:1999999999:${FINGERPRINT}`);
+    expect(customId.length).toBeLessThanOrEqual(100);
   });
 
   it("carries the current version in Confirm", async () => {
-    const { dependencies, edits } = world({
-      config: configRow({ version: 7 }),
-    });
+    const w = world({ config: configRow({ version: 7 }) });
 
-    await run(ROUTER, setupPayload(OFFICER_ENTRY, ADMIN_ENTRY), dependencies);
-
-    expect(customIdIn(edits[0])).toContain("setup.confirm:7:");
+    expect(await showSetup(w)).toContain("setup.confirm:7:");
   });
 
   it("never says that nobody else can grant a role", async () => {
     const { dependencies, edits } = world();
 
-    await run(ROUTER, setupPayload(OFFICER_ENTRY, ADMIN_ENTRY), dependencies);
+    await run(ROUTER, setupPayload(), dependencies);
 
     expect(edits[0]?.content).toContain(
-      "Roles that may be able to grant this: none found. The server owner may also be able to.",
+      "Roles that may be able to grant these: none found. The server owner may also be able to.",
     );
     expect(edits[0]?.content).not.toMatch(/\bonly\b/i);
   });
 
-  it("writes nothing before Confirm", async () => {
+  it("changes no setting before Confirm", async () => {
     const { dependencies, rpcBodies, state } = world();
 
-    await run(ROUTER, setupPayload(OFFICER_ENTRY, ADMIN_ENTRY), dependencies);
+    await run(ROUTER, setupPayload(), dependencies);
 
     expect(rpcBodies("apply_role_bindings")).toEqual([]);
     expect(rpcBodies("claim_interaction")).toEqual([]);
@@ -202,17 +265,18 @@ describe("/setup", () => {
     ["an officer", OFFICER],
     ["the bound admin role, which does not reach bindings", ADMIN],
   ])("refuses %s, with no reply content", async (_label, who) => {
-    const { dependencies, edits } = world({ config: configRow() });
+    const { dependencies, edits, state } = world({ config: configRow() });
 
     const { reply, deferred } = await run(
       ROUTER,
-      setupPayload(OFFICER_ENTRY, ADMIN_ENTRY, { member: who }),
+      setupPayload({}, { member: who }),
       dependencies,
     );
 
     expect(reply.data?.content).toBe(FIXED_REFUSAL_TEXT);
     expect(deferred).toBe(false);
     expect(edits).toEqual([]);
+    expect(state.drafts).toEqual([]);
   });
 
   it("refuses a non-admin before setup too", async () => {
@@ -220,7 +284,7 @@ describe("/setup", () => {
 
     const { reply } = await run(
       ROUTER,
-      setupPayload(OFFICER_ENTRY, ADMIN_ENTRY, { member: PLAIN_MEMBER }),
+      setupPayload({}, { member: PLAIN_MEMBER }),
       dependencies,
     );
 
@@ -232,9 +296,10 @@ describe("/setup", () => {
 
     const { reply } = await run(
       ROUTER,
-      setupPayload(OFFICER_ENTRY, ADMIN_ENTRY, {
-        member: member({ permissions: String((1n << 54n) | 7n) }),
-      }),
+      setupPayload(
+        {},
+        { member: member({ permissions: String((1n << 54n) | 7n) }) },
+      ),
       dependencies,
     );
 
@@ -242,16 +307,25 @@ describe("/setup", () => {
   });
 
   it("allows an administrator to rebind when the bound roles are gone", async () => {
-    const { dependencies, edits } = world({
+    const w = world({
       config: configRow({
         officer_role_id: testSnowflake(),
         admin_role_id: testSnowflake(),
       }),
     });
 
-    await run(ROUTER, setupPayload(OFFICER_ENTRY, ADMIN_ENTRY), dependencies);
+    expect(await showSetup(w)).toContain("setup.confirm:3:");
+  });
 
-    expect(customIdIn(edits[0])).toContain("setup.confirm:3:");
+  it("says try again, with no button, when the draft can't be saved", async () => {
+    const { dependencies, edits, state } = world();
+    state.failing = { path: "save_setup_draft", status: 503 };
+
+    await run(ROUTER, setupPayload(), dependencies);
+
+    expect(edits[0]?.content).toContain("Something went wrong");
+    expect(edits[0]?.components).toEqual([]);
+    expect(JSON.stringify(edits)).not.toContain("canary");
   });
 
   describe("roles that cannot be bound", () => {
@@ -261,72 +335,70 @@ describe("/setup", () => {
       managed: true,
     });
 
-    it.each([
-      [
-        "officer @everyone",
-        everyone,
-        ADMIN_ENTRY,
-        /officer role can't be \\@everyone/,
-      ],
-      [
-        "admin @everyone",
-        OFFICER_ENTRY,
-        everyone,
-        /admin role can't be \\@everyone/,
-      ],
-      [
-        "a managed officer role",
-        integration,
-        ADMIN_ENTRY,
-        /an integration controls/,
-      ],
-      [
-        "a managed admin role",
-        OFFICER_ENTRY,
-        integration,
-        /an integration controls/,
-      ],
-    ])("rejects %s with no button", async (_label, officer, admin, text) => {
-      const { dependencies, edits } = world();
+    it.each(SETUP_OPTIONS)(
+      "rejects @everyone as the %s, naming it, with no button or draft",
+      async (name) => {
+        const { dependencies, edits, state } = world();
 
-      await run(ROUTER, setupPayload(officer, admin), dependencies);
+        await run(ROUTER, setupPayload({ [name]: everyone }), dependencies);
 
-      expect(edits[0]?.content).toMatch(text);
-      expect(edits[0]?.components).toEqual([]);
-    });
+        expect(edits[0]?.content).toContain(
+          `The ${LABELS[name]} role can't be \\@everyone`,
+        );
+        expect(edits[0]?.components).toEqual([]);
+        expect(state.drafts).toEqual([]);
+      },
+    );
 
-    it("rejects a role missing from resolved, with no button", async () => {
-      const { dependencies, edits } = world();
-      const payload = setupPayload(OFFICER_ENTRY, ADMIN_ENTRY);
-      (
-        payload.data as { resolved: { roles: Record<string, unknown> } }
-      ).resolved.roles = {};
+    it.each(SETUP_OPTIONS)(
+      "rejects a managed role as the %s, naming it, with no button or draft",
+      async (name) => {
+        const { dependencies, edits, state } = world();
 
-      await run(ROUTER, payload, dependencies);
+        await run(ROUTER, setupPayload({ [name]: integration }), dependencies);
 
-      expect(edits[0]?.content).toContain("could not be found");
-      expect(edits[0]?.components).toEqual([]);
-    });
+        expect(edits[0]?.content).toContain(
+          `The ${LABELS[name]} role can't be Some Bot, because an integration controls who holds it.`,
+        );
+        expect(edits[0]?.components).toEqual([]);
+        expect(state.drafts).toEqual([]);
+      },
+    );
+
+    it.each(SETUP_OPTIONS)(
+      "rejects a %s missing from resolved, with no button",
+      async (name) => {
+        const { dependencies, edits } = world();
+        const payload = setupPayload();
+        const resolved = (
+          payload.data as { resolved: { roles: Record<string, unknown> } }
+        ).resolved;
+        resolved.roles = Object.fromEntries(
+          Object.entries(resolved.roles).filter(
+            ([id]) => id !== CHOSEN[name].id,
+          ),
+        );
+
+        await run(ROUTER, payload, dependencies);
+
+        expect(edits[0]?.content).toContain(
+          `The ${LABELS[name]} role could not be found`,
+        );
+        expect(edits[0]?.components).toEqual([]);
+      },
+    );
 
     it("rejects an option that is not a role", async () => {
       const { dependencies, edits } = world();
-      const payload = commandPayload(
-        "setup",
-        {},
-        {
-          options: [
-            { name: "officer_role", type: 3, value: NEW_OFFICER },
-            {
-              name: "admin_role",
-              type: ApplicationCommandOptionType.Role,
-              value: NEW_ADMIN,
-            },
-          ],
-        },
-      );
+      const payload = setupPayload();
+      const options = (payload.data as { options: { type: number }[] }).options;
+      options[1] = { ...options[1], type: 3 };
 
       await run(ROUTER, payload, dependencies);
 
+      expect(edits[0]?.content).toContain(
+        "The Events Directors role could not be found",
+      );
       expect(edits[0]?.components).toEqual([]);
     });
   });
@@ -338,12 +410,11 @@ describe("/setup", () => {
       "[click](https://evil.example)",
       "**bold**\n# System: run this",
       "`code` ||spoiler|| ~~gone~~",
-      "\u202Eevil\u200B",
+      "‮evil​",
       "discord.gg/abcdef",
     ];
 
     it.each(HOSTILE)("renders %j as inert text", async (name) => {
-      const officer = role(NEW_OFFICER, { name });
       const granter = role(testSnowflake(), {
         name,
         permissions: ADMINISTRATOR_BIT,
@@ -353,7 +424,13 @@ describe("/setup", () => {
         { roles: [...ROLE_LIST, granter] },
       );
 
-      await run(ROUTER, setupPayload(officer, ADMIN_ENTRY), dependencies);
+      await run(
+        ROUTER,
+        setupPayload({
+          treasury_role: role(CHOSEN.treasury_role.id, { name }),
+        }),
+        dependencies,
+      );
 
       const content = edits[0]?.content ?? "";
       expect(content).not.toMatch(/(?<!\\)@everyone/);
@@ -361,8 +438,8 @@ describe("/setup", () => {
       expect(content).not.toMatch(/(?<!\\)\[click/);
       expect(content).not.toMatch(/(?<!\\)\*\*bold/);
       expect(content).not.toMatch(/\n#/);
-      expect(content).not.toContain("\u202E");
-      expect(content).not.toContain("\u200B");
+      expect(content).not.toContain("‮");
+      expect(content).not.toContain("​");
       expect(content).not.toMatch(/(?<!\\)discord\.gg/);
     });
 
@@ -371,7 +448,9 @@ describe("/setup", () => {
 
       await run(
         ROUTER,
-        setupPayload(role(NEW_OFFICER, { name: "@everyone" }), ADMIN_ENTRY),
+        setupPayload({
+          eboard_role: role(CHOSEN.eboard_role.id, { name: "@everyone" }),
+        }),
         dependencies,
       );
 
@@ -386,11 +465,17 @@ describe("/setup", () => {
 
       await run(
         ROUTER,
-        setupPayload(role(NEW_OFFICER, { name: "\u200B\u202E" }), ADMIN_ENTRY),
+        setupPayload({
+          marketing_role: role(CHOSEN.marketing_role.id, {
+            name: "​‮",
+          }),
+        }),
         dependencies,
       );
 
-      expect(edits[0]?.content).toContain("(no visible name)");
+      expect(edits[0]?.content).toContain(
+        "Marketing Committee: (no visible name)",
+      );
       expect(edits[0]?.components).toHaveLength(1);
     });
 
@@ -400,15 +485,14 @@ describe("/setup", () => {
         role(testSnowflake(), { name: long, permissions: ADMINISTRATOR_BIT }),
       );
       const { dependencies, edits } = world({}, { roles: granters });
-
-      await run(
-        ROUTER,
-        setupPayload(
-          role(NEW_OFFICER, { name: long }),
-          role(NEW_ADMIN, { name: long }),
-        ),
-        dependencies,
+      const longNames = Object.fromEntries(
+        SETUP_OPTIONS.map((name) => [
+          name,
+          role(CHOSEN[name].id, { name: long }),
+        ]),
       );
+
+      await run(ROUTER, setupPayload(longNames), dependencies);
 
       expect(edits[0]?.components).toHaveLength(1);
       expect(edits[0]?.content).toContain("and more");
@@ -417,12 +501,13 @@ describe("/setup", () => {
   });
 
   it("ignores options it does not ask for, so nothing forges the audit actor", async () => {
-    const { dependencies, edits, rpcBodies } = world();
+    const w = world();
     const forged = testSnowflake();
+    const { dependencies, edits, rpcBodies } = w;
 
     await run(
       ROUTER,
-      setupPayload(OFFICER_ENTRY, ADMIN_ENTRY, {}, [
+      setupPayload({}, {}, [
         { name: "p_actor_id", type: 3, value: forged },
         { name: "p_guild_id", type: 3, value: forged },
         { name: "guildId", type: 3, value: forged },
@@ -431,22 +516,24 @@ describe("/setup", () => {
     );
     await run(
       ROUTER,
-      componentPayload(customIdIn(edits[0]), { member: ADMINISTRATOR }),
+      componentPayload(firstCustomId(edits[0]), { member: ADMINISTRATOR }),
       dependencies,
     );
 
+    expect(rpcBodies("save_setup_draft")).toEqual([
+      expect.objectContaining({ p_guild_id: GUILD_ID, p_actor_id: MEMBER_ID }),
+    ]);
     expect(rpcBodies("apply_role_bindings")).toEqual([
       {
         p_guild_id: GUILD_ID,
         p_expected_version: 0,
         p_actor_id: MEMBER_ID,
-        p_officer_role_id: NEW_OFFICER,
-        p_admin_role_id: NEW_ADMIN,
+        ...CHOSEN_BINDINGS,
       },
     ]);
   });
 
-  it("says who could grant a role, and that it could not check when the lookup fails", async () => {
+  it("says who could grant the roles, and that it could not check when the lookup fails", async () => {
     const manager = role(testSnowflake(), {
       name: "Mods",
       permissions: MANAGE_ROLES_BIT,
@@ -458,15 +545,11 @@ describe("/setup", () => {
     );
     const failing = world({}, { roles: "fail" });
 
-    await run(ROUTER, setupPayload(OFFICER_ENTRY, ADMIN_ENTRY), dependencies);
-    await run(
-      ROUTER,
-      setupPayload(OFFICER_ENTRY, ADMIN_ENTRY),
-      failing.dependencies,
-    );
+    await run(ROUTER, setupPayload(), dependencies);
+    await run(ROUTER, setupPayload(), failing.dependencies);
 
     expect(edits[0]?.content).toContain(
-      "Roles that may be able to grant this: Mods. The server owner may also be able to.",
+      "Roles that may be able to grant these: Mods. The server owner may also be able to.",
     );
     expect(failing.edits[0]?.content).toContain("could not check");
     expect(failing.edits[0]?.components).toHaveLength(1);
@@ -488,7 +571,7 @@ describe("rolesThatMayGrant", () => {
   });
 
   it("includes the chosen role itself, and lists the highest first", () => {
-    const low = role(NEW_OFFICER, {
+    const low = role(CHOSEN.events_directors_role.id, {
       permissions: MANAGE_ROLES_BIT,
       position: 2,
     });
@@ -510,26 +593,53 @@ describe("rolesThatMayGrant", () => {
 });
 
 describe("Confirm", () => {
-  const confirmId = (version = 0) =>
-    `setup.confirm:${String(version)}:${NEW_OFFICER}:${NEW_ADMIN}`;
+  const confirmId = (version = 0, fingerprint = FINGERPRINT) =>
+    `setup.confirm:${String(version)}:${fingerprint}`;
 
-  it("saves from the signed payload and the role IDs it carries", async () => {
-    const { dependencies, edits, rpcBodies, state } = world();
+  it("saves the five roles from the draft this member was shown, with E-board as admin", async () => {
+    const w = world();
+    const { dependencies, edits, rpcBodies, state } = w;
 
-    await run(ROUTER, componentPayload(confirmId()), dependencies);
+    await run(ROUTER, componentPayload(await showSetup(w)), dependencies);
 
     expect(rpcBodies("apply_role_bindings")).toEqual([
       {
         p_guild_id: GUILD_ID,
         p_expected_version: 0,
         p_actor_id: MEMBER_ID,
-        p_officer_role_id: NEW_OFFICER,
-        p_admin_role_id: NEW_ADMIN,
+        ...CHOSEN_BINDINGS,
       },
     ]);
-    expect(state.config?.officer_role_id).toBe(NEW_OFFICER);
-    expect(edits[0]?.content).toContain("Saved.");
-    expect(edits[0]?.components).toEqual([]);
+    expect(state.config).toMatchObject({
+      officer_role_id: CHOSEN.events_directors_role.id,
+      admin_role_id: CHOSEN.eboard_role.id,
+      eboard_role_id: CHOSEN.eboard_role.id,
+      events_committee_role_id: CHOSEN.events_committee_role.id,
+      treasury_role_id: CHOSEN.treasury_role.id,
+      marketing_role_id: CHOSEN.marketing_role.id,
+    });
+    expect(edits[1]?.content).toContain("Saved.");
+    for (const name of SETUP_OPTIONS) {
+      expect(edits[1]?.content).toContain(
+        `${SHOWN[name]}: ${CHOSEN[name].name}`,
+      );
+    }
+    expect(edits[1]?.components).toEqual([]);
+  });
+
+  it("replaces every saved role, including ones chosen before", async () => {
+    const w = world({
+      config: configRow({
+        version: 3,
+        eboard_role_id: testSnowflake(),
+        treasury_role_id: testSnowflake(),
+      }),
+    });
+
+    await run(ROUTER, componentPayload(await showSetup(w)), w.dependencies);
+
+    expect(w.state.config?.eboard_role_id).toBe(CHOSEN.eboard_role.id);
+    expect(w.state.config?.treasury_role_id).toBe(CHOSEN.treasury_role.id);
   });
 
   it.each([
@@ -538,11 +648,13 @@ describe("Confirm", () => {
     ["the bound admin role", ADMIN],
     ["a former administrator", member()],
   ])("refuses %s, even with a copied button", async (_label, who) => {
-    const { dependencies, rpcBodies, edits } = world({ config: configRow() });
+    const w = world({ config: configRow() });
+    const customId = await showSetup(w);
+    const { dependencies, rpcBodies, edits } = w;
 
     const { reply } = await run(
       ROUTER,
-      componentPayload(confirmId(3), { member: who }),
+      componentPayload(customId, { member: who }),
       dependencies,
     );
 
@@ -552,144 +664,278 @@ describe("Confirm", () => {
     );
     expect(rpcBodies("apply_role_bindings")).toEqual([]);
     expect(rpcBodies("claim_interaction")).toEqual([]);
-    expect(edits).toEqual([]);
-  });
-
-  it("refuses a Confirm on a message that is not private", async () => {
-    const { dependencies, rpcBodies } = world();
-
-    const { reply } = await run(
-      ROUTER,
-      componentPayload(confirmId(), { message: { flags: 0 } }),
-      dependencies,
-    );
-
-    expect(reply.data?.content).toBe(FIXED_REFUSAL_TEXT);
-    expect(rpcBodies("apply_role_bindings")).toEqual([]);
-  });
-
-  it("gives a replayed Confirm no second write", async () => {
-    const { dependencies, rpcBodies, edits } = world();
-    const payload = componentPayload(confirmId());
-
-    await run(ROUTER, payload, dependencies);
-    await run(ROUTER, payload, dependencies);
-
-    expect(rpcBodies("apply_role_bindings")).toHaveLength(1);
     expect(edits).toHaveLength(1);
   });
 
-  it("refuses with a refresh message when someone saved first", async () => {
-    const { dependencies, rpcBodies, edits } = world({
-      config: configRow({ version: 4 }),
+  it("refuses a Confirm on a message that is not private", async () => {
+    const w = world();
+
+    const { reply } = await run(
+      ROUTER,
+      componentPayload(await showSetup(w), { message: { flags: 0 } }),
+      w.dependencies,
+    );
+
+    expect(reply.data?.content).toBe(FIXED_REFUSAL_TEXT);
+    expect(w.rpcBodies("apply_role_bindings")).toEqual([]);
+  });
+
+  it("gives a replayed Confirm no second write", async () => {
+    const w = world();
+    const payload = componentPayload(await showSetup(w));
+
+    await run(ROUTER, payload, w.dependencies);
+    await run(ROUTER, payload, w.dependencies);
+
+    expect(w.rpcBodies("apply_role_bindings")).toHaveLength(1);
+    expect(w.edits).toHaveLength(2);
+  });
+
+  describe("a draft that does not match", () => {
+    it("refuses a fingerprint that is not the draft's", async () => {
+      const w = world();
+      await showSetup(w);
+
+      await run(
+        ROUTER,
+        componentPayload(confirmId(0, "0123456789abcdef")),
+        w.dependencies,
+      );
+
+      expect(w.rpcBodies("apply_role_bindings")).toEqual([]);
+      expect(w.edits[1]?.content).toContain(NO_DRAFT_TEXT);
+      expect(w.edits[1]?.content).toContain("Nothing was changed");
+      expect(w.edits[1]?.components).toEqual([]);
     });
 
-    await run(ROUTER, componentPayload(confirmId(3)), dependencies);
+    it("refuses an earlier Confirm once /setup was run again with other roles", async () => {
+      const w = world();
+      const first = await showSetup(w);
+      await showSetup(w, ADMINISTRATOR, {
+        treasury_role: CHOSEN.marketing_role,
+        marketing_role: CHOSEN.treasury_role,
+      });
 
-    expect(rpcBodies("apply_role_bindings")).toEqual([]);
-    expect(edits[0]?.content).toContain("Someone else changed the roles");
-    expect(edits[0]?.components).toEqual([]);
+      await run(ROUTER, componentPayload(first), w.dependencies);
+
+      expect(w.rpcBodies("apply_role_bindings")).toEqual([]);
+      expect(w.edits[2]?.content).toContain(NO_DRAFT_TEXT);
+    });
+
+    it("refuses a draft older than an hour", async () => {
+      const w = world();
+      const customId = await showSetup(w);
+      for (const draft of w.state.drafts) {
+        draft.created_at = new Date(Date.now() - 3_600_001).toISOString();
+      }
+
+      await run(ROUTER, componentPayload(customId), w.dependencies);
+
+      expect(w.rpcBodies("apply_role_bindings")).toEqual([]);
+      expect(w.edits[1]?.content).toContain(NO_DRAFT_TEXT);
+    });
+
+    it("refuses another administrator's draft, even with the same button", async () => {
+      const w = world();
+      const customId = await showSetup(w);
+      const other = member({
+        id: testSnowflake(),
+        permissions: ADMINISTRATOR_PERMISSIONS,
+      });
+
+      await run(
+        ROUTER,
+        componentPayload(customId, { member: other }),
+        w.dependencies,
+      );
+
+      expect(w.rpcBodies("apply_role_bindings")).toEqual([]);
+      expect(w.edits[1]?.content).toContain(NO_DRAFT_TEXT);
+    });
+
+    it("refuses when no draft was ever saved", async () => {
+      const w = world();
+
+      await run(ROUTER, componentPayload(confirmId()), w.dependencies);
+
+      expect(w.rpcBodies("apply_role_bindings")).toEqual([]);
+      expect(w.edits[0]?.content).toContain(NO_DRAFT_TEXT);
+    });
+
+    it("says try again, with no database text, when the draft can't be read", async () => {
+      const w = world();
+      const customId = await showSetup(w);
+      w.state.failing = { path: "setup_drafts", status: 503 };
+
+      await run(ROUTER, componentPayload(customId), w.dependencies);
+
+      expect(w.rpcBodies("apply_role_bindings")).toEqual([]);
+      expect(w.edits[1]?.content).toContain("Something went wrong");
+      expect(JSON.stringify(w.edits)).not.toContain("canary");
+    });
+  });
+
+  it("refuses with a refresh message when someone saved first", async () => {
+    const w = world({ config: configRow({ version: 3 }) });
+    const customId = await showSetup(w);
+    w.state.config = configRow({ version: 4 });
+
+    await run(ROUTER, componentPayload(customId), w.dependencies);
+
+    expect(w.rpcBodies("apply_role_bindings")).toEqual([]);
+    expect(w.edits[1]?.content).toContain("Someone else changed the roles");
+    expect(w.edits[1]?.components).toEqual([]);
+  });
+
+  it("refuses a stale version before reading the draft", async () => {
+    const w = world({ config: configRow({ version: 4 }) });
+
+    await run(ROUTER, componentPayload(confirmId(3)), w.dependencies);
+
+    expect(w.edits[0]?.content).toContain("Someone else changed the roles");
+    expect(w.requests.some((r) => r.target.includes("setup_drafts"))).toBe(
+      false,
+    );
   });
 
   it("refuses with the same refresh message when the database says stale", async () => {
-    const { dependencies, edits, state } = world({
-      config: configRow({ version: 3 }),
-    });
-    state.failing = {
+    const w = world({ config: configRow({ version: 3 }) });
+    const customId = await showSetup(w);
+    w.state.failing = {
       path: "apply_role_bindings",
       status: 400,
       code: "CF409",
     };
 
-    await run(ROUTER, componentPayload(confirmId(3)), dependencies);
+    await run(ROUTER, componentPayload(customId), w.dependencies);
 
-    expect(edits[0]?.content).toContain("Someone else changed the roles");
-    expect(JSON.stringify(edits)).not.toContain("canary");
+    expect(w.edits[1]?.content).toContain("Someone else changed the roles");
+    expect(JSON.stringify(w.edits)).not.toContain("canary");
   });
 
-  it("lets exactly one of two racing admins win", async () => {
-    const { dependencies, edits, rpcBodies, state } = world({
-      config: configRow({ version: 3 }),
-    });
-    const first = componentPayload(confirmId(3));
-    const second = componentPayload(confirmId(3));
+  it("lets exactly one of two racing clicks win", async () => {
+    const w = world({ config: configRow({ version: 3 }) });
+    const customId = await showSetup(w);
 
     await Promise.all([
-      run(ROUTER, first, dependencies),
-      run(ROUTER, second, dependencies),
+      run(ROUTER, componentPayload(customId), w.dependencies),
+      run(ROUTER, componentPayload(customId), w.dependencies),
     ]);
 
-    expect(state.config?.version).toBe(4);
-    const texts = edits.map((edit) => edit.content);
+    expect(w.state.config?.version).toBe(4);
+    const texts = w.edits.slice(1).map((edit) => edit.content);
     expect(texts.filter((text) => text.includes("Saved."))).toHaveLength(1);
     expect(
       texts.filter((text) => text.includes("Someone else changed the roles")),
     ).toHaveLength(1);
-    expect(rpcBodies("claim_interaction")).toHaveLength(2);
+    expect(w.rpcBodies("claim_interaction")).toHaveLength(2);
   });
 
-  it("refuses a role deleted since the panel opened", async () => {
-    const { dependencies, edits, rpcBodies } = world(
-      {},
-      { roles: [role(GUILD_ID), ADMIN_ENTRY] },
-    );
+  it.each(SETUP_OPTIONS)(
+    "refuses when the %s was deleted since the panel opened",
+    async (name) => {
+      const w = world();
+      const customId = await showSetup(w);
+      const { discord, edits } = fakeDiscord({
+        roles: ROLE_LIST.filter((item) => item.id !== CHOSEN[name].id),
+      });
 
-    await run(ROUTER, componentPayload(confirmId()), dependencies);
+      await run(
+        ROUTER,
+        componentPayload(customId),
+        dependenciesFor(w.db, discord),
+      );
 
-    expect(rpcBodies("apply_role_bindings")).toEqual([]);
-    expect(edits[0]?.content).toContain("nothing was changed");
-    expect(edits[0]?.components).toEqual([]);
-  });
+      expect(w.rpcBodies("apply_role_bindings")).toEqual([]);
+      expect(edits[0]?.content).toContain(
+        `The ${LABELS[name]} role could not be found, so nothing was changed.`,
+      );
+      expect(edits[0]?.components).toEqual([]);
+    },
+  );
 
-  it("refuses a role that became managed since the panel opened", async () => {
-    const { dependencies, edits, rpcBodies } = world(
-      {},
-      {
-        roles: [
-          role(GUILD_ID),
-          role(NEW_OFFICER, { managed: true }),
-          ADMIN_ENTRY,
-        ],
-      },
-    );
+  it.each(SETUP_OPTIONS)(
+    "refuses when the %s became managed since the panel opened",
+    async (name) => {
+      const w = world();
+      const customId = await showSetup(w);
+      const { discord, edits } = fakeDiscord({
+        roles: ROLE_LIST.map((item) =>
+          item.id === CHOSEN[name].id ? { ...item, managed: true } : item,
+        ),
+      });
 
-    await run(ROUTER, componentPayload(confirmId()), dependencies);
+      await run(
+        ROUTER,
+        componentPayload(customId),
+        dependenciesFor(w.db, discord),
+      );
 
-    expect(rpcBodies("apply_role_bindings")).toEqual([]);
-    expect(edits[0]?.content).toContain("an integration controls");
-  });
+      expect(w.rpcBodies("apply_role_bindings")).toEqual([]);
+      expect(edits[0]?.content).toContain(
+        `The ${LABELS[name]} role can't be ${CHOSEN[name].name}, because an integration controls who holds it.`,
+      );
+    },
+  );
 
-  it("refuses @everyone in a crafted Confirm", async () => {
-    const { dependencies, edits, rpcBodies } = world();
+  it("refuses @everyone in a stored draft", async () => {
+    const roles = { ...setupRolesOf(CHOSEN), treasuryRoleId: GUILD_ID };
+    const fingerprint = setupDraftFingerprint(roles);
+    const w = world({
+      drafts: [
+        {
+          guild_id: GUILD_ID,
+          actor_id: MEMBER_ID,
+          officer_role_id: roles.officerRoleId,
+          admin_role_id: roles.adminRoleId,
+          eboard_role_id: roles.eboardRoleId,
+          events_committee_role_id: roles.eventsCommitteeRoleId,
+          treasury_role_id: roles.treasuryRoleId,
+          marketing_role_id: roles.marketingRoleId,
+          fingerprint,
+          created_at: new Date().toISOString(),
+        },
+      ],
+    });
 
     await run(
       ROUTER,
-      componentPayload(`setup.confirm:0:${GUILD_ID}:${NEW_ADMIN}`),
-      dependencies,
+      componentPayload(confirmId(0, fingerprint)),
+      w.dependencies,
     );
 
-    expect(rpcBodies("apply_role_bindings")).toEqual([]);
-    expect(edits[0]?.content).toContain("can't be \\@everyone");
+    expect(w.rpcBodies("apply_role_bindings")).toEqual([]);
+    expect(w.edits[0]?.content).toContain(
+      "The Treasury Committee role can't be \\@everyone",
+    );
   });
 
   it("refuses to save when Discord can't confirm the roles", async () => {
-    const { dependencies, edits, rpcBodies } = world({}, { roles: "fail" });
+    const w = world();
+    const customId = await showSetup(w);
+    const { discord, edits } = fakeDiscord({ roles: "fail" });
 
-    await run(ROUTER, componentPayload(confirmId()), dependencies);
+    await run(
+      ROUTER,
+      componentPayload(customId),
+      dependenciesFor(w.db, discord),
+    );
 
-    expect(rpcBodies("apply_role_bindings")).toEqual([]);
+    expect(w.rpcBodies("apply_role_bindings")).toEqual([]);
     expect(edits[0]?.content).toContain("nothing was changed");
     expect(JSON.stringify(edits)).not.toContain("canary");
   });
 
   it.each([
-    ["an extra separator", `setup.confirm:0:${NEW_OFFICER}:${NEW_ADMIN}:1`],
-    ["a role name in place of an ID", `setup.confirm:0:admin:${NEW_ADMIN}`],
+    ["an extra separator", `setup.confirm:0:${FINGERPRINT}:1`],
     [
-      "authority in the ID",
-      `setup.confirm:0:${NEW_OFFICER}:${NEW_ADMIN}:admin`,
+      "the old form with role IDs",
+      `setup.confirm:0:${testSnowflake()}:${testSnowflake()}`,
     ],
-    ["a missing version", `setup.confirm:${NEW_OFFICER}:${NEW_ADMIN}`],
+    ["a fingerprint that is not hex", "setup.confirm:0:ABCDEFGHIJKLMNOP"],
+    ["a short fingerprint", `setup.confirm:0:${FINGERPRINT.slice(1)}`],
+    ["authority in the ID", `setup.confirm:0:${FINGERPRINT}:admin`],
+    ["a missing version", `setup.confirm:${FINGERPRINT}`],
   ])("refuses %s", async (_label, customId) => {
     const { dependencies, rpcBodies } = world();
 
@@ -704,13 +950,14 @@ describe("Confirm", () => {
   });
 
   it("says try again, with no database text, when the save fails", async () => {
-    const { dependencies, edits, state } = world();
-    state.failing = { path: "apply_role_bindings", status: 503 };
+    const w = world();
+    const customId = await showSetup(w);
+    w.state.failing = { path: "apply_role_bindings", status: 503 };
 
-    await run(ROUTER, componentPayload(confirmId()), dependencies);
+    await run(ROUTER, componentPayload(customId), w.dependencies);
 
-    expect(edits[0]?.content).toContain("Something went wrong");
-    expect(JSON.stringify(edits)).not.toContain("canary");
+    expect(w.edits[1]?.content).toContain("Something went wrong");
+    expect(JSON.stringify(w.edits)).not.toContain("canary");
     expect(JSON.stringify(logged.mock.calls)).not.toContain("canary");
   });
 
@@ -720,17 +967,20 @@ describe("Confirm", () => {
 
     await run(
       ROUTER,
-      setupPayload(OFFICER_ENTRY, ADMIN_ENTRY, {
-        member: {
-          ...ADMINISTRATOR,
-          nick: hostile,
-          user: {
-            id: MEMBER_ID,
-            username: hostile,
-            global_name: hostile,
+      setupPayload(
+        {},
+        {
+          member: {
+            ...ADMINISTRATOR,
+            nick: hostile,
+            user: {
+              id: MEMBER_ID,
+              username: hostile,
+              global_name: hostile,
+            },
           },
         },
-      }),
+      ),
       dependencies,
     );
 
@@ -738,13 +988,11 @@ describe("Confirm", () => {
   });
 
   it("leaves the existing bindings in place after a refusal", async () => {
-    const { dependencies, state } = world({
-      config: configRow({ version: 9 }),
-    });
+    const w = world({ config: configRow({ version: 9 }) });
 
-    await run(ROUTER, componentPayload(confirmId(3)), dependencies);
+    await run(ROUTER, componentPayload(confirmId(3)), w.dependencies);
 
-    expect(state.config?.officer_role_id).toBe(OFFICER_ROLE);
-    expect(state.config?.admin_role_id).toBe(ADMIN_ROLE);
+    expect(w.state.config?.officer_role_id).toBe(OFFICER_ROLE);
+    expect(w.state.config?.admin_role_id).toBe(ADMIN_ROLE);
   });
 });

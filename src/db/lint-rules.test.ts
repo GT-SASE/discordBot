@@ -203,6 +203,10 @@ describe("database lint rules", () => {
       "config_audit",
       "interaction_claims",
       "task_reassignments",
+      "setup_drafts",
+      "event_steps",
+      "event_step_assignees",
+      "event_reminder_log",
     ])("refuses .from() on the table %s", (table) => {
       refused(`db.from("${table}");`, OUTSIDE);
     });

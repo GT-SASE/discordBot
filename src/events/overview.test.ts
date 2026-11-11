@@ -20,7 +20,9 @@ import {
 import { DiscordClientError, DiscordErrorCode } from "../discord/client.ts";
 import type { DiscordClient, DiscordFailure } from "../discord/client.ts";
 import { safe, safeTextValue } from "../discord/safe-text.ts";
-import type { EventRow, TaskRow } from "../db/types.ts";
+import type { EventRow, EventWorkflow, TaskRow } from "../db/types.ts";
+import { EVENT_STEP_KINDS } from "../db/types.ts";
+import { channelMessage } from "../discord/outbound.ts";
 import type { DateOnly } from "../lib/dates.ts";
 import { fitLines, refreshOverview, renderOverview } from "./overview.ts";
 
@@ -75,6 +77,83 @@ function textOf(event: EventRow, tasks: TaskRow[], truncated = false): string {
     renderOverview(event, { rows: tasks, truncated }).content,
   );
 }
+
+describe("renderOverview with the event's workflow", () => {
+  const PERSON = testSnowflake();
+  const flow = (done: readonly string[] = []): EventWorkflow => ({
+    event_id: EVENT_ID,
+    pickup_time: null,
+    steps: EVENT_STEP_KINDS.map((kind) => ({
+      event_id: EVENT_ID,
+      kind,
+      status: done.includes(kind) ? ("done" as const) : ("open" as const),
+      completed_at: done.includes(kind) ? "2026-01-01T00:00:00Z" : null,
+      completed_by: done.includes(kind) ? CREATOR : null,
+      handoff_claimed_at: null,
+      handoff_sent_at: null,
+    })),
+    assignees: [
+      {
+        id: "33333333-3333-4333-8333-333333333333",
+        event_id: EVENT_ID,
+        kind: "budget_sheet",
+        user_id: PERSON,
+        assigned_by: CREATOR,
+        created_at: "2026-01-01T00:00:00Z",
+      },
+    ],
+  });
+  const NO_TASKS = { rows: [], truncated: false };
+
+  function ids(input: ReturnType<typeof renderOverview>): string[] {
+    const body = channelMessage(input).toJSON() as {
+      components?: { components: { custom_id: string }[] }[];
+    };
+    return (body.components ?? []).flatMap((row) =>
+      row.components.map((part) => part.custom_id),
+    );
+  }
+
+  it("shows the checklist ahead of the tasks, and pings nobody", () => {
+    const input = renderOverview(eventRow(), NO_TASKS, [], flow());
+    const text = safeTextValue(input.content);
+
+    expect(text).toContain(`**Checklist**\n⬜ Budget Sheet: <@${PERSON}>`);
+    expect(text.indexOf("**Checklist**")).toBeLessThan(
+      text.indexOf("No tasks yet."),
+    );
+    expect(input.mentionUserIds).toEqual([]);
+    expect(ids(input)).toHaveLength(3);
+  });
+
+  it("hides the buttons of done steps, and all of them on a closed event", () => {
+    expect(
+      ids(renderOverview(eventRow(), NO_TASKS, [], flow(["budget_sheet"]))),
+    ).toEqual([`event.engage-done:${EVENT_ID}`, `event.budget-ok:${EVENT_ID}`]);
+    const closed = renderOverview(
+      eventRow({ status: "closed" }),
+      NO_TASKS,
+      [],
+      flow(),
+    );
+    expect(closed.components).toEqual([]);
+  });
+
+  it("draws no buttons for a workflow of another event", () => {
+    const input = renderOverview(
+      eventRow({ id: "44444444-4444-4444-8444-444444444444" }),
+      NO_TASKS,
+      [],
+      flow(),
+    );
+
+    expect(input.components).toEqual([]);
+  });
+
+  it("leaves the components alone without a workflow", () => {
+    expect(renderOverview(eventRow(), NO_TASKS).components).toBeUndefined();
+  });
+});
 
 describe("renderOverview", () => {
   it("shows the event, its creator and each task's state and date", () => {

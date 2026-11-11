@@ -83,6 +83,7 @@ import {
   getManagedChannel,
   listManagedChannels,
 } from "../db/managed-channels.ts";
+import { getEventWorkflow } from "../db/event-steps.ts";
 import { listEventTasks } from "../db/tasks.ts";
 import { REFUSED_TEXT, versionFingerprint } from "../tasks/shared.ts";
 import type { EventChoice, EventRow, ManagedChannel } from "../db/types.ts";
@@ -93,15 +94,27 @@ import {
   eventStatusText,
   eventTitle,
   fitLines,
+  overviewWorkflow,
   refreshOverview,
   renderOverview,
   threadTarget,
 } from "../events/overview.ts";
+import {
+  assignStartingOwners,
+  assignSubcommand,
+  pickupSubcommand,
+  STARTING_OWNER_OPTIONS,
+  startingOwners,
+  unassignSubcommand,
+  workflowRoutes,
+  type StartingOwners,
+} from "../events/workflow.ts";
 import type { OverviewTasks } from "../events/overview.ts";
 import type { DateOnly } from "../lib/dates.ts";
 import { authorize } from "../lib/permissions.ts";
 import type { EventScopedAction } from "../lib/permissions.ts";
 import { snowflakeTime } from "../lib/snowflake.ts";
+import { lines } from "./render.ts";
 import {
   autocompleteRoute,
   commandRoute,
@@ -448,10 +461,14 @@ async function makePost(
   if (!valueOf(await claimEventPostAttempt(ctx.db, key))) {
     return message(IN_PROGRESS);
   }
+  const workflow = await overviewWorkflow(ctx.db, event);
   try {
     const post = await ctx.discord.createThread(
       { kind: "channel", guildId: event.guild_id, channelId: event.channel_id },
-      threadCreate({ name: name.title, ...renderOverview(event, NO_TASKS) }),
+      threadCreate({
+        name: name.title,
+        ...renderOverview(event, NO_TASKS, [], workflow),
+      }),
     );
     return await attachPost(ctx, event, {
       threadId: post.id,
@@ -530,10 +547,14 @@ async function postReplacement(
       eventId: event.id,
     }),
   );
+  const workflow = await overviewWorkflow(ctx.db, event);
   try {
     const post = await ctx.discord.createThread(
       { kind: "channel", guildId: event.guild_id, channelId: event.channel_id },
-      threadCreate({ name: name.title, ...renderOverview(event, tasks) }),
+      threadCreate({
+        name: name.title,
+        ...renderOverview(event, tasks, [], workflow),
+      }),
     );
     return { threadId: post.id, messageId: post.firstMessageId };
   } catch (error) {
@@ -648,6 +669,11 @@ async function finishCreate(ctx: FinishContext): Promise<MessageInput> {
   if (!date.ok) {
     return message(date.problem);
   }
+  const picked = startingOwners(payload);
+  if ("problem" in picked) {
+    return message(picked.problem);
+  }
+  const { owners } = picked;
   const forum = await chooseForum(ctx);
   if ("problem" in forum) {
     return message(forum.problem);
@@ -662,7 +688,9 @@ async function finishCreate(ctx: FinishContext): Promise<MessageInput> {
   const cleaned = rawName !== name.name;
   const pending = named.find((row) => row.thread_status === "pending");
   if (pending !== undefined) {
-    return resume(ctx, pending, name, cleaned);
+    return withOwners(ctx, pending, owners, () =>
+      resume(ctx, pending, name, cleaned),
+    );
   }
   const withPost = named.filter((row) => row.thread_status === "active");
   const existing =
@@ -682,7 +710,7 @@ async function finishCreate(ctx: FinishContext): Promise<MessageInput> {
     return message(MANY_LOST);
   }
   if (only !== undefined) {
-    return replacePost(ctx, only, name);
+    return withOwners(ctx, only, owners, () => replacePost(ctx, only, name));
   }
   if (lost.length > 0) {
     return message(LOST_AND_CLOSED);
@@ -694,7 +722,27 @@ async function finishCreate(ctx: FinishContext): Promise<MessageInput> {
   if (!inserted.ok && inserted.error.category === "parent_unavailable") {
     return message(NOT_MANAGED);
   }
-  return makePost(ctx, valueOf(inserted), name, cleaned);
+  const event = valueOf(inserted);
+  return withOwners(ctx, event, owners, () =>
+    makePost(ctx, event, name, cleaned),
+  );
+}
+
+/**
+ * Puts the people picked on /event create on their steps before the post is drawn, and
+ * adds what happened to the reply.
+ */
+async function withOwners(
+  ctx: FinishContext,
+  event: EventRow,
+  owners: StartingOwners,
+  next: () => Promise<MessageInput>,
+): Promise<MessageInput> {
+  const notes = await assignStartingOwners(ctx, event, owners);
+  const reply = await next();
+  return notes.length === 0
+    ? reply
+    : { ...reply, content: lines([reply.content, ...notes]) ?? reply.content };
 }
 
 /** What Discord says the channel is, or why that could not be learned. */
@@ -834,10 +882,11 @@ async function postOverview(
   { adopted, recovered }: { adopted: boolean; recovered: boolean },
 ): Promise<MessageInput> {
   const linked = linkedText(event, recovered);
+  const workflow = await overviewWorkflow(ctx.db, event);
   try {
     const sent = await ctx.discord.sendMessage(
       threadTarget(event.guild_id, threadId),
-      channelMessage(renderOverview(event, NO_TASKS)),
+      channelMessage(renderOverview(event, NO_TASKS, [], workflow)),
     );
     const saved = await saveOverviewId(ctx, event, sent.id);
     if (!saved.ok) {
@@ -1169,7 +1218,8 @@ async function finishStatus(
     postLine(event),
     ...(forum?.status === "active" ? [] : [FORUM_NOTE]),
   ];
-  return { ...renderOverview(event, tasks, notes), components: [] };
+  const workflow = valueOf(await getEventWorkflow(db, key)) ?? undefined;
+  return { ...renderOverview(event, tasks, notes, workflow), components: [] };
 }
 
 function listLine(
@@ -1428,6 +1478,7 @@ export const handler: Handler = {
               description: "Where to post, if more than one forum is managed",
               channel_types: [ChannelType.GuildForum],
             },
+            ...STARTING_OWNER_OPTIONS,
           ],
         },
         {
@@ -1469,6 +1520,9 @@ export const handler: Handler = {
           description: "Delete an event and its tasks, after you confirm",
           options: [EVENT_OPTION],
         },
+        assignSubcommand,
+        unassignSubcommand,
+        pickupSubcommand,
       ],
     },
   ],
@@ -1554,6 +1608,22 @@ export const handler: Handler = {
     autocompleteRoute({
       path: "event delete",
       action: "event.delete",
+      choices: eventChoices,
+    }),
+    ...workflowRoutes,
+    autocompleteRoute({
+      path: "event assign",
+      action: "event.assign",
+      choices: eventChoices,
+    }),
+    autocompleteRoute({
+      path: "event unassign",
+      action: "event.unassign",
+      choices: eventChoices,
+    }),
+    autocompleteRoute({
+      path: "event pickup",
+      action: "event.pickup",
       choices: eventChoices,
     }),
   ],

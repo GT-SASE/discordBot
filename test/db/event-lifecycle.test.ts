@@ -183,7 +183,15 @@ async function confirmClick(
   return componentPayload(await confirmId(eventId), fields);
 }
 
-const SUBS_WITH_PICKER = ["link", "status", "close", "delete"];
+const SUBS_WITH_PICKER = [
+  "link",
+  "status",
+  "close",
+  "delete",
+  "assign",
+  "unassign",
+  "pickup",
+];
 
 describe("the event picker", () => {
   it("is registered on exactly the commands that have a route for it", () => {

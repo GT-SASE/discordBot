@@ -25,6 +25,14 @@ export type ThreadStatus = "pending" | "active" | "missing";
 export type TaskStatus = "open" | "done";
 export type JobRunStatus = "running" | "succeeded" | "failed";
 export type ConfigAuditAction = "role_bindings" | "settings";
+export type EventStepKind =
+  "budget_sheet" | "engage_post" | "budget_approved" | "food_pickup";
+/** The steps people can be assigned to. Budget approved is marked by a role instead. */
+export type AssignableStepKind = Exclude<EventStepKind, "budget_approved">;
+/** The steps marked done by hand. Food pickup is done once it has a time and people. */
+export type CompletableStepKind = Exclude<EventStepKind, "food_pickup">;
+export type EventReminderKind =
+  "daily_steps" | "pickup_two_days" | "pickup_day";
 
 type Json = string | number | boolean | null | Json[] | { [key: string]: Json };
 type NoWrites = Record<string, never>;
@@ -37,6 +45,10 @@ export interface Database {
           guild_id: string;
           officer_role_id: string;
           admin_role_id: string;
+          eboard_role_id: string | null;
+          events_committee_role_id: string | null;
+          treasury_role_id: string | null;
+          marketing_role_id: string | null;
           timezone: string;
           reminders_enabled: boolean;
           version: number;
@@ -82,6 +94,7 @@ export interface Database {
           deleted_at: string | null;
           post_attempt_at: string | null;
           thread_refusals: number;
+          pickup_time: string | null;
           created_at: string;
           updated_at: string;
         };
@@ -216,6 +229,98 @@ export interface Database {
         Update: NoWrites;
         Relationships: [];
       };
+      // Written only through save_setup_draft.
+      setup_drafts: {
+        Row: {
+          guild_id: string;
+          actor_id: string;
+          officer_role_id: string;
+          admin_role_id: string;
+          eboard_role_id: string;
+          events_committee_role_id: string;
+          treasury_role_id: string;
+          marketing_role_id: string;
+          fingerprint: string;
+          created_at: string;
+        };
+        Insert: NoWrites;
+        Update: NoWrites;
+        Relationships: [];
+      };
+      // Written only through the step functions.
+      event_steps: {
+        Row: {
+          event_id: string;
+          guild_id: string;
+          kind: EventStepKind;
+          status: TaskStatus;
+          completed_at: string | null;
+          completed_by: string | null;
+          handoff_claimed_at: string | null;
+          handoff_sent_at: string | null;
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: NoWrites;
+        Update: NoWrites;
+        Relationships: [
+          {
+            foreignKeyName: "event_steps_event_id_guild_id_fkey";
+            columns: ["event_id", "guild_id"];
+            isOneToOne: false;
+            referencedRelation: "events";
+            referencedColumns: ["id", "guild_id"];
+          },
+        ];
+      };
+      event_step_assignees: {
+        Row: {
+          id: string;
+          event_id: string;
+          guild_id: string;
+          kind: AssignableStepKind;
+          user_id: string;
+          assigned_by: string;
+          removed_at: string | null;
+          removed_by: string | null;
+          created_at: string;
+        };
+        Insert: NoWrites;
+        Update: NoWrites;
+        Relationships: [
+          {
+            foreignKeyName: "event_step_assignees_event_id_guild_id_fkey";
+            columns: ["event_id", "guild_id"];
+            isOneToOne: false;
+            referencedRelation: "events";
+            referencedColumns: ["id", "guild_id"];
+          },
+        ];
+      };
+      event_reminder_log: {
+        Row: {
+          event_id: string;
+          kind: EventReminderKind;
+          reminder_date: string;
+          state: ReminderState;
+          claim_token: string;
+          attempts: number;
+          claimed_at: string;
+          sent_at: string | null;
+          message_id: string | null;
+        };
+        Insert: NoWrites;
+        Update: NoWrites;
+        Relationships: [
+          {
+            foreignKeyName: "event_reminder_log_event_id_fkey";
+            columns: ["event_id"];
+            isOneToOne: false;
+            referencedRelation: "events";
+            referencedColumns: ["id"];
+          },
+        ];
+      };
     };
     // No views. The client's generics need this key, and an empty object type fails
     // lint, so it has one unusable entry instead.
@@ -305,8 +410,117 @@ export interface Database {
           p_actor_id: string;
           p_officer_role_id: string;
           p_admin_role_id: string;
+          p_eboard_role_id: string | null;
+          p_events_committee_role_id: string | null;
+          p_treasury_role_id: string | null;
+          p_marketing_role_id: string | null;
         };
         Returns: number;
+      };
+      save_setup_draft: {
+        Args: {
+          p_guild_id: string;
+          p_actor_id: string;
+          p_officer_role_id: string;
+          p_admin_role_id: string;
+          p_eboard_role_id: string;
+          p_events_committee_role_id: string;
+          p_treasury_role_id: string;
+          p_marketing_role_id: string;
+          p_fingerprint: string;
+        };
+        Returns: boolean;
+      };
+      assign_event_step: {
+        Args: {
+          p_event_id: string;
+          p_guild_id: string;
+          p_kind: AssignableStepKind;
+          p_user_id: string;
+          p_actor_id: string;
+        };
+        // Null when there is no live event with that ID in that guild.
+        Returns: boolean | null;
+      };
+      unassign_event_step: {
+        Args: {
+          p_event_id: string;
+          p_guild_id: string;
+          p_kind: AssignableStepKind;
+          p_user_id: string;
+          p_actor_id: string;
+        };
+        Returns: boolean | null;
+      };
+      complete_event_step: {
+        Args: {
+          p_event_id: string;
+          p_guild_id: string;
+          p_kind: CompletableStepKind;
+          p_actor_id: string;
+        };
+        Returns: boolean | null;
+      };
+      claim_step_handoff: {
+        Args: {
+          p_event_id: string;
+          p_guild_id: string;
+          p_kind: CompletableStepKind;
+        };
+        Returns: boolean;
+      };
+      mark_step_handoff_sent: {
+        Args: {
+          p_event_id: string;
+          p_guild_id: string;
+          p_kind: CompletableStepKind;
+        };
+        Returns: boolean;
+      };
+      set_event_pickup_time: {
+        Args: {
+          p_event_id: string;
+          p_guild_id: string;
+          p_pickup_time: string;
+          p_actor_id: string;
+        };
+        Returns: boolean | null;
+      };
+      claim_event_reminder: {
+        Args: {
+          p_event_id: string;
+          p_kind: EventReminderKind;
+          p_reminder_date: string;
+        };
+        Returns: string | null;
+      };
+      reclaim_event_reminder: {
+        Args: {
+          p_event_id: string;
+          p_kind: EventReminderKind;
+          p_reminder_date: string;
+          p_claim_token: string;
+        };
+        Returns: string | null;
+      };
+      mark_event_reminder_sent: {
+        Args: {
+          p_event_id: string;
+          p_kind: EventReminderKind;
+          p_reminder_date: string;
+          p_claim_token: string;
+          p_message_id: string;
+        };
+        Returns: boolean;
+      };
+      mark_event_reminder_skipped: {
+        Args: {
+          p_event_id: string;
+          p_kind: EventReminderKind;
+          p_reminder_date: string;
+          p_claim_token: string;
+        };
+        Returns: boolean;
       };
       apply_config_change: {
         Args: {
@@ -367,6 +581,9 @@ class BadField extends Error {
   }
 }
 
+const TIME_OF_DAY =
+  /^(?:[01][0-9]|2[0-3]):[0-5][0-9](?::[0-5][0-9](?:\.[0-9]{1,6})?)?$/;
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -412,6 +629,17 @@ function readerFor(record: Record<string, unknown>) {
     timestamp: (name: string): string => check(name, isTimestampText),
     nullableTimestamp: (name: string): string | null =>
       raw(name) === null ? null : check(name, isTimestampText),
+    /** A time of day as Postgres gives it, kept as `HH:MM`. */
+    nullableTimeOfDay: (name: string): string | null => {
+      if (raw(name) === null) {
+        return null;
+      }
+      const value = check(name, isText);
+      if (!TIME_OF_DAY.test(value)) {
+        throw new BadField(name);
+      }
+      return value.slice(0, 5);
+    },
     /** Keeps an unreadable value as an invalid Date, which the planner treats as stale. */
     looseDate: (name: string): Date => {
       const value = raw(name);
@@ -476,13 +704,41 @@ const REMINDER_KINDS = ["three_days", "one_day", "due_day", "overdue"] as const;
 const REMINDER_STATES = ["claimed", "sent", "skipped"] as const;
 const JOB_STATUSES = ["running", "succeeded", "failed"] as const;
 const AUDIT_ACTIONS = ["role_bindings", "settings"] as const;
+export const EVENT_STEP_KINDS = [
+  "budget_sheet",
+  "engage_post",
+  "budget_approved",
+  "food_pickup",
+] as const satisfies readonly EventStepKind[];
+export const ASSIGNABLE_STEP_KINDS = [
+  "budget_sheet",
+  "engage_post",
+  "food_pickup",
+] as const satisfies readonly AssignableStepKind[];
+export const COMPLETABLE_STEP_KINDS = [
+  "budget_sheet",
+  "engage_post",
+  "budget_approved",
+] as const satisfies readonly CompletableStepKind[];
+export const EVENT_REMINDER_KINDS = [
+  "daily_steps",
+  "pickup_two_days",
+  "pickup_day",
+] as const satisfies readonly EventReminderKind[];
 
 // Rows keep the column names, so they can be passed straight to authorize().
 
 export interface GuildConfig {
   guild_id: string;
+  /** Shown as Events Directors. */
   officer_role_id: string;
   admin_role_id: string;
+  /** The four below are null until /setup is run with them. */
+  eboard_role_id: string | null;
+  /** Stored and shown. Decides nothing yet. */
+  events_committee_role_id: string | null;
+  treasury_role_id: string | null;
+  marketing_role_id: string | null;
   timezone: string;
   reminders_enabled: boolean;
   version: number;
@@ -495,6 +751,12 @@ export const parseGuildConfig = rowParser(
     guild_id: read.snowflake("guild_id"),
     officer_role_id: read.snowflake("officer_role_id"),
     admin_role_id: read.snowflake("admin_role_id"),
+    eboard_role_id: read.nullableSnowflake("eboard_role_id"),
+    events_committee_role_id: read.nullableSnowflake(
+      "events_committee_role_id",
+    ),
+    treasury_role_id: read.nullableSnowflake("treasury_role_id"),
+    marketing_role_id: read.nullableSnowflake("marketing_role_id"),
     timezone: read.text("timezone"),
     reminders_enabled: read.boolean("reminders_enabled"),
     version: read.integer("version"),
@@ -815,3 +1077,285 @@ export const parseJobRun = rowParser("job_runs", "id", (read): JobRun => ({
   results: read.object("results"),
   error: read.nullableText("error"),
 }));
+
+export interface SetupDraft {
+  guild_id: string;
+  actor_id: string;
+  officer_role_id: string;
+  admin_role_id: string;
+  eboard_role_id: string;
+  events_committee_role_id: string;
+  treasury_role_id: string;
+  marketing_role_id: string;
+  fingerprint: string;
+  created_at: string;
+}
+
+export const parseSetupDraft = rowParser(
+  "setup_drafts",
+  "guild_id",
+  (read): SetupDraft => ({
+    guild_id: read.snowflake("guild_id"),
+    actor_id: read.snowflake("actor_id"),
+    officer_role_id: read.snowflake("officer_role_id"),
+    admin_role_id: read.snowflake("admin_role_id"),
+    eboard_role_id: read.snowflake("eboard_role_id"),
+    events_committee_role_id: read.snowflake("events_committee_role_id"),
+    treasury_role_id: read.snowflake("treasury_role_id"),
+    marketing_role_id: read.snowflake("marketing_role_id"),
+    fingerprint: read.text("fingerprint"),
+    created_at: read.timestamp("created_at"),
+  }),
+);
+
+export interface EventStep {
+  event_id: string;
+  kind: EventStepKind;
+  status: TaskStatus;
+  completed_at: string | null;
+  completed_by: string | null;
+  handoff_claimed_at: string | null;
+  handoff_sent_at: string | null;
+}
+
+export const parseEventStep = rowParser(
+  "event_steps",
+  "event_id",
+  (read): EventStep => ({
+    event_id: read.uuid("event_id"),
+    kind: read.oneOf("kind", EVENT_STEP_KINDS),
+    status: read.oneOf("status", TASK_STATUSES),
+    completed_at: read.nullableTimestamp("completed_at"),
+    completed_by: read.nullableSnowflake("completed_by"),
+    handoff_claimed_at: read.nullableTimestamp("handoff_claimed_at"),
+    handoff_sent_at: read.nullableTimestamp("handoff_sent_at"),
+  }),
+);
+
+/** A live assignment. Removed ones are never returned. */
+export interface StepAssignee {
+  id: string;
+  event_id: string;
+  kind: AssignableStepKind;
+  user_id: string;
+  assigned_by: string;
+  created_at: string;
+}
+
+export const parseStepAssignee = rowParser(
+  "event_step_assignees",
+  "id",
+  (read): StepAssignee => ({
+    id: read.uuid("id"),
+    event_id: read.uuid("event_id"),
+    kind: read.oneOf("kind", ASSIGNABLE_STEP_KINDS),
+    user_id: read.snowflake("user_id"),
+    assigned_by: read.snowflake("assigned_by"),
+    created_at: read.timestamp("created_at"),
+  }),
+);
+
+/** One event's steps and the people on them, oldest assignment first. */
+export interface EventWorkflow {
+  event_id: string;
+  /** `HH:MM` in the guild's timezone on the event's date, or null if not set. */
+  pickup_time: string | null;
+  /** One per kind, in the order of `EVENT_STEP_KINDS`. */
+  steps: EventStep[];
+  assignees: StepAssignee[];
+}
+
+function byCreation(a: StepAssignee, b: StepAssignee): number {
+  return a.created_at === b.created_at
+    ? a.id.localeCompare(b.id)
+    : Date.parse(a.created_at) - Date.parse(b.created_at);
+}
+
+export const parseEventWorkflow = rowParser(
+  "events",
+  "id",
+  (read): EventWorkflow => {
+    const steps = read.many("event_steps", parseEventStep);
+    const ordered = EVENT_STEP_KINDS.map((kind) => {
+      const step = steps.find((candidate) => candidate.kind === kind);
+      if (step === undefined) {
+        throw new BadField(`event_steps.${kind}`);
+      }
+      return step;
+    });
+    return {
+      event_id: read.uuid("id"),
+      pickup_time: read.nullableTimeOfDay("pickup_time"),
+      steps: ordered,
+      assignees: read
+        .many("event_step_assignees", parseStepAssignee)
+        .sort(byCreation),
+    };
+  },
+);
+
+/** One of a member's live assignments, for /mytasks. */
+export interface UserStep {
+  assignment_id: string;
+  event_id: string;
+  event_name: string;
+  event_date: DateOnly;
+  kind: AssignableStepKind;
+  step_status: TaskStatus;
+  /** `HH:MM`, or null if not set. */
+  pickup_time: string | null;
+}
+
+const parseStepStatus = rowParser("event_steps", "kind", (read) => ({
+  kind: read.oneOf("kind", EVENT_STEP_KINDS),
+  status: read.oneOf("status", TASK_STATUSES),
+}));
+
+const parseUserStepEvent = rowParser("events", "id", (read) => ({
+  id: read.uuid("id"),
+  name: read.text("name"),
+  event_date: read.date("event_date"),
+  pickup_time: read.nullableTimeOfDay("pickup_time"),
+  steps: read.many("event_steps", parseStepStatus),
+}));
+
+export const parseUserStep = rowParser(
+  "event_step_assignees",
+  "id",
+  (read): UserStep => {
+    const kind = read.oneOf("kind", ASSIGNABLE_STEP_KINDS);
+    const event = read.one("events", parseUserStepEvent);
+    const step = event.steps.find((candidate) => candidate.kind === kind);
+    if (step === undefined) {
+      throw new BadField(`events.event_steps.${kind}`);
+    }
+    return {
+      assignment_id: read.uuid("id"),
+      event_id: event.id,
+      event_name: event.name,
+      event_date: event.event_date,
+      kind,
+      step_status: step.status,
+      pickup_time: event.pickup_time,
+    };
+  },
+);
+
+export interface EventReminderLogRow {
+  kind: EventReminderKind;
+  reminder_date: DateOnly;
+  state: ReminderState;
+  /** An unreadable value is kept as an invalid Date, which a planner should treat as stale. */
+  claimed_at: Date;
+}
+
+const parseEventReminderLogRow = rowParser(
+  "event_reminder_log",
+  "event_id",
+  (read): EventReminderLogRow => ({
+    kind: read.oneOf("kind", EVENT_REMINDER_KINDS),
+    reminder_date: read.date("reminder_date"),
+    state: read.oneOf("state", REMINDER_STATES),
+    claimed_at: read.looseDate("claimed_at"),
+  }),
+);
+
+const parseCandidateGuild = rowParser("guild_config", "guild_id", (read) => ({
+  timezone: read.text("timezone"),
+  officer_role_id: read.snowflake("officer_role_id"),
+}));
+
+const parseCandidateChannel = rowParser(
+  "managed_channels",
+  "channel_id",
+  (read) => read.one("guild_config", parseCandidateGuild),
+);
+
+const parseCandidateAssignee = rowParser(
+  "event_step_assignees",
+  "id",
+  (read) => ({
+    id: read.uuid("id"),
+    kind: read.oneOf("kind", ASSIGNABLE_STEP_KINDS),
+    user_id: read.snowflake("user_id"),
+    created_at: read.timestamp("created_at"),
+  }),
+);
+
+/**
+ * A live, active event on an active channel in a guild with reminders on, dated on or after
+ * the date asked for, with what the event reminder run needs to plan its messages.
+ */
+export interface EventReminderCandidate {
+  id: string;
+  guild_id: string;
+  name: string;
+  event_date: DateOnly;
+  thread_id: string | null;
+  thread_status: ThreadStatus;
+  created_by: string;
+  thread_refusals: number;
+  /** `HH:MM`, or null if not set. */
+  pickup_time: string | null;
+  timezone: string;
+  /** The Events Directors role, pinged for a step nobody is assigned to. */
+  events_director_role_id: string;
+  steps: { kind: EventStepKind; status: TaskStatus }[];
+  /** Live assignments only, oldest first. */
+  assignees: { kind: AssignableStepKind; user_id: string }[];
+  /** Log rows dated on or after the date asked for. */
+  log: EventReminderLogRow[];
+}
+
+export const parseEventReminderCandidate = rowParser(
+  "events",
+  "id",
+  (read): EventReminderCandidate => {
+    const guild = read.one("managed_channels", parseCandidateChannel);
+    const assignees = read
+      .many("event_step_assignees", parseCandidateAssignee)
+      .sort((a, b) =>
+        a.created_at === b.created_at
+          ? a.id.localeCompare(b.id)
+          : Date.parse(a.created_at) - Date.parse(b.created_at),
+      );
+    return {
+      id: read.uuid("id"),
+      guild_id: read.snowflake("guild_id"),
+      name: read.text("name"),
+      event_date: read.date("event_date"),
+      thread_id: read.nullableSnowflake("thread_id"),
+      thread_status: read.oneOf("thread_status", THREAD_STATUSES),
+      created_by: read.snowflake("created_by"),
+      thread_refusals: read.integer("thread_refusals"),
+      pickup_time: read.nullableTimeOfDay("pickup_time"),
+      timezone: guild.timezone,
+      events_director_role_id: guild.officer_role_id,
+      steps: read.many("event_steps", parseStepStatus),
+      assignees: assignees.map(({ kind, user_id }) => ({ kind, user_id })),
+      log: read.many("event_reminder_log", parseEventReminderLogRow),
+    };
+  },
+);
+
+export interface EventReminderStaleClaim {
+  event_id: string;
+  kind: EventReminderKind;
+  reminder_date: DateOnly;
+  claim_token: string;
+  attempts: number;
+  claimed_at: string;
+}
+
+export const parseEventReminderStaleClaim = rowParser(
+  "event_reminder_log",
+  "event_id",
+  (read): EventReminderStaleClaim => ({
+    event_id: read.uuid("event_id"),
+    kind: read.oneOf("kind", EVENT_REMINDER_KINDS),
+    reminder_date: read.date("reminder_date"),
+    claim_token: read.uuid("claim_token"),
+    attempts: read.integer("attempts"),
+    claimed_at: read.timestamp("claimed_at"),
+  }),
+);

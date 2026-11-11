@@ -21,9 +21,13 @@ import {
 
 const READ_ONLY_TABLES = [
   "config_audit",
+  "event_reminder_log",
+  "event_step_assignees",
+  "event_steps",
   "guild_config",
   "managed_channels",
   "reminder_log",
+  "setup_drafts",
 ];
 const ALL_TABLES = [...READ_ONLY_TABLES, "events", "job_runs", "tasks"].sort();
 /** Reached only through a function, so service_role has no grant on it. */
@@ -88,26 +92,39 @@ const EXPECTED_COLUMN_GRANTS = [
 const EXPECTED_ROUTINE_GRANTS = [
   "service_role apply_config_change EXECUTE",
   "service_role apply_role_bindings EXECUTE",
+  "service_role assign_event_step EXECUTE",
   "service_role begin_job_run EXECUTE",
   "service_role claim_event_post_attempt EXECUTE",
+  "service_role claim_event_reminder EXECUTE",
   "service_role claim_interaction EXECUTE",
   "service_role claim_reminder EXECUTE",
+  "service_role claim_step_handoff EXECUTE",
   "service_role clear_thread_refusals EXECUTE",
+  "service_role complete_event_step EXECUTE",
   "service_role expire_interaction_claims EXECUTE",
   "service_role finish_job_run EXECUTE",
   "service_role mark_channel_unavailable EXECUTE",
+  "service_role mark_event_reminder_sent EXECUTE",
+  "service_role mark_event_reminder_skipped EXECUTE",
   "service_role mark_reminder_sent EXECUTE",
   "service_role mark_reminder_skipped EXECUTE",
+  "service_role mark_step_handoff_sent EXECUTE",
+  "service_role reclaim_event_reminder EXECUTE",
   "service_role reclaim_reminder EXECUTE",
   "service_role record_reminder_refused EXECUTE",
   "service_role record_thread_refusal EXECUTE",
   "service_role release_event_post_attempt EXECUTE",
+  "service_role save_setup_draft EXECUTE",
+  "service_role set_event_pickup_time EXECUTE",
   "service_role soft_delete_event EXECUTE",
+  "service_role unassign_event_step EXECUTE",
 ];
 
 const EXPECTED_TYPE_GRANTS = [
   "discord_id",
+  "event_reminder_kind",
   "event_status",
+  "event_step_kind",
   "job_run_status",
   "managed_channel_status",
   "reminder_kind",
@@ -120,18 +137,37 @@ const EXPECTED_TYPE_GRANTS = [
 const DISCORD_ID_COLUMNS = [
   "config_audit.actor_id",
   "config_audit.guild_id",
+  "event_reminder_log.message_id",
+  "event_step_assignees.assigned_by",
+  "event_step_assignees.guild_id",
+  "event_step_assignees.removed_by",
+  "event_step_assignees.user_id",
+  "event_steps.completed_by",
+  "event_steps.guild_id",
   "events.channel_id",
   "events.created_by",
   "events.guild_id",
   "events.overview_message_id",
   "events.thread_id",
   "guild_config.admin_role_id",
+  "guild_config.eboard_role_id",
+  "guild_config.events_committee_role_id",
   "guild_config.guild_id",
+  "guild_config.marketing_role_id",
   "guild_config.officer_role_id",
+  "guild_config.treasury_role_id",
   "interaction_claims.interaction_id",
   "managed_channels.channel_id",
   "managed_channels.guild_id",
   "reminder_log.message_id",
+  "setup_drafts.actor_id",
+  "setup_drafts.admin_role_id",
+  "setup_drafts.eboard_role_id",
+  "setup_drafts.events_committee_role_id",
+  "setup_drafts.guild_id",
+  "setup_drafts.marketing_role_id",
+  "setup_drafts.officer_role_id",
+  "setup_drafts.treasury_role_id",
   "task_reassignments.actor_id",
   "task_reassignments.guild_id",
   "tasks.assignee_id",
@@ -141,6 +177,9 @@ const DISCORD_ID_COLUMNS = [
 
 const FOREIGN_KEYS = [
   "config_audit references guild_config",
+  "event_reminder_log references events",
+  "event_step_assignees references events",
+  "event_steps references events",
   "events references managed_channels",
   "managed_channels references guild_config",
   "reminder_log references tasks",
@@ -180,6 +219,24 @@ describe("access", () => {
       "service_role",
       `SELECT public.claim_reminder($1, 'due_day', '${FIXTURE_DUE_DATE}')`,
       [taskId],
+    );
+    await queryAs(
+      db,
+      "service_role",
+      `SELECT public.assign_event_step($1, $2, 'budget_sheet', $3, $3)`,
+      [eventId, guild.guildId, fakeId()],
+    );
+    await queryAs(
+      db,
+      "service_role",
+      `SELECT public.claim_event_reminder($1, 'daily_steps', '2030-01-15')`,
+      [eventId],
+    );
+    await queryAs(
+      db,
+      "service_role",
+      `SELECT public.save_setup_draft($1, $2, $3, $3, $3, $3, $3, $3, 'abcdefgh12345678')`,
+      [guild.guildId, fakeId(), fakeId()],
     );
     await insertFinishedJobRun(db, { status: "succeeded" });
     await queryAs(
@@ -430,10 +487,14 @@ describe("access", () => {
 
   describe.each([
     ["config_audit", "guild_id"],
+    ["event_reminder_log", "state"],
+    ["event_step_assignees", "removed_at"],
+    ["event_steps", "status"],
     ["guild_config", "guild_id"],
     ["job_runs", "job_name"],
     ["managed_channels", "guild_id"],
     ["reminder_log", "task_id"],
+    ["setup_drafts", "fingerprint"],
   ])("direct writes to %s", (table, column) => {
     it("service_role cannot insert", async () => {
       const code = await errorCodeOf(
@@ -505,6 +566,11 @@ describe("access", () => {
       ["events.deleted_at", `UPDATE public.events SET deleted_at = now()`],
       ["events.guild_id", `UPDATE public.events SET guild_id = guild_id`],
       ["events.channel_id", `UPDATE public.events SET channel_id = channel_id`],
+      ["events.pickup_time", `UPDATE public.events SET pickup_time = '12:00'`],
+      [
+        "guild_config.treasury_role_id",
+        `UPDATE public.guild_config SET treasury_role_id = NULL`,
+      ],
       ["tasks.event_id", `UPDATE public.tasks SET event_id = event_id`],
       ["tasks.guild_id", `UPDATE public.tasks SET guild_id = guild_id`],
       ["tasks.created_by", `UPDATE public.tasks SET created_by = created_by`],
@@ -520,6 +586,7 @@ describe("access", () => {
       ["updated_at", "'2000-01-01'"],
       ["deleted_at", "now()"],
       ["post_attempt_at", "'2099-01-01'"],
+      ["pickup_time", "'12:00'"],
       ["status", "'closed'"],
       ["overview_message_id", "NULL"],
       ["id", "gen_random_uuid()"],

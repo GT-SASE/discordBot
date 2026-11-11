@@ -134,6 +134,11 @@ export interface CommandOption {
   readonly autocomplete?: boolean;
   readonly max_length?: number;
   readonly channel_types?: readonly number[];
+  /** A fixed list to choose from. A submitted value is still checked by the handler. */
+  readonly choices?: readonly {
+    readonly name: string;
+    readonly value: string;
+  }[];
   /** The options of a subcommand. */
   readonly options?: readonly CommandOption[];
 }

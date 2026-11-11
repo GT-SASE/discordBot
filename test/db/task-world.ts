@@ -286,7 +286,7 @@ export function useTaskWorld(): TaskWorld {
     await queryAs(
       world.backend.connection,
       "service_role",
-      `SELECT public.apply_role_bindings($1, 0, $2, $3, $4)`,
+      `SELECT public.apply_role_bindings($1, 0, $2, $3, $4, NULL, NULL, NULL, NULL)`,
       [GUILD_ID, testSnowflake(), OFFICER_ROLE, ADMIN_ROLE],
     );
     await queryAs(

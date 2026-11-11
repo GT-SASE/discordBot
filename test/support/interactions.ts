@@ -5,6 +5,7 @@
 
 import { generateKeyPairSync, sign } from "node:crypto";
 import {
+  ApplicationCommandOptionType,
   ApplicationCommandType,
   InteractionContextType,
   InteractionType,
@@ -131,6 +132,53 @@ export function autocompletePayload(
   });
 }
 
+/** The /setup options, in the order the command asks for them. */
+export const SETUP_OPTIONS = [
+  "eboard_role",
+  "events_directors_role",
+  "events_committee_role",
+  "treasury_role",
+  "marketing_role",
+] as const;
+
+export type SetupOption = (typeof SETUP_OPTIONS)[number];
+
+/** A /setup command choosing these roles, each also given in `resolved` as Discord does. */
+export function setupCommandPayload(
+  roles: Record<SetupOption, GuildRole>,
+  fields: Record<string, unknown> = {},
+  extraOptions: unknown[] = [],
+): Record<string, unknown> {
+  return commandPayload("setup", fields, {
+    options: [
+      ...SETUP_OPTIONS.map((name) => ({
+        name,
+        type: ApplicationCommandOptionType.Role,
+        value: roles[name].id,
+      })),
+      ...extraOptions,
+    ],
+    resolved: {
+      roles: Object.fromEntries(
+        SETUP_OPTIONS.map((name) => [
+          roles[name].id,
+          { ...roles[name], permissions: String(roles[name].permissions) },
+        ]),
+      ),
+    },
+  });
+}
+
+/** The custom_id on the first button of a reply, such as /setup's Confirm. */
+export function firstCustomId(
+  edit: { components?: unknown[] } | undefined,
+): string {
+  const [row] = (edit?.components ?? []) as {
+    components: { custom_id: string }[];
+  }[];
+  return row?.components[0]?.custom_id ?? "";
+}
+
 /** Passes the real signature check, which is the only way to get these two values. */
 export function verify(payload: unknown): {
   interaction: GuildInteraction;
@@ -165,6 +213,10 @@ export interface ConfigRow {
   guild_id: string;
   officer_role_id: string;
   admin_role_id: string;
+  eboard_role_id: string | null;
+  events_committee_role_id: string | null;
+  treasury_role_id: string | null;
+  marketing_role_id: string | null;
   timezone: string;
   reminders_enabled: boolean;
   version: number;
@@ -175,6 +227,10 @@ export function configRow(fields: Partial<ConfigRow> = {}): ConfigRow {
     guild_id: GUILD_ID,
     officer_role_id: OFFICER_ROLE,
     admin_role_id: ADMIN_ROLE,
+    eboard_role_id: null,
+    events_committee_role_id: null,
+    treasury_role_id: null,
+    marketing_role_id: null,
     timezone: "America/New_York",
     reminders_enabled: true,
     version: 3,
@@ -205,8 +261,23 @@ export interface ChangeRow {
   created_at: string;
 }
 
+export interface DraftRow {
+  guild_id: string;
+  actor_id: string;
+  officer_role_id: string;
+  admin_role_id: string;
+  eboard_role_id: string;
+  events_committee_role_id: string;
+  treasury_role_id: string;
+  marketing_role_id: string;
+  fingerprint: string;
+  created_at: string;
+}
+
 export interface DbState {
   config: ConfigRow | null;
+  /** /setup drafts, one per guild as in the database. */
+  drafts: DraftRow[];
   channels: ChannelRow[];
   changes: ChangeRow[];
   /** Task rows for the open-task count, by channel. */
@@ -229,6 +300,7 @@ export function fakeDb(fields: Partial<DbState> = {}): {
 } {
   const state: DbState = {
     config: null,
+    drafts: [],
     channels: [],
     changes: [],
     openTasks: new Map(),
@@ -244,9 +316,50 @@ export function fakeDb(fields: Partial<DbState> = {}): {
     state.config = configRow({
       officer_role_id: args.p_officer_role_id as string,
       admin_role_id: args.p_admin_role_id as string,
+      eboard_role_id: args.p_eboard_role_id as string | null,
+      events_committee_role_id: args.p_events_committee_role_id as
+        string | null,
+      treasury_role_id: args.p_treasury_role_id as string | null,
+      marketing_role_id: args.p_marketing_role_id as string | null,
       version: current + 1,
     });
     return { body: current + 1 };
+  }
+
+  function saveDraft(args: Record<string, unknown>) {
+    const row: DraftRow = {
+      guild_id: args.p_guild_id as string,
+      actor_id: args.p_actor_id as string,
+      officer_role_id: args.p_officer_role_id as string,
+      admin_role_id: args.p_admin_role_id as string,
+      eboard_role_id: args.p_eboard_role_id as string,
+      events_committee_role_id: args.p_events_committee_role_id as string,
+      treasury_role_id: args.p_treasury_role_id as string,
+      marketing_role_id: args.p_marketing_role_id as string,
+      fingerprint: args.p_fingerprint as string,
+      created_at: new Date().toISOString(),
+    };
+    state.drafts = [
+      ...state.drafts.filter((draft) => draft.guild_id !== row.guild_id),
+      row,
+    ];
+    return { body: true };
+  }
+
+  /** Answers with the filters getSetupDraft sends. */
+  function readDrafts(target: string) {
+    const query = new URLSearchParams(target.split("?")[1] ?? "");
+    const equal = (key: string) => query.get(key)?.replace(/^eq\./, "");
+    const after = query.get("created_at")?.replace(/^gt\./, "") ?? "";
+    return {
+      body: state.drafts.filter(
+        (draft) =>
+          draft.guild_id === equal("guild_id") &&
+          draft.actor_id === equal("actor_id") &&
+          draft.fingerprint === equal("fingerprint") &&
+          Date.parse(draft.created_at) > Date.parse(after),
+      ),
+    };
   }
 
   function configChange(args: Record<string, unknown>) {
@@ -300,6 +413,12 @@ export function fakeDb(fields: Partial<DbState> = {}): {
     }
     if (path.endsWith("/rpc/apply_role_bindings")) {
       return roleBindings(args);
+    }
+    if (path.endsWith("/rpc/save_setup_draft")) {
+      return saveDraft(args);
+    }
+    if (path.endsWith("/setup_drafts")) {
+      return readDrafts(request.target);
     }
     if (path.endsWith("/rpc/apply_config_change")) {
       return configChange(args);

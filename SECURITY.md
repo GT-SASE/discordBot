@@ -126,7 +126,7 @@ ORDER BY log.claimed_at;
 
 The `<start>` filter has a blind spot. A skip leaves `claimed_at` unchanged and no column records when it happened. The key can read claim tokens, so it can skip a reminder claimed before `<start>`, such as a held one. To include those, set an earlier date in this query.
 
-**Job runs.** The key cannot write `job_runs` directly or date a run in the future. It can still call `begin_job_run` and `finish_job_run`, which closes that day's slot with nothing sent. A test confirmed the next run then returns `duplicate`. This stops at rotation, as the next day's slot opens as usual. Look for a success outside the hours after the 14:00 and 16:00 UTC crons, or on a day when reminders were due and none arrived. Empty `results` prove nothing alone, because a quiet day looks the same.
+**Job runs.** The key cannot write `job_runs` directly or date a run in the future. It can still call `begin_job_run` and `finish_job_run`, which closes that day's slot with nothing sent. A test confirmed the next run then returns `duplicate`. This stops at rotation, as the next day's slot opens as usual. Look for a success outside the hours after the 15:00 and 17:00 UTC crons, or on a day when reminders were due and none arrived. Empty `results` prove nothing alone, because a quiet day looks the same.
 
 ```sql
 SELECT job_name, status, started_at, finished_at, error, results

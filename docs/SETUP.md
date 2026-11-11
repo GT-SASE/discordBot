@@ -97,7 +97,7 @@ Check this in the dashboard in case passkeys have been added since.
 
 1. In Discord, turn on User Settings > Advanced > Developer Mode, so you can copy IDs.
 2. Click **+** in the server list and create your own server. Do not invite anyone yet.
-3. Create two roles: `Test Officer` and `Test Admin`. Give them no extra permissions.
+3. Create five roles: `Test E-board`, `Test Events Directors`, `Test Events Committee`, `Test Treasury` and `Test Marketing`. Give them no extra permissions.
 4. Create a forum channel called `test-events`. If the forum option is missing, turn on Community in Server Settings. Check this in the dashboard.
 5. Invite your second account. Do not give it either role yet.
 6. Right-click the server icon and choose Copy Server ID. Keep it for later as your test server ID.
@@ -245,7 +245,7 @@ git switch -c staging
 git push -u origin staging
 ```
 
-**Expect:** a Production deployment of `staging` that reaches Ready. Settings > Cron Jobs lists `/api/cron/reminders` twice, at `0 14 * * *` and `0 16 * * *`.
+**Expect:** a Production deployment of `staging` that reaches Ready. Settings > Cron Jobs lists `/api/cron/reminders` twice, at `0 15 * * *` and `0 17 * * *`.
 
 If you change a setting later, redeploy from the Deployments page, because a deployment does not pick up new values.
 
@@ -350,22 +350,35 @@ Type `/ping` in the test server.
 
 ### `/setup`
 
-As a server Administrator, run `/setup` and choose `Test Officer` and `Test Admin`.
+As a server Administrator, run `/setup` and choose a role for each option:
 
-**Expect:** a private message showing both roles and which roles may be able to grant them, with a Confirm button. Click it. You should see `Saved.`
+| Option                  | Role                    | What it does                                                                                                          |
+| ----------------------- | ----------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| `eboard_role`           | `Test E-board`          | Admin and officer rights: changes the bot's settings with `/config`, creates events, assigns steps, approves budgets. |
+| `events_directors_role` | `Test Events Directors` | The same officer rights as E-board.                                                                                   |
+| `events_committee_role` | `Test Events Committee` | Shown in `/config`. Decides nothing yet.                                                                              |
+| `treasury_role`         | `Test Treasury`         | Pinged when a Budget Sheet is done. Can approve budgets.                                                              |
+| `marketing_role`        | `Test Marketing`        | Pinged when an Engage post is up.                                                                                     |
+
+All five are required. E-board is also saved as the admin role, since the club has no separate one. None can be `@everyone` or a role an integration manages.
+
+**Expect:** a private message listing the five roles by the club's names, with E-board shown as `E-board (also admin)`, and which roles may be able to grant them, with a Confirm button. Click it within an hour. You should see `Saved.` and the five roles again.
 
 **Failure looks like:**
 
 - `You can't do that, or it doesn't exist.`: you do not hold the Administrator permission.
+- `The ... role can't be @everyone` or `... because an integration controls who holds it.`: choose another role for that option.
+- `This Confirm no longer matches your latest /setup...`: the button is over an hour old, someone ran `/setup` again since, or another member clicked it. Run `/setup` again.
+- `Someone else changed the roles...`: another admin saved first. Run `/setup` again.
 - `Something went wrong...`: the bot could not reach the database. Check `SUPABASE_URL`, `SUPABASE_SECRET_KEY` and that the migrations ran.
 
-Every command except `/ping` and `/setup` refuses until this is done. If the roles change later, run `/setup` again.
+Every command except `/ping` and `/setup` refuses until this is done. If the roles change later, run `/setup` again with all five. A server set up before these roles existed keeps its Events Directors and admin roles, and `/config` says `Run /setup to choose the ... role` for each one still missing. While its admin role differs from E-board, `/config` shows it on its own `Admin:` line.
 
 ### `/config`
 
 Run `/config`.
 
-**Expect:** a private panel showing reminders on, no managed forums and one recent change.
+**Expect:** a private panel showing reminders on, the five roles as mentions that ping nobody, with E-board shown as `E-board (also admin)`, no managed forums and one recent change.
 
 Choose `test-events` in **Add a managed forum**.
 
@@ -376,11 +389,11 @@ Choose `test-events` in **Add a managed forum**.
 - `The bot is missing these permissions in that forum: ...`: go back and grant them.
 - `Discord would not confirm that forum...`: the bot could not check. Try again, and see the staging checklist if it continues.
 
-The bot posts only in managed forums. The **Turn reminders off** button is also the kill switch for reminders. Turning them back on after that day's run, around 14:00 UTC, does not reopen it: they resume with the next day's run, and the panel says so.
+The bot posts only in managed forums. The **Turn reminders off** button is also the kill switch for reminders. Turning them back on after that day's run, around 15:00 UTC, does not reopen it: they resume with the next day's run, and the panel says so.
 
 ### A first event and task
 
-Give yourself `Test Officer`, then run `/event create` with a made-up name and a date as `YYYY-MM-DD` or `MM/DD`.
+Give yourself `Test Events Directors`, then run `/event create` with a made-up name and a date as `YYYY-MM-DD` or `MM/DD`.
 
 **Expect:** `Created ...`, and a new post in `test-events` with the event's overview.
 
@@ -393,7 +406,38 @@ Run `/task assign` inside that post, choosing your second account, a made-up des
 - `No forums are managed yet...`: add the forum in `/config`.
 - `I'm not allowed to post in that forum...`: go back and check the forum's permissions.
 - `That forum requires a tag on every post...`: turn the requirement off.
-- `You can't do that, or it doesn't exist.`: you do not hold the officer role.
+- `You can't do that, or it doesn't exist.`: you do not hold the Events Directors or E-board role.
+
+### The event's steps
+
+This needs the Treasury Committee and Marketing Committee roles chosen in `/setup`. Give your second account a role that is neither.
+
+Run `/event create` again with another made-up name, and choose your second account in the `budget` option.
+
+**Expect:** the reply names your second account on Budget Sheet. The new post's overview has a **Checklist** with four lines, your second account shown on Budget Sheet, and three buttons: **Budget Sheet done**, **Engage post done** and **Budget approved**. Nobody is notified by the overview.
+
+As your second account, click **Engage post done**, then **Budget Sheet done**.
+
+**Expect:** the first click gets a private `You can't do that, or it doesn't exist.`, because that account is not on Engage post. The second gets a private `Marked Budget Sheet done ...`. One message appears in the post pinging the Treasury Committee role, and the overview shows Budget Sheet ticked and loses its button. Click **Budget Sheet done** again: the reply says it is already done, and nothing more is posted.
+
+As your second account, click **Budget approved**.
+
+**Expect:** the fixed refusal, because only officers and the Treasury Committee can approve.
+
+As yourself, run `/event pickup` with `time:5:30 PM` in the post.
+
+**Expect:** `Food pickup can only be set up once the budget is approved.` Nothing changes.
+
+Click **Budget approved**.
+
+**Expect:** a message in the post pinging the event's creator, asking them to set up food pickup. Then run `/event pickup` with `time:5:30 PM` and `/event assign` with `step:Food pickup` and your second account.
+
+**Expect:** the overview shows Food pickup ticked, at 5:30 PM, with your second account. As your second account, `/mytasks` lists that food pickup.
+
+**Failure looks like:**
+
+- `Budget Sheet for ... is done. Run /setup to choose the Treasury Committee role...` in the post: the role is not chosen yet. Run `/setup` again.
+- The buttons do nothing for anyone: check that the interactions endpoint is still set, as in Part 6.
 
 ## Part 9: Add flood protection and usage alerts
 
@@ -440,7 +484,7 @@ Repeat the parts above with new values. Each row is a real difference.
 | 5    | Create a second Vercel project on the same repository. Leave the production branch as `main`. Generate a new cron secret. Set `ALLOWED_GUILD_IDS` to the club's server only. No value may match the test ones.                  |
 | 6    | Use the production project's domain and the real app.                                                                                                                                                                           |
 | 7    | Invite to the club's server as the app owner, which needs Manage Server there. Grant permissions on each real forum. Register with the real app's values in `.env`, then delete `.env`.                                         |
-| 8    | Run `/setup` with the club's officer and admin roles. Run `/config` and add the real forums.                                                                                                                                    |
+| 8    | Run `/setup` with the club's five roles. Run `/config` and add the real forums.                                                                                                                                                 |
 | 9    | Add the same firewall rules. They do not copy between projects.                                                                                                                                                                 |
 
 `vercel.json` applies to both projects, so the production project also builds `staging`, as a preview. That preview has no settings, because they exist only in Production, and Standard Protection hides it.

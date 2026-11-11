@@ -23,7 +23,7 @@ Why it happens:
 2. Reading a forum should take only View Channel (unverified on Discord), so the read succeeds and the refusal is blamed on that event's thread.
 3. Each event keeps its own count in `events.thread_refusals`. Refusals 1 and 2 fail the run. From refusal 3 the event is held, and the run no longer fails for it.
 
-With both crons firing, the order is failed at 14:00, failed at 16:00, succeeded at 14:00 the next day, after which the 16:00 cron finds the slot closed. The test run gave `failed, failed, succeeded, duplicate, succeeded`, with nothing sent. From the code, not a test: a run with a new event's first reminder fails again, because that event starts its own count at zero.
+With both crons firing, the order is failed at 15:00, failed at 17:00, succeeded at 15:00 the next day, after which the 17:00 cron finds the slot closed. The test run gave `failed, failed, succeeded, duplicate, succeeded`, with nothing sent. From the code, not a test: a run with a new event's first reminder fails again, because that event starts its own count at zero.
 
 A held reminder is not lost. It keeps its claim and is tried once on each run. The first send that lands clears the count and logs `Reminders resumed for event <id>`. In tests the reminder then went out with its ping.
 
@@ -54,7 +54,34 @@ ORDER BY guild_id, channel_id;
 - `channels_ok` in the health check does not clear this. It proves only that the forum could be read.
 - People may report it first: `/task assign` tells the officer that the person was not mentioned, because that post is refused too.
 
-**To fix it.** In Discord, give the bot back the three permissions on each forum, as in [SETUP.md](SETUP.md#give-it-access-to-one-forum). If only one post is held, check whether it is locked. The next run that reaches the slot sends what was held. If today's run already succeeded, that is the next day's 14:00 cron. No database change is needed.
+**To fix it.** In Discord, give the bot back the three permissions on each forum, as in [SETUP.md](SETUP.md#give-it-access-to-one-forum). If only one post is held, check whether it is locked. The next run that reaches the slot sends what was held. If today's run already succeeded, that is the next day's 15:00 cron. No database change is needed.
+
+Event step lists and Food pickup reminders share the event's count and are held with it. A held one is tried again only on its own day: a step list from a day that has passed is closed as `skipped` once its claim is over an hour old, and that day's next list replaces it.
+
+## Event step and Food pickup reminders
+
+The same `reminders` run sends these after the task reminders, under the same lock, message cap, deadlines and per-person ping limit. Each is one message in the event's post, recorded in `event_reminder_log` under the guild's local date it is for. Tested with Discord mocked, not on Discord.
+
+- `daily_steps` goes out each day up to the event's date while a step is open. It pings the Events Directors role for a Budget Sheet or Engage post with nobody on it. Role pings count towards the per-person limit too.
+- `pickup_two_days` and `pickup_day` go out two days before and on the event's date, only once Food pickup is set up. The database refuses a claim for any other date.
+- None is sent late. After both crons of a day fail, that day's messages are not sent, and a claim left from that day is closed as `skipped` by a later run.
+
+Their counts in `results` start with `event_`: `event_candidates`, `event_planned`, `event_claimed`, `event_reminders_sent` and one `event_<kind>_sent` per kind, `event_skips_recorded`, `event_stale_reclaimed`, `event_fresh_claims_waiting`, `event_render_failed` and `event_items_refused`. They share `messages_sent`, `pings_withheld`, `deferred_cap`, `threads_held`, `held_reminders`, `events_stopped` and `channels_inaccessible` with task reminders, so the health check's attention counts cover both.
+
+- `deferred_event` with no task reminder failing for that event means the event's thread refused a task reminder earlier in the same run. Its step list waits for the next run, so one run counts one refusal.
+- `event_render_failed` means an event's reminder could not be written. Logs name the event. It does not fail the run.
+- `event_items_refused` means Discord refused the text itself. The reminder is recorded as `skipped`, and the next day brings a new one.
+
+To see what went out for an event:
+
+```sql
+SELECT kind, reminder_date, state, attempts, claimed_at, sent_at
+FROM public.event_reminder_log
+WHERE event_id = '<event-id>'
+ORDER BY reminder_date, kind;
+```
+
+A reminder whose claim never finishes and is no longer due, such as a pickup reminder after Food pickup was undone, stays `claimed`. It sends nothing and does no harm.
 
 ## The bot removed from a server, or the server deleted
 
@@ -170,6 +197,7 @@ Not run for this guide, as the Supabase CLI was not available: steps 4 and 5. Un
 | `config_audit`         | Discord IDs of who changed settings, role and forum IDs          | No limit                                                                           |
 | `task_reassignments`   | Discord IDs of who reassigned a task                             | No limit                                                                           |
 | `reminder_log`         | Which reminder went out for which task, and its message ID       | No limit                                                                           |
+| `event_reminder_log`   | Which step or pickup reminder went out for which event, and when | No limit                                                                           |
 | `job_runs`             | Counts and event IDs                                             | No limit                                                                           |
 | `interaction_claims`   | Interaction IDs                                                  | Removed by the daily job after a day                                               |
 | Backups repository     | Everything above, encrypted                                      | Until that repository is deleted. [BACKUPS.md](BACKUPS.md#retention) says how      |

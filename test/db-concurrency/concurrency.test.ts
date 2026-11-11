@@ -155,7 +155,7 @@ describe("concurrent writes", () => {
     const guildId = fakeId();
     const channelId = fakeId();
     await observer.query(
-      "SELECT public.apply_role_bindings($1, 0, $2, $3, $4)",
+      "SELECT public.apply_role_bindings($1, 0, $2, $3, $4, NULL, NULL, NULL, NULL)",
       [guildId, fakeId(), fakeId(), fakeId()],
     );
     await observer.query(
@@ -213,7 +213,7 @@ describe("concurrent writes", () => {
     it("role bindings: the panel that loses the race gets CF409", async () => {
       const { guildId } = await setUpGuild();
       const sql =
-        "SELECT public.apply_role_bindings($1, $2, $3, $4, $5) AS version";
+        "SELECT public.apply_role_bindings($1, $2, $3, $4, $5, NULL, NULL, NULL, NULL) AS version";
       const outcome = await race(
         [sql, [guildId, 2, fakeId(), fakeId(), fakeId()]],
         [sql, [guildId, 2, fakeId(), fakeId(), fakeId()]],
@@ -236,7 +236,7 @@ describe("concurrent writes", () => {
 
   describe("first setup", () => {
     const setupSql =
-      "SELECT public.apply_role_bindings($1, 0, $2, $3, $4) AS version";
+      "SELECT public.apply_role_bindings($1, 0, $2, $3, $4, NULL, NULL, NULL, NULL) AS version";
 
     it("the setup that loses the race gets CF409, with one audit row", async () => {
       const guildId = fakeId();

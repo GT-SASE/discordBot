@@ -15,12 +15,16 @@ import {
 const TABLES = [
   "history.row_versions",
   "public.config_audit",
+  "public.event_reminder_log",
+  "public.event_step_assignees",
+  "public.event_steps",
   "public.events",
   "public.guild_config",
   "public.interaction_claims",
   "public.job_runs",
   "public.managed_channels",
   "public.reminder_log",
+  "public.setup_drafts",
   "public.task_reassignments",
   "public.tasks",
 ];
@@ -29,6 +33,24 @@ async function seed(db: PGlite): Promise<void> {
   const guild = await insertGuild(db);
   const eventId = await insertEvent(db, guild);
   await insertTask(db, guild, eventId);
+  await queryAs(
+    db,
+    "service_role",
+    `SELECT public.assign_event_step($1, $2, 'engage_post', $3, $3)`,
+    [eventId, guild.guildId, guild.officerRoleId],
+  );
+  await queryAs(
+    db,
+    "service_role",
+    `SELECT public.claim_event_reminder($1, 'daily_steps', '2030-01-15')`,
+    [eventId],
+  );
+  await queryAs(
+    db,
+    "service_role",
+    `SELECT public.save_setup_draft($1, $2, $3, $3, $3, $3, $3, $3, 'abcdefgh12345678')`,
+    [guild.guildId, guild.officerRoleId, guild.adminRoleId],
+  );
   // An update, so that history.row_versions holds a row as well.
   await queryAs(
     db,

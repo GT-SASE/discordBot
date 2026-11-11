@@ -102,8 +102,8 @@ jobs:
             const { crons } = JSON.parse(readFileSync(".vercel/output/config.json", "utf8"));
             const found = JSON.stringify(crons);
             const expected = JSON.stringify([
-              { path: "/api/cron/reminders", schedule: "0 14 * * *" },
-              { path: "/api/cron/reminders", schedule: "0 16 * * *" },
+              { path: "/api/cron/reminders", schedule: "0 15 * * *" },
+              { path: "/api/cron/reminders", schedule: "0 17 * * *" },
             ]);
             if (found !== expected) {
               throw new Error("The build does not hold the expected cron entries");

@@ -36,7 +36,7 @@ SELECT rolbypassrls FROM pg_roles WHERE rolname = 'backup_ro';
 The job works with either answer, and stops if the role could not see every row:
 
 - `t`: Supabase allowed `BYPASSRLS`, so the role reads past row level security and the migration created no policies.
-- `f`: Supabase refused it, so the migration gave this role a `backup_ro_read` policy on each table. Confirm `SELECT count(*) FROM pg_policies WHERE policyname = 'backup_ro_read'` returns 10, one per table. A later migration that adds a table raises that number.
+- `f`: Supabase refused it, so the migration gave this role a `backup_ro_read` policy on each table. Confirm `SELECT count(*) FROM pg_policies WHERE policyname = 'backup_ro_read'` returns 14, one per table. A later migration that adds a table raises that number.
 
 **3. Create the private repo**, with `main` as its default branch and as few collaborators as possible, and copy in:
 
@@ -92,7 +92,7 @@ Never put the `postgres` password here. The job refuses any role except `backup_
 
 ### When a post refuses the bot
 
-One post that refuses the bot can fire "Reminders last succeeded" once. Each refused run fails, until the third in a row. That third run holds the event's reminders, succeeds, and lists the event in `held_event_ids`. Two failed runs can be enough to pass the 30-hour limit: with a last success at 14:00 on day 0 and failed runs at 14:00 and 16:00 on day 1, the 09:17 UTC check on day 2 fires. The 14:00 run that day holds the event.
+One post that refuses the bot can fire "Reminders last succeeded" once. Each refused run fails, until the third in a row. That third run holds the event's reminders, succeeds, and lists the event in `held_event_ids`. Two failed runs can be enough to pass the 30-hour limit: with a last success at 15:00 on day 0 and failed runs at 15:00 and 17:00 on day 1, the 09:17 UTC check on day 2 fires. The 15:00 run that day holds the event.
 
 The refused runs before the hold log `Thread refused the bot for event <id>`. Logs last one hour on Vercel Hobby, so by the time of the alert that line has probably gone. This finds the event instead:
 

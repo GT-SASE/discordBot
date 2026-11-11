@@ -30,6 +30,7 @@ import {
   escapeUserText,
   plain,
   plainLabel,
+  roleMention,
   safe,
   userMention,
 } from "./safe-text.ts";
@@ -42,6 +43,8 @@ function fakeId(n: number): string {
 const NAMED_USER = fakeId(1);
 const OTHER_USER = fakeId(2);
 const ROLE = fakeId(3);
+const GUILD = fakeId(4);
+const OTHER_ROLE = fakeId(5);
 
 const HOSTILE_CORPUS = [
   "@everyone",
@@ -171,6 +174,99 @@ describe.each(BUILDERS)("%s", (_name, build, message, flags) => {
       expect(attempt).toThrow(/^Every mentioned user must be a Discord ID$/);
     },
   );
+
+  it("pings only the named roles, and no role the text merely shows", () => {
+    const content = safe`${roleMention(ROLE)} ${roleMention(OTHER_ROLE)} done`;
+
+    const fields = message(
+      wire(
+        build({
+          content,
+          mentionUserIds: [NAMED_USER],
+          mentionRoleIds: [ROLE, ROLE],
+          roleGuildId: GUILD,
+        }),
+      ),
+    );
+
+    expect(fields.allowed_mentions).toEqual({
+      parse: [],
+      users: [NAMED_USER],
+      roles: [ROLE],
+    });
+  });
+
+  it("leaves roles out of allowed_mentions when none are named", () => {
+    const fields = message(
+      wire(
+        build({
+          content: safe`${roleMention(ROLE)}`,
+          mentionUserIds: [],
+          mentionRoleIds: [],
+          roleGuildId: GUILD,
+        }),
+      ),
+    );
+
+    expect(fields.allowed_mentions).toEqual({ parse: [], users: [] });
+  });
+
+  it("refuses the guild's own ID as a role, since that is @everyone", () => {
+    const attempt = () =>
+      build({
+        content: safe`hi`,
+        mentionUserIds: [],
+        mentionRoleIds: [ROLE, GUILD],
+        roleGuildId: GUILD,
+      });
+
+    expect(attempt).toThrow(OutboundBodyError);
+    expect(attempt).toThrow(/^A message cannot mention @everyone$/);
+  });
+
+  it("refuses a role with no guild to check it against", () => {
+    for (const roleGuildId of [undefined, "", "everyone"]) {
+      const attempt = () =>
+        build({
+          content: safe`hi`,
+          mentionUserIds: [],
+          mentionRoleIds: [ROLE],
+          ...(roleGuildId === undefined ? {} : { roleGuildId }),
+        });
+
+      expect(attempt).toThrow(/^A role mention needs the guild it belongs to$/);
+    }
+  });
+
+  it.each(["everyone", "@here", "", "123", `<@&${ROLE}>`])(
+    "refuses %j as a mentioned role without repeating it",
+    (id) => {
+      const attempt = () =>
+        build({
+          content: safe`hi`,
+          mentionUserIds: [],
+          mentionRoleIds: [id],
+          roleGuildId: GUILD,
+        });
+
+      expect(attempt).toThrow(/^Every mentioned role must be a Discord ID$/);
+    },
+  );
+
+  it("refuses more than 100 mentioned roles", () => {
+    const mentionRoleIds = Array.from({ length: 101 }, (_, index) =>
+      fakeId(100 + index),
+    );
+    const input = (ids: string[]) => ({
+      content: safe`hi`,
+      mentionUserIds: [],
+      mentionRoleIds: ids,
+      roleGuildId: GUILD,
+    });
+
+    expect(() => build(input(mentionRoleIds))).toThrow(OutboundBodyError);
+    expect(() => build(input(mentionRoleIds.slice(0, 100)))).not.toThrow();
+  });
 
   it("refuses more than 100 mentioned users", () => {
     const mentionUserIds = Array.from({ length: 101 }, (_, index) =>

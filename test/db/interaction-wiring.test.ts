@@ -144,7 +144,7 @@ describe("the client built by liveDependencies", () => {
     await queryAs(
       database,
       "service_role",
-      `SELECT public.apply_role_bindings($1, 0, $2, $3, $4)`,
+      `SELECT public.apply_role_bindings($1, 0, $2, $3, $4, NULL, NULL, NULL, NULL)`,
       [GUILD_ID, fakeId(), OFFICER_ROLE, ADMIN_ROLE],
     );
   });

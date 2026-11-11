@@ -2,7 +2,8 @@
  * The one renderer for an event's overview, and the one way to bring a posted
  * overview up to date. Every stored string goes through the render boundary here, so
  * a name or task written long ago is as inert as one written today. No overview pings
- * anybody: assignees are shown by mention and `mentionUserIds` stays empty.
+ * anybody: assignees and step owners are shown by mention and `mentionUserIds` stays
+ * empty.
  */
 
 import { DiscordClientError, DiscordErrorCode } from "../discord/client.ts";
@@ -25,9 +26,11 @@ import {
   markEventThreadMissing,
   setEventOverviewMessage,
 } from "../db/events.ts";
+import { getEventWorkflow } from "../db/event-steps.ts";
 import { listEventTasks } from "../db/tasks.ts";
-import type { EventRow, TaskRow } from "../db/types.ts";
+import type { EventRow, EventWorkflow, TaskRow } from "../db/types.ts";
 import { escapedName, lines } from "../handlers/render.ts";
+import { checklistLines, stepButtonRows } from "./steps.ts";
 
 // A name escapes to at most twice its 100 characters. A task line stays short so one
 // long task cannot push the others out.
@@ -106,11 +109,16 @@ function countText(count: number): SafeText {
 /**
  * The overview's text. `notes` are extra lines for the reader, kept whatever else has
  * to be cut. Open tasks come first, so the tasks hidden by the limit are the done ones.
+ *
+ * Given the event's workflow, it also shows the checklist, and on an active event the
+ * buttons for the steps still open. It then always sets `components`, so an edit takes
+ * away the buttons of steps done since.
  */
 export function renderOverview(
   event: EventRow,
   tasks: OverviewTasks,
   notes: readonly SafeText[] = [],
+  workflow?: EventWorkflow,
 ): MessageInput {
   const open = tasks.rows.filter((task) => task.status === "open");
   const done = tasks.rows.filter((task) => task.status === "done");
@@ -121,6 +129,7 @@ export function renderOverview(
     safe`Status: ${eventStatusText(event)}`,
     safe`Created by ${userMention(event.created_by)}`,
     ...notes,
+    ...(workflow === undefined ? [] : checklistLines(workflow)),
     tasks.rows.length === 0 && !tasks.truncated ? safe`No tasks yet.` : counts,
   ];
   const content = fitLines(fixed, [...open, ...done].map(taskLine), (count) => {
@@ -131,7 +140,34 @@ export function renderOverview(
       ? safe`…and more than ${countText(count)} other tasks not shown.`
       : safe`…and ${countText(count)} more not shown.`;
   });
-  return { content, mentionUserIds: [] };
+  if (workflow === undefined) {
+    return { content, mentionUserIds: [] };
+  }
+  const components =
+    event.status === "active" && workflow.event_id === event.id
+      ? stepButtonRows(workflow)
+      : [];
+  return { content, mentionUserIds: [], components };
+}
+
+/**
+ * The event's workflow for drawing its overview. A failed read is logged and gives
+ * undefined, and the overview is then drawn without the checklist, to be put right by
+ * the next change.
+ */
+export async function overviewWorkflow(
+  db: DbClient,
+  event: Pick<EventRow, "id" | "guild_id">,
+): Promise<EventWorkflow | undefined> {
+  const read = await getEventWorkflow(db, {
+    guildId: event.guild_id,
+    eventId: event.id,
+  });
+  if (!read.ok) {
+    logFailure(`workflow: ${errorSummary(read.error)}`);
+    return undefined;
+  }
+  return read.value ?? undefined;
 }
 
 export interface OverviewContext {
@@ -201,7 +237,8 @@ async function draw(
     logFailure(errorSummary(tasks.error));
     return false;
   }
-  const input = renderOverview(event, tasks.value);
+  const workflow = await overviewWorkflow(db, event);
+  const input = renderOverview(event, tasks.value, [], workflow);
   const target = threadTarget(event.guild_id, threadId);
   if (messageId !== null) {
     try {

@@ -3,8 +3,8 @@
  * as the endpoint's HTTP response.
  *
  * Message text only arrives as `SafeText`, so hostile text is inert before it gets
- * here. Every body with text sets `allowed_mentions` to exactly the users named by
- * the caller, and `SUPPRESS_EMBEDS` so that no link unfurls. Responses with no text
+ * here. Every body with text sets `allowed_mentions` to exactly the users and roles
+ * named by the caller, and `SUPPRESS_EMBEDS` so that no link unfurls. Responses with no text
  * carry neither, and the edit that fills in a deferred response is built here too.
  *
  * `OutboundBody` is exported as a type only and is nominal through its private
@@ -388,6 +388,16 @@ export interface MessageInput {
   readonly content: SafeText;
   /** The only users this message may ping. Pass an empty list for nobody. */
   readonly mentionUserIds: readonly string[];
+  /**
+   * The only roles this message may ping. Left out, it pings none. Each ID must come
+   * from the signed guild's config row, and `roleGuildId` must name that guild.
+   */
+  readonly mentionRoleIds?: readonly string[];
+  /**
+   * The guild of `mentionRoleIds`, needed with any role. A role whose ID equals it is
+   * @everyone, which is always refused.
+   */
+  readonly roleGuildId?: string;
   readonly components?: readonly Part<"row">[];
 }
 
@@ -407,8 +417,40 @@ function rows<K extends "row" | "modal-row">(
   return parts.map((part) => Part.read(part, [kind]));
 }
 
+/** The roles a message may ping. Throws for any role that could reach everyone. */
+function mentionedRoles(
+  roleIds: readonly string[] | undefined,
+  guildId: string | undefined,
+): string[] {
+  if (roleIds === undefined || roleIds.length === 0) {
+    return [];
+  }
+  if (!isSnowflake(guildId)) {
+    throw new OutboundBodyError("A role mention needs the guild it belongs to");
+  }
+  if (!roleIds.every(isSnowflake)) {
+    throw new OutboundBodyError("Every mentioned role must be a Discord ID");
+  }
+  if (roleIds.includes(guildId)) {
+    throw new OutboundBodyError("A message cannot mention @everyone");
+  }
+  const roles = [...new Set(roleIds)];
+  if (roles.length > DISCORD_LIMITS.mentionedRoles) {
+    throw new OutboundBodyError(
+      `A message can mention at most ${String(DISCORD_LIMITS.mentionedRoles)} roles, got ${String(roles.length)}`,
+    );
+  }
+  return roles;
+}
+
 function messageFields(
-  { content, mentionUserIds, components }: MessageInput,
+  {
+    content,
+    mentionUserIds,
+    mentionRoleIds,
+    roleGuildId,
+    components,
+  }: MessageInput,
   extraFlags = 0,
 ) {
   const text = safeTextValue(content);
@@ -426,9 +468,11 @@ function messageFields(
       `A message can mention at most ${String(DISCORD_LIMITS.mentionedUsers)} users, got ${String(users.length)}`,
     );
   }
+  const roles = mentionedRoles(mentionRoleIds, roleGuildId);
   return {
     content: text,
-    allowed_mentions: { parse: [], users },
+    allowed_mentions:
+      roles.length === 0 ? { parse: [], users } : { parse: [], users, roles },
     flags: SUPPRESS_EMBEDS_FLAG | extraFlags,
     ...(components === undefined
       ? {}

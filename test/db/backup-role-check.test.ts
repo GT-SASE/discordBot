@@ -5,7 +5,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { insertEvent, insertGuild, insertTask } from "./fixtures.ts";
 import { BACKUP_ROLE, createMigratedDb, queryAs } from "./harness.ts";
 
-const TABLE_COUNT = 10;
+const TABLE_COUNT = 14;
 
 /** The role check that backup/run-backup.sh really runs, so this tests that text. */
 function roleCheckSql(): string {

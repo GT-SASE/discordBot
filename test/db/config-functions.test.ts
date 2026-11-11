@@ -31,18 +31,36 @@ describe("config functions", () => {
     await db.close();
   });
 
+  interface MoreRoles {
+    eboard?: string | null;
+    eventsCommittee?: string | null;
+    treasury?: string | null;
+    marketing?: string | null;
+  }
+
   async function applyRoles(
     guildId: string,
     expected: number,
     officer: string,
     admin: string,
     actor: string = fakeId(),
+    more: MoreRoles = {},
   ): Promise<number> {
     const rows = await queryAs<{ version: number }>(
       db,
       "service_role",
-      `SELECT public.apply_role_bindings($1, $2, $3, $4, $5) AS version`,
-      [guildId, expected, actor, officer, admin],
+      `SELECT public.apply_role_bindings($1, $2, $3, $4, $5, $6, $7, $8, $9) AS version`,
+      [
+        guildId,
+        expected,
+        actor,
+        officer,
+        admin,
+        more.eboard ?? null,
+        more.eventsCommittee ?? null,
+        more.treasury ?? null,
+        more.marketing ?? null,
+      ],
     );
     return (rows[0] as { version: number }).version;
   }
@@ -139,10 +157,88 @@ describe("config functions", () => {
           actor_id: actor,
           action: "role_bindings",
           old_values: null,
-          new_values: { officer_role_id: officer, admin_role_id: admin },
+          new_values: {
+            officer_role_id: officer,
+            admin_role_id: admin,
+            eboard_role_id: null,
+            events_committee_role_id: null,
+            treasury_role_id: null,
+            marketing_role_id: null,
+          },
           version_after: 1,
         },
       ]);
+    });
+
+    it("binds the four workflow roles, and audits them", async () => {
+      const guildId = fakeId();
+      const roles = {
+        eboard: fakeId(),
+        eventsCommittee: fakeId(),
+        treasury: fakeId(),
+        marketing: fakeId(),
+      };
+      await applyRoles(guildId, 0, fakeId(), fakeId());
+
+      expect(
+        await applyRoles(guildId, 1, fakeId(), fakeId(), fakeId(), roles),
+      ).toBe(2);
+
+      const { rows } = await db.query(
+        `SELECT eboard_role_id, events_committee_role_id, treasury_role_id, marketing_role_id
+         FROM public.guild_config WHERE guild_id = $1`,
+        [guildId],
+      );
+      expect(rows).toEqual([
+        {
+          eboard_role_id: roles.eboard,
+          events_committee_role_id: roles.eventsCommittee,
+          treasury_role_id: roles.treasury,
+          marketing_role_id: roles.marketing,
+        },
+      ]);
+      const audit = await auditRows(guildId);
+      expect(audit[1]?.old_values).toMatchObject({
+        eboard_role_id: null,
+        treasury_role_id: null,
+      });
+      expect(audit[1]?.new_values).toMatchObject({
+        eboard_role_id: roles.eboard,
+        events_committee_role_id: roles.eventsCommittee,
+        treasury_role_id: roles.treasury,
+        marketing_role_id: roles.marketing,
+      });
+
+      // A null unbinds the role again.
+      await applyRoles(guildId, 2, fakeId(), fakeId());
+      const after = await db.query(
+        `SELECT eboard_role_id FROM public.guild_config WHERE guild_id = $1`,
+        [guildId],
+      );
+      expect(after.rows).toEqual([{ eboard_role_id: null }]);
+    });
+
+    it.each(["eboard", "eventsCommittee", "treasury", "marketing"] as const)(
+      "rejects the guild ID (@everyone) as the %s role",
+      async (which) => {
+        const guildId = fakeId();
+        expect(
+          await errorCodeOf(
+            applyRoles(guildId, 0, fakeId(), fakeId(), fakeId(), {
+              [which]: guildId,
+            }),
+          ),
+        ).toBe(CHECK_VIOLATION);
+        expect(await configOf(guildId)).toBeUndefined();
+      },
+    );
+
+    it("has a single signature, with no five-argument version left", async () => {
+      const { rows } = await db.query<{ args: string }>(
+        `SELECT pg_get_function_identity_arguments(oid) AS args
+         FROM pg_proc WHERE proname = 'apply_role_bindings'`,
+      );
+      expect(rows.map((row) => row.args.split(", ").length)).toEqual([9]);
     });
 
     it("changes the roles, bumps the version and records the old values", async () => {
@@ -160,6 +256,10 @@ describe("config functions", () => {
       expect(audit[1]?.old_values).toEqual({
         officer_role_id: oldOfficer,
         admin_role_id: oldAdmin,
+        eboard_role_id: null,
+        events_committee_role_id: null,
+        treasury_role_id: null,
+        marketing_role_id: null,
       });
       expect(audit[1]?.version_after).toBe(2);
     });
@@ -198,7 +298,7 @@ describe("config functions", () => {
         queryAs(
           db,
           "service_role",
-          `SELECT public.apply_role_bindings($1, NULL, $2, $3, $4)`,
+          `SELECT public.apply_role_bindings($1, NULL, $2, $3, $4, NULL, NULL, NULL, NULL)`,
           [guildId, fakeId(), fakeId(), fakeId()],
         ),
       );
@@ -665,7 +765,7 @@ describe("config functions", () => {
       async (role) => {
         const guildId = await setUpGuild();
         for (const sql of [
-          `SELECT public.apply_role_bindings('${guildId}', 1, '${fakeId()}', '${fakeId()}', '${fakeId()}')`,
+          `SELECT public.apply_role_bindings('${guildId}', 1, '${fakeId()}', '${fakeId()}', '${fakeId()}', NULL, NULL, NULL, NULL)`,
           `SELECT public.apply_config_change('${guildId}', 1, '${fakeId()}', false)`,
           `SELECT public.mark_channel_unavailable('${guildId}', '${fakeId()}')`,
         ]) {

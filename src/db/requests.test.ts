@@ -541,7 +541,7 @@ describe("exact requests", () => {
       (db) => getGuildConfig(db, { guildId: GUILD }),
       {},
       read(
-        `guild_config?select=guild_id,officer_role_id,admin_role_id,timezone,reminders_enabled,version&guild_id=eq.${GUILD}&limit=1`,
+        `guild_config?select=guild_id,officer_role_id,admin_role_id,eboard_role_id,events_committee_role_id,treasury_role_id,marketing_role_id,timezone,reminders_enabled,version&guild_id=eq.${GUILD}&limit=1`,
       ),
     ],
     [
@@ -561,6 +561,10 @@ describe("exact requests", () => {
           expectedVersion: 0,
           officerRoleId: OTHER,
           adminRoleId: OTHER,
+          eboardRoleId: OTHER,
+          eventsCommitteeRoleId: null,
+          treasuryRoleId: OTHER,
+          marketingRoleId: null,
         }),
       { body: 1 },
       rpc("apply_role_bindings", {
@@ -569,6 +573,10 @@ describe("exact requests", () => {
         p_actor_id: ACTOR,
         p_officer_role_id: OTHER,
         p_admin_role_id: OTHER,
+        p_eboard_role_id: OTHER,
+        p_events_committee_role_id: null,
+        p_treasury_role_id: OTHER,
+        p_marketing_role_id: null,
       }),
     ],
     [
@@ -1064,6 +1072,10 @@ describe("refusals before any query", () => {
           expectedVersion: 0,
           officerRoleId: OTHER,
           adminRoleId: OTHER,
+          eboardRoleId: null,
+          eventsCommitteeRoleId: null,
+          treasuryRoleId: null,
+          marketingRoleId: null,
         }),
     ],
     [
@@ -1280,8 +1292,37 @@ describe("refusals before any query", () => {
       expectedVersion: 0,
       officerRoleId: GUILD,
       adminRoleId: OTHER,
+      eboardRoleId: null,
+      eventsCommitteeRoleId: null,
+      treasuryRoleId: null,
+      marketingRoleId: null,
     });
     expect(result.ok).toBe(false);
+    expect(requests).toEqual([]);
+  });
+
+  it.each([
+    "eboardRoleId",
+    "eventsCommitteeRoleId",
+    "treasuryRoleId",
+    "marketingRoleId",
+  ] as const)("refuses the guild ID or a bad ID as %s", async (role) => {
+    const { db: client, requests } = db();
+    for (const value of [GUILD, "everyone", ""]) {
+      const result = await applyRoleBindings(client, {
+        guildId: GUILD,
+        actorId: ACTOR,
+        expectedVersion: 0,
+        officerRoleId: OTHER,
+        adminRoleId: OTHER,
+        eboardRoleId: null,
+        eventsCommitteeRoleId: null,
+        treasuryRoleId: null,
+        marketingRoleId: null,
+        [role]: value,
+      });
+      expect(result.ok).toBe(false);
+    }
     expect(requests).toEqual([]);
   });
 
@@ -1294,6 +1335,10 @@ describe("refusals before any query", () => {
         expectedVersion,
         officerRoleId: OTHER,
         adminRoleId: OTHER,
+        eboardRoleId: null,
+        eventsCommitteeRoleId: null,
+        treasuryRoleId: null,
+        marketingRoleId: null,
       });
       expect(result.ok).toBe(false);
     }
@@ -1325,6 +1370,10 @@ describe("arguments are named, so extra properties go nowhere", () => {
       expectedVersion: 1,
       officerRoleId: OTHER,
       adminRoleId: OTHER,
+      eboardRoleId: null,
+      eventsCommitteeRoleId: null,
+      treasuryRoleId: null,
+      marketingRoleId: null,
       p_actor_id: "hostile",
       p_guild_id: "hostile",
     };

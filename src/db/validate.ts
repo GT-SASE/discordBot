@@ -33,6 +33,13 @@ export function isTimestampText(value: unknown): value is string {
   );
 }
 
+const PICKUP_TIME = /^(?:[01][0-9]|2[0-3]):[0-5][0-9]$/;
+
+/** A time of day as `HH:MM`, 24-hour, the form the pickup time is written and read in. */
+export function isPickupTime(value: unknown): value is string {
+  return typeof value === "string" && PICKUP_TIME.test(value);
+}
+
 export function isUuid(value: unknown): value is string {
   return typeof value === "string" && UUID.test(value);
 }

@@ -141,7 +141,7 @@ describe("refusals", () => {
     await expectRefused(
       await get({
         "x-vercel-cron": "1",
-        "x-vercel-cron-schedule": "0 14 * * *",
+        "x-vercel-cron-schedule": "0 15 * * *",
         "x-vercel-id": "abc",
         "user-agent": "vercel-cron/1.0",
       }),
@@ -397,15 +397,15 @@ describe("deployment settings", () => {
 
   it("schedules a morning run and a recovery run of this endpoint", () => {
     expect(vercel.crons).toEqual([
-      { path: "/api/cron/reminders", schedule: "0 14 * * *" },
-      { path: "/api/cron/reminders", schedule: "0 16 * * *" },
+      { path: "/api/cron/reminders", schedule: "0 15 * * *" },
+      { path: "/api/cron/reminders", schedule: "0 17 * * *" },
     ]);
   });
 
   it("leaves more than the stale claim age between the two crons", () => {
     // A claim left by a failed morning run must be stale by the recovery run. Hobby
-    // fires anywhere in the hour, so only one started by 15:00 is sure to be.
-    expect(16 - 14).toBeGreaterThan(STALE_CLAIM_MS / 3_600_000);
+    // fires anywhere in the hour, so only one started by 16:00 is sure to be.
+    expect(17 - 15).toBeGreaterThan(STALE_CLAIM_MS / 3_600_000);
   });
 
   it("stops new work with time left for one send and its marks", () => {
