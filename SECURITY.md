@@ -207,4 +207,4 @@ Do this only after rotating.
 
 ### 4. Learn from it
 
-Record what leaked, how and when, without repeating the value. If the scanner missed it, add a rule to `.gitleaks-custom.toml`, since `.gitleaks.toml` holds the default rules only, and check that it fires on a sample built at runtime, never a real value.
+Record what leaked, how and when, without repeating the value. If the scanner missed it, add a rule to `.gitleaks-custom.toml`, since `.gitleaks.toml` holds the default rules only, and check that it fires on a sample built at runtime, never a real value, as `scripts/check-gitleaks-rules.sh` does for `named-secret-env-assignment`.

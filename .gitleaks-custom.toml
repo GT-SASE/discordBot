@@ -62,6 +62,17 @@ regexes = [
   '''^/g\)\)\.toHaveLength\([0-9]+\);?$''',
 ]
 
+# An empty value is too short to match. scripts/check-gitleaks-rules.sh checks
+# that these pass and that a real-looking password still does not.
+[[rules.allowlists]]
+description = "Obvious placeholders, which tests and docs use in place of a value"
+regexes = [
+  '''^(?:placeholder|example)$''',
+  '''^<[A-Za-z][A-Za-z0-9_-]*>$''',
+  # A Postgres URL whose password is a placeholder in angle brackets.
+  '''^postgres(?:ql)?://[^:@/\s]+:<[A-Za-z][A-Za-z0-9_-]*>@[^\s"']*$''',
+]
+
 [[rules]]
 id = "discord-snowflake"
 description = "Number shaped like a Discord ID. Real IDs belong in env vars or the database"
