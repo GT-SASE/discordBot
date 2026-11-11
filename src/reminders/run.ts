@@ -1179,7 +1179,9 @@ class Run {
       this.#countIncomplete("mark_failed", items.length);
       return;
     }
-    // One call for them all. Failing as a whole, it marked none of them.
+    // One call for them all. If it fails, every item counts as mark_failed. That does not
+    // mean none were marked: past the client's deadline the database may still finish the
+    // call, so the count can be too high.
     const marked = await markRemindersSent(this.#db, {
       keys: items.map((item) => ({ ...item.ref, claimToken: item.claimToken })),
       messageId,
