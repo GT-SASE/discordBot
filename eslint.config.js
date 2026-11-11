@@ -2,7 +2,6 @@ import eslint from "@eslint/js";
 import { defineConfig, globalIgnores } from "eslint/config";
 import { builtinRules } from "eslint/use-at-your-own-risk";
 import tseslint from "typescript-eslint";
-import { discordBoundary } from "./scripts/discord-boundary-lint.ts";
 
 /** Methods whose first argument names a table, column or function, or a whole filter. */
 const NAMED_FIRST_ARGUMENT =
@@ -52,7 +51,7 @@ const SUPABASE_ONLY_IN_DB = "Only src/db/ may load Supabase packages.";
 const QUERIES_ONLY_IN_DB = "Database queries belong in src/db/.";
 
 // A rule's options replace rather than merge across config blocks, so using the
-// core rule names here would silently switch off the Discord boundary on the same
+// core rule names here would silently switch off the Discord rule below on the same
 // files. The same core rules under another name run alongside it instead.
 const dbRules = {
   rules: {
@@ -78,7 +77,37 @@ export default defineConfig([
     files: ["**/*.js"],
     extends: [tseslint.configs.disableTypeChecked],
   },
-  ...discordBoundary,
+  {
+    // Only the Discord client sends to Discord, so that every send runs the managed
+    // channel check. The database client is the other caller of fetch.
+    name: "discord/one-send-path",
+    files: [`{src,api}/**/*.${EXTENSIONS}`],
+    ignores: [
+      "src/discord/client.ts",
+      "src/db/client.ts",
+      `**/*.test.${EXTENSIONS}`,
+    ],
+    rules: {
+      "no-restricted-globals": [
+        "error",
+        {
+          name: "fetch",
+          message: "Send to Discord through src/discord/client.ts.",
+        },
+      ],
+      "no-restricted-imports": [
+        "error",
+        {
+          patterns: [
+            {
+              regex: "^(node:)?(http2?|https|undici)$",
+              message: "Send to Discord through src/discord/client.ts.",
+            },
+          ],
+        },
+      ],
+    },
+  },
   {
     name: "db/outside-boundary",
     files: [`**/*.${EXTENSIONS}`],

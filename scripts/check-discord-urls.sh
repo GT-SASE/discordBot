@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
 # Fails if a tracked file outside the Discord client and tests names a Discord
-# host. ESLint covers the same ground for code, in more depth, but does not read
-# shell scripts, workflows or other files.
+# host, so that only src/discord/client.ts sends to Discord.
 #
 # The excluded shell scripts hold canaries for the secret rules, built to look
 # like real Discord URLs.

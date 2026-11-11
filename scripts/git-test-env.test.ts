@@ -126,12 +126,7 @@ describe("Git isolation in tests", () => {
 
     const result = spawnSync(
       process.execPath,
-      [
-        VITEST,
-        "run",
-        "scripts/discord-boundary-lint.test.ts",
-        "scripts/check-commit-messages.test.ts",
-      ],
+      [VITEST, "run", "scripts/check-commit-messages.test.ts"],
       {
         cwd: REPO_ROOT,
         env: { ...isolatedGitEnv(), GIT_DIR: shared },

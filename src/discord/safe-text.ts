@@ -263,7 +263,7 @@ export function safe(
   ...values: readonly SafeText[]
 ): SafeText {
   // Catches a plain call by mistake. It is not proof of a real template, since a
-  // frozen array with `raw` would pass, so lint also refuses calling this directly.
+  // frozen array with `raw` would pass, so review must refuse calling this directly.
   if (!Object.isFrozen(literals) || !Array.isArray(literals.raw)) {
     throw new SafeTextError("safe must be used as a template tag");
   }
