@@ -168,7 +168,7 @@ No system is unhackable, and this one makes no such claim. The aim is to keep th
 **Secrets and supply chain**
 
 - Nothing logs a request body or interaction token. Logs hold fixed text, IDs and error codes.
-- Gitleaks runs in a pre-push hook and in CI, with tested rules. The lockfile is committed and checked by lockfile-lint, install scripts are off, Actions are pinned by SHA, and Dependabot has a 7-day cooldown with no auto-merge.
+- Gitleaks runs in a pre-push hook and in CI, with tested rules. The lockfile is committed and checked by our own script, install scripts are off, Actions are pinned by SHA, and Dependabot has a 7-day cooldown with no auto-merge.
 
 **Backups**
 
@@ -213,7 +213,7 @@ There is no local bot. Discord needs a public HTTPS URL, so tests stand in for i
 | ----------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `npm run typecheck`                                               | Type check                                                                                            | Nothing                                                                                                                                                      |
 | `npm run lint`                                                    | ESLint, and a check that names no Discord host                                                        | Nothing                                                                                                                                                      |
-| `npm run lint:lockfile`                                           | lockfile-lint: every package from the npm registry over HTTPS, by its own name, with a sha512 hash    | Nothing                                                                                                                                                      |
+| `npm run lint:lockfile`                                           | Every package from the npm registry over HTTPS, at its own name and version, with a sha512 hash       | Nothing                                                                                                                                                      |
 | `npm run format:check`                                            | Prettier                                                                                              | Nothing                                                                                                                                                      |
 | `npm test`                                                        | Unit tests                                                                                            | Nothing                                                                                                                                                      |
 | `npm run test:db`                                                 | Migrations, grants and access layer on PGlite                                                         | Nothing                                                                                                                                                      |
