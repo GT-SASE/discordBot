@@ -38,23 +38,12 @@ jobs:
       - run: npm run test:db
 
   concurrency:
-    name: Concurrent writes on Postgres 17
+    name: The bot's role and concurrent writes on Postgres 17
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
-    services:
-      postgres:
-        image: postgres:17@sha256:3b0cda93be7c8dba2ed484d19393d93845dc3dafb88973e248ba8e6d99d784e1
-        env:
-          POSTGRES_HOST_AUTH_METHOD: trust
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U postgres"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 12
+    timeout-minutes: 15
     env:
-      # The tests fail if this is unset or the server is not Postgres 17.
+      # No password in the URL: libpq-style clients and pg read PGPASSWORD instead, which
+      # the first step sets. The tests fail if this is unset or the server is not 17.
       CONCURRENCY_DATABASE_URL: postgres://postgres@localhost:5432/postgres
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -65,4 +54,52 @@ jobs:
           node-version-file: package.json
           cache: npm
       - run: npm ci --ignore-scripts
+      # Started by hand, not as a service, so its passwords are made here and never
+      # written anywhere. Every login, local or not, must give its password.
+      - name: Start Postgres 17 with password logins
+        run: |
+          for name in PGPASSWORD OWNER_PASSWORD BOT_APP_PASSWORD; do
+            value="$(openssl rand -hex 24)"
+            echo "::add-mask::${value}"
+            echo "${name}=${value}" >> "${GITHUB_ENV}"
+            export "${name}=${value}"
+          done
+          docker run -d --name postgres -p 5432:5432 \
+            -e POSTGRES_PASSWORD="${PGPASSWORD}" \
+            -e POSTGRES_INITDB_ARGS=--auth=scram-sha-256 \
+            postgres:17@sha256:3b0cda93be7c8dba2ed484d19393d93845dc3dafb88973e248ba8e6d99d784e1
+          for _ in $(seq 1 30); do
+            if docker exec postgres pg_isready -U postgres -h localhost > /dev/null; then
+              exit 0
+            fi
+            sleep 2
+          done
+          docker logs postgres
+          exit 1
+      # As on Neon: an owner that may create roles and owns its database, but is not a
+      # superuser.
+      - name: Make the owner and its database
+        run: |
+          docker exec -i -e PGPASSWORD postgres \
+            psql -v ON_ERROR_STOP=1 -h localhost -U postgres -v owner_password="${OWNER_PASSWORD}" <<'SQL'
+          CREATE ROLE migration_owner LOGIN NOSUPERUSER CREATEROLE PASSWORD :'owner_password';
+          CREATE DATABASE bot OWNER migration_owner;
+          SQL
+      # The operator's step, run twice to show the second run applies nothing.
+      - name: Apply the migrations as the owner
+        env:
+          DATABASE_URL: postgresql://migration_owner@localhost:5432/bot
+        run: |
+          PGPASSWORD="${OWNER_PASSWORD}" node scripts/migrate.ts
+          PGPASSWORD="${OWNER_PASSWORD}" node scripts/migrate.ts | grep -x "Nothing to apply."
+      # The operator's other step, done once, out of band, as docs/SETUP.md says.
+      - name: Set bot_app's password
+        run: |
+          docker exec -i -e PGPASSWORD postgres \
+            psql -v ON_ERROR_STOP=1 -h localhost -U postgres -d bot -v bot_password="${BOT_APP_PASSWORD}" <<'SQL'
+          ALTER ROLE bot_app PASSWORD :'bot_password';
+          SQL
       - run: npm run test:db:concurrency
+      - name: Show the server's log
+        if: failure()
+        run: docker logs postgres

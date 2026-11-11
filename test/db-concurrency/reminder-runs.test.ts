@@ -1,38 +1,42 @@
 import { describe, expect, it } from "vitest";
+import { claimEventReminder } from "../../src/db/event-steps.ts";
+import { beginJobRun } from "../../src/db/job-runs.ts";
+import { claimReminder } from "../../src/db/reminders.ts";
+import { todayInZone, type DateOnly } from "../../src/lib/dates.ts";
 import { insertEvent, insertGuild, insertTask } from "../db/fixtures.ts";
-import { fakeId } from "../db/harness.ts";
 import { raceDatabase } from "./race.ts";
 
 /**
  * The morning cron and the recovery cron, or a retried invocation, running at once. The
  * job lock keeps the second run out, and each reminder's claim stops a double send if
- * both get past it, as they can once a run's lock has gone stale.
+ * both get past it, as they can once a run's lock has gone stale. Each test names its
+ * own job, since a run left behind by one would hold off the next.
  */
 describe("two overlapping reminder runs", () => {
   const db = raceDatabase();
   const beginSql = "SELECT public.begin_job_run($1, 120) AS id";
 
   it("only one of two starts gets the run", async () => {
-    const begin: [string, unknown[]] = [beginSql, [`race_${fakeId()}`]];
-    const second = await db.race(begin, begin);
-    expect(second.rows).toEqual([{ id: null }]);
+    const second = await db.race([beginSql, ["reminders"]], (bot) =>
+      beginJobRun(bot, { jobName: "reminders", staleAfterSeconds: 120 }),
+    );
+    expect(second).toEqual({ ok: true, value: null });
   });
 
   it("a start waits for a finish in progress, then sees its success", async () => {
-    const jobName = `race_${fakeId()}`;
     const { rows } = await db.observer.query<{ id: string }>(beginSql, [
-      jobName,
+      "health_check",
     ]);
 
     const second = await db.race(
       ["SELECT public.finish_job_run($1, now(), '{}', NULL)", [rows[0]?.id]],
-      [beginSql, [jobName]],
+      (bot) =>
+        beginJobRun(bot, { jobName: "health_check", staleAfterSeconds: 120 }),
     );
 
-    expect(second.rows).toEqual([{ id: null }]);
+    expect(second).toEqual({ ok: true, value: null });
     const statuses = await db.observer.query(
-      "SELECT status FROM public.job_runs WHERE job_name = $1",
-      [jobName],
+      "SELECT status FROM public.job_runs WHERE job_name = 'health_check'",
     );
     expect(statuses.rows).toEqual([{ status: "succeeded" }]);
   });
@@ -41,14 +45,18 @@ describe("two overlapping reminder runs", () => {
     const guild = await insertGuild(db.connection);
     const eventId = await insertEvent(db.connection, guild);
     const taskId = await insertTask(db.connection, guild, eventId);
-    const claim: [string, unknown[]] = [
-      "SELECT public.claim_reminder($1, 'one_day', '2030-01-10') AS token",
-      [taskId],
-    ];
 
-    const second = await db.race(claim, claim);
+    const second = await db.race(
+      ["SELECT public.claim_reminder($1, 'one_day', '2030-01-10')", [taskId]],
+      (bot) =>
+        claimReminder(bot, {
+          taskId,
+          kind: "one_day",
+          dueDate: "2030-01-10" as DateOnly,
+        }),
+    );
 
-    expect(second.rows).toEqual([{ token: null }]);
+    expect(second).toEqual({ ok: true, value: null });
     const { rows } = await db.observer.query(
       "SELECT attempts, state FROM public.reminder_log WHERE task_id = $1",
       [taskId],
@@ -59,14 +67,23 @@ describe("two overlapping reminder runs", () => {
   it("only one of two claims on an event's step reminder gets a token", async () => {
     const guild = await insertGuild(db.connection);
     const eventId = await insertEvent(db.connection, guild);
-    const claim: [string, unknown[]] = [
-      "SELECT public.claim_event_reminder($1, 'daily_steps', '2030-01-15') AS token",
-      [eventId],
-    ];
+    // A step reminder can be claimed only for today or yesterday in the guild's zone.
+    const today = todayInZone(new Date(), "America/New_York");
 
-    const second = await db.race(claim, claim);
+    const second = await db.race(
+      [
+        "SELECT public.claim_event_reminder($1, 'daily_steps', $2)",
+        [eventId, today],
+      ],
+      (bot) =>
+        claimEventReminder(bot, {
+          eventId,
+          kind: "daily_steps",
+          reminderDate: today,
+        }),
+    );
 
-    expect(second.rows).toEqual([{ token: null }]);
+    expect(second).toEqual({ ok: true, value: null });
     const { rows } = await db.observer.query(
       "SELECT count(*)::int AS n FROM public.event_reminder_log WHERE event_id = $1",
       [eventId],

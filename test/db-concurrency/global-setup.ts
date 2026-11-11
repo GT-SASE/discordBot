@@ -11,8 +11,10 @@ import { SERVER_SETUP, migrateAsOwner, pgConnection } from "../db/harness.ts";
  * database of its own, which writes nothing cluster-wide, so the files can run in
  * parallel.
  *
- * Needs CONCURRENCY_DATABASE_URL, pointing at a Postgres 17 superuser connection.
- * A missing or wrong server fails the run: these tests must never skip.
+ * Needs CONCURRENCY_DATABASE_URL, pointing at a Postgres 17 superuser connection, and
+ * BOT_APP_PASSWORD, the password CI gave bot_app once the migrations had made it. The
+ * tests log in as bot_app with it, as the bot does. A missing setting or a wrong server
+ * fails the run: these tests must never skip.
  */
 
 const EXPECTED_MAJOR_VERSION = "17";
@@ -21,6 +23,7 @@ declare module "vitest" {
   export interface ProvidedContext {
     concurrencyAdminUrl: string;
     concurrencyTemplate: string;
+    concurrencyBotPassword: string;
   }
 }
 
@@ -36,6 +39,18 @@ function fail(message: string): never {
 export function urlForDatabase(adminUrl: string, name: string): string {
   const url = new URL(adminUrl);
   url.pathname = `/${name}`;
+  return url.toString();
+}
+
+/** The same server and database, logged in as bot_app with its password. */
+export function botUrlForDatabase(
+  adminUrl: string,
+  name: string,
+  password: string,
+): string {
+  const url = new URL(urlForDatabase(adminUrl, name));
+  url.username = "bot_app";
+  url.password = password;
   return url.toString();
 }
 
@@ -60,6 +75,10 @@ export default async function setup(
     fail(
       "CONCURRENCY_DATABASE_URL is not set, so the concurrency tests cannot run",
     );
+  }
+  const botPassword = process.env.BOT_APP_PASSWORD;
+  if (!botPassword) {
+    fail("BOT_APP_PASSWORD is not set, so the tests cannot log in as bot_app");
   }
   const template = `concurrency_template_${randomBytes(6).toString("hex")}`;
 
@@ -96,7 +115,22 @@ export default async function setup(
     throw error;
   }
 
+  // A wrong password, or a server that does not ask for one, should fail here and not
+  // in every file.
+  await withClient(
+    botUrlForDatabase(adminUrl, template, botPassword),
+    async (bot) => {
+      const { rows } = await bot.query<{ user: string }>(
+        "SELECT current_user AS user",
+      );
+      if (rows[0]?.user !== "bot_app") {
+        fail("logging in with BOT_APP_PASSWORD did not give bot_app");
+      }
+    },
+  );
+
   project.provide("concurrencyAdminUrl", adminUrl);
+  project.provide("concurrencyBotPassword", botPassword);
   project.provide("concurrencyTemplate", template);
   return dropTemplate;
 }
