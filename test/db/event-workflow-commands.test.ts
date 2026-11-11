@@ -16,6 +16,7 @@ import type { AssignableStepKind } from "../../src/db/types.ts";
 import { eventWorld, inThread } from "../support/event-world.ts";
 import {
   ADMIN_ROLE,
+  ADMINISTRATOR,
   commandPayload,
   componentPayload,
   GUILD_ID,
@@ -33,6 +34,7 @@ const MARKETING_ROLE = testSnowflake();
 const CREATOR = testSnowflake();
 const REFUSAL = "You can't do that, or it doesn't exist.";
 const SUPPRESS_EMBEDS = 4;
+const EVERY_PERMISSION = String((1n << 50n) - 1n);
 const MESSAGE_EDIT = /^\/channels\/[0-9]+\/messages\/[0-9]+$/;
 
 const officer = (id = testSnowflake()) => member({ id, roles: [OFFICER_ROLE] });
@@ -577,6 +579,212 @@ describe("the overview's buttons", () => {
     ]);
   });
 
+  it("draws again when another step is done while its overview edit is on its way", async () => {
+    const event = await seed();
+    world.allowPings({ roles: [TREASURY_ROLE, MARKETING_ROLE] });
+    const editPath = `/channels/${event.threadId}/messages/${event.overviewId}`;
+    let raced = false;
+    world.discord.onRequest = async (method, path) => {
+      if (!raced && method === "PATCH" && path === editPath) {
+        raced = true;
+        await completeEventStep(world.db, {
+          guildId: GUILD_ID,
+          eventId: event.id,
+          kind: "engage_post",
+          actorId: testSnowflake(),
+        });
+      }
+    };
+
+    await world.send(click("event.sheet-done", event, officer()));
+
+    const edits = world.discord.requests.filter(
+      (request) => request.method === "PATCH" && request.path === editPath,
+    );
+    expect(edits).toHaveLength(2);
+    expect(buttonIds(edits[0]?.body)).toContain(
+      `event.engage-done:${event.id}`,
+    );
+    expect(buttonIds(lastOverviewEdit(event)?.body)).toEqual([
+      `event.budget-ok:${event.id}`,
+    ]);
+  });
+
+  it("draws again when a task changes while its overview edit is on its way", async () => {
+    const event = await seed();
+    world.allowPings({ roles: [TREASURY_ROLE] });
+    const editPath = `/channels/${event.threadId}/messages/${event.overviewId}`;
+    let raced = false;
+    world.discord.onRequest = async (method, path) => {
+      if (!raced && method === "PATCH" && path === editPath) {
+        raced = true;
+        await world.insertTask(event.id, { description: "Book the hall" });
+      }
+    };
+
+    await world.send(click("event.sheet-done", event, officer()));
+
+    const edits = world.discord.requests.filter(
+      (request) => request.method === "PATCH" && request.path === editPath,
+    );
+    expect(edits).toHaveLength(2);
+    expect(edits[0]?.body?.content).not.toContain("Book the hall");
+    expect(lastOverviewEdit(event)?.body?.content).toContain("Book the hall");
+  });
+
+  it("keeps an active event's buttons when its workflow can't be read for the overview", async () => {
+    const event = await seed();
+    world.failDb(/^SQL select "id", "pickup_time", coalesce\(/);
+
+    await world.send(click("event.budget-ok", event, eboard()));
+
+    const edit = lastOverviewEdit(event);
+    expect(edit?.body).toBeDefined();
+    expect(edit?.body).not.toHaveProperty("components");
+  });
+
+  it("redraws a stale overview when its button for a done step is clicked", async () => {
+    const event = await seed();
+    world.allowPings({ roles: [TREASURY_ROLE] });
+    await completeEventStep(world.db, {
+      guildId: GUILD_ID,
+      eventId: event.id,
+      kind: "budget_sheet",
+      actorId: testSnowflake(),
+    });
+
+    await world.send(click("event.sheet-done", event, officer()));
+
+    expect(world.discord.lastReply()).toContain("is already done");
+    const edit = lastOverviewEdit(event);
+    expect(edit?.body?.content).toContain("✅ Budget Sheet");
+    expect(buttonIds(edit?.body)).not.toContain(`event.sheet-done:${event.id}`);
+  });
+
+  it("sends the ping a crash left unclaimed on the next click, and only once", async () => {
+    const event = await seed();
+    world.allowPings({ roles: [TREASURY_ROLE] });
+    // Done, as by a click that stopped before it claimed the ping.
+    await completeEventStep(world.db, {
+      guildId: GUILD_ID,
+      eventId: event.id,
+      kind: "budget_sheet",
+      actorId: testSnowflake(),
+    });
+
+    await world.send(click("event.sheet-done", event, officer()));
+    await world.send(click("event.sheet-done", event, officer()));
+
+    expect(postedIn(event).map((post) => post.body?.content)).toEqual([
+      `<@&${TREASURY_ROLE}> Budget Sheet for **Fall Social** is done.`,
+    ]);
+    expect((await steps(event.id)).budget_sheet?.handoff_sent).toBe(true);
+  });
+
+  it("leaves the ping unclaimed while the forum is not managed", async () => {
+    const event = await seed();
+    await world.setForumStatus(event.forum, "removed");
+
+    await world.send(click("event.sheet-done", event, officer()));
+
+    expect((await steps(event.id)).budget_sheet?.status).toBe("done");
+    const { rows } = await world.pg.query<{ claimed: boolean }>(
+      `SELECT handoff_claimed_at IS NOT NULL AS claimed FROM public.event_steps
+       WHERE event_id = $1 AND kind = 'budget_sheet'`,
+      [event.id],
+    );
+    expect(rows[0]?.claimed).toBe(false);
+    expect(postedIn(event)).toEqual([]);
+    expect(world.discord.lastReply()).toContain("added back with /config");
+    expect(world.discord.lastReply()).not.toContain("/event link");
+  });
+
+  it("sends the ping it owes once /config adds the forum back", async () => {
+    const event = await seed();
+    world.allowPings({ roles: [TREASURY_ROLE] });
+    await world.setForumStatus(event.forum, "removed");
+    await world.send(click("event.sheet-done", event, officer()));
+    expect(postedIn(event)).toEqual([]);
+
+    const { rows } = await world.pg.query<{ version: number }>(
+      `SELECT version FROM public.guild_config WHERE guild_id = $1`,
+      [GUILD_ID],
+    );
+    await world.send(
+      componentPayload(
+        `config.add:${String(rows[0]?.version)}`,
+        { member: ADMINISTRATOR, app_permissions: "0" },
+        {
+          component_type: 8,
+          values: [event.forum],
+          resolved: {
+            channels: {
+              [event.forum]: {
+                id: event.forum,
+                type: 15,
+                guild_id: GUILD_ID,
+                app_permissions: EVERY_PERMISSION,
+              },
+            },
+          },
+        },
+      ),
+    );
+
+    expect(postedIn(event).map((post) => post.body?.content)).toEqual([
+      `<@&${TREASURY_ROLE}> Budget Sheet for **Fall Social** is done.`,
+    ]);
+    expect((await steps(event.id)).budget_sheet?.handoff_sent).toBe(true);
+  });
+
+  it("does not ping Treasury late for a sheet whose budget is already approved", async () => {
+    const event = await seed();
+    world.allowPings({ roles: [TREASURY_ROLE] });
+    await world.setForumStatus(event.forum, "removed");
+    await world.send(click("event.sheet-done", event, officer()));
+    await approve(event);
+    await world.setForumStatus(event.forum, "active");
+
+    await world.send(click("event.sheet-done", event, officer()));
+
+    expect(postedIn(event)).toEqual([]);
+    expect(world.discord.lastReply()).toContain("is already done");
+  });
+
+  it("keeps the ping for a post that is gone, and sends it after /event link", async () => {
+    const event = await seed();
+    world.allowPings({ roles: [TREASURY_ROLE] });
+    await world.pg.query(
+      `UPDATE public.events SET thread_status = 'missing' WHERE id = $1`,
+      [event.id],
+    );
+
+    await world.send(click("event.sheet-done", event, officer()));
+
+    expect((await steps(event.id)).budget_sheet).toMatchObject({
+      status: "done",
+      handoff_sent: false,
+    });
+    expect(world.discord.lastReply()).toContain("nobody was told yet");
+    expect(postedIn(event)).toEqual([]);
+
+    await world.send(
+      command(
+        "link",
+        { event: event.id },
+        {},
+        officer(),
+        inThread(event.threadId, event.forum),
+      ),
+    );
+
+    expect(world.discord.lastReply()).toContain("Linked this post");
+    expect(postedIn(event).map((post) => post.body?.content)).toEqual([
+      `<@&${TREASURY_ROLE}> Budget Sheet for **Fall Social** is done.`,
+    ]);
+    expect((await steps(event.id)).budget_sheet?.handoff_sent).toBe(true);
+  });
+
   it("loses the ping rather than sending it twice when the post can't be reached", async () => {
     const event = await seed();
     const path = `/channels/${event.threadId}/messages`;
@@ -657,12 +865,14 @@ describe("the overview's buttons", () => {
     expect((await steps(event.id)).budget_approved?.status).toBe("open");
   });
 
-  it("lets Treasury approve, and asks the creator once to set up food pickup", async () => {
+  it("lets Treasury approve, and says so once in the post without a ping", async () => {
     const event = await seed();
     const approver = testSnowflake();
-    world.allowPings({ users: [CREATOR] });
 
     await world.send(click("event.budget-ok", event, treasurer(approver)));
+    expect(world.discord.lastReply()).toContain(
+      "I said so in the event's post.",
+    );
     await world.send(click("event.budget-ok", event, treasurer()));
 
     expect((await steps(event.id)).budget_approved).toMatchObject({
@@ -672,8 +882,8 @@ describe("the overview's buttons", () => {
     const pings = postedIn(event);
     expect(pings).toHaveLength(1);
     expect(pings[0]?.body).toMatchObject({
-      content: `<@${CREATOR}> The budget for **Fall Social** is approved. Set up food pickup with /event pickup and /event assign step:Food pickup.`,
-      allowed_mentions: { parse: [], users: [CREATOR] },
+      content: "The budget for **Fall Social** is approved.",
+      allowed_mentions: { parse: [], users: [] },
     });
     const edit = lastOverviewEdit(event);
     expect(edit?.body?.content).toContain(
@@ -684,10 +894,7 @@ describe("the overview's buttons", () => {
 
   it("removes the button row once every step with a button is done", async () => {
     const event = await seed();
-    world.allowPings({
-      users: [CREATOR],
-      roles: [TREASURY_ROLE, MARKETING_ROLE],
-    });
+    world.allowPings({ roles: [TREASURY_ROLE, MARKETING_ROLE] });
 
     for (const prefix of [
       "event.sheet-done",
@@ -746,6 +953,26 @@ describe("/mytasks", () => {
     expect(reply).toContain(
       "- Food pickup for **Fall Social** on 2099\\-02\\-02, time not set yet",
     );
+  });
+
+  it("lists upcoming events soonest first, then labels steps left open on past ones", async () => {
+    const person = testSnowflake();
+    const past = await seed({ date: "2001-05-05" });
+    const later = await seed({ date: "2099-03-03" });
+    const sooner = await seed({ date: "2099-02-02" });
+    for (const event of [past, later, sooner]) {
+      await assign(event, "budget_sheet", person);
+    }
+
+    await world.send(commandPayload("mytasks", { member: plain(person) }));
+
+    const reply = world.discord.lastReply() ?? "";
+    const lines = reply.split("\n").filter((line) => line.startsWith("- "));
+    expect(lines).toEqual([
+      "- Budget Sheet for **Fall Social** on 2099\\-02\\-02",
+      "- Budget Sheet for **Fall Social** on 2099\\-03\\-03",
+      "- Budget Sheet for **Fall Social** on 2001\\-05\\-05, still open though the event has passed",
+    ]);
   });
 
   it("still says there is nothing when a member has no tasks or steps", async () => {

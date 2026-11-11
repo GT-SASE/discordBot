@@ -95,7 +95,7 @@ const STALE = new Date(NOW.getTime() - STALE_CLAIM_MS - 1);
 const FRESH = new Date(NOW.getTime() - 60_000);
 
 describe("openSteps", () => {
-  it("lists every step but Food pickup while the budget is not approved", () => {
+  it("lists Budget Sheet, Engage post and Budget approved while they are open", () => {
     expect(openSteps(candidate())).toEqual([
       { kind: "budget_sheet", assigneeIds: [] },
       { kind: "engage_post", assigneeIds: [] },
@@ -118,18 +118,18 @@ describe("openSteps", () => {
     ]);
   });
 
-  it("asks the creator for Food pickup once the budget is approved", () => {
+  it("never lists Food pickup, set up or not", () => {
     expect(
       openSteps(
         candidate({}, ["budget_sheet", "engage_post", "budget_approved"]),
       ),
-    ).toEqual([{ kind: "food_pickup", creatorId: CREATOR }]);
+    ).toEqual([]);
   });
 
   it("keeps listing Budget Sheet after approval if it is still open", () => {
     expect(
       openSteps(candidate({}, ["budget_approved"])).map((step) => step.kind),
-    ).toEqual(["budget_sheet", "engage_post", "food_pickup"]);
+    ).toEqual(["budget_sheet", "engage_post"]);
   });
 
   it("is empty when everything is done", () => {
@@ -158,6 +158,19 @@ describe("kindsDueToday", () => {
     expect(kindsDueToday(pickupReady(eventDate), TODAY)).toEqual(kinds);
   });
 
+  it("gives no step list when only Food pickup is open", () => {
+    expect(
+      kindsDueToday(
+        candidate({ event_date: date("2026-11-15") }, [
+          "budget_sheet",
+          "engage_post",
+          "budget_approved",
+        ]),
+        TODAY,
+      ),
+    ).toEqual([]);
+  });
+
   it("gives the step list while anything is open, up to the event's day", () => {
     expect(
       kindsDueToday(candidate({ event_date: date("2026-11-15") }), TODAY),
@@ -167,7 +180,7 @@ describe("kindsDueToday", () => {
     ).toEqual([]);
   });
 
-  it("gives no pickup reminder before the budget is approved", () => {
+  it("gives no pickup reminder until Food pickup is set up", () => {
     expect(
       kindsDueToday(candidate({ event_date: date("2026-11-17") }), TODAY),
     ).toEqual(["daily_steps"]);

@@ -63,6 +63,7 @@ import {
 import { countOpenTasksInChannel } from "../db/tasks.ts";
 import type { ConfigChange, GuildConfig, ManagedChannel } from "../db/types.ts";
 import { refreshOverview } from "../events/overview.ts";
+import { retryHandoffs } from "../events/workflow.ts";
 import { isSnowflake } from "../lib/snowflake.ts";
 import {
   ADMIN_LABEL,
@@ -470,7 +471,8 @@ async function applyChange(
 /**
  * What changed while a forum was removed never reached its posts, and a closed event has
  * no later change to bring its post up to date. So re-adding redraws the most recently
- * changed posts, and says how far it got. The forum is already added and stays added.
+ * changed posts, sends the hand-offs their active events are owed, and says how far it
+ * got. The forum is already added and stays added.
  */
 async function refreshForumPosts(
   ctx: FinishContext,
@@ -502,6 +504,10 @@ async function refreshForumPosts(
     }
     if (await refreshOverview(ctx, event)) {
       updated += 1;
+    }
+    // A step finished while the forum was removed told nobody, and is owed it now.
+    if (event.status === "active") {
+      await retryHandoffs(ctx, event);
     }
   }
   const missed = rows.length + excluded.length - updated;

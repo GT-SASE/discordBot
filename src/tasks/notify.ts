@@ -120,9 +120,9 @@ async function canViewForum(
 }
 
 /**
- * A warning for the officer when this task's reminders won't reach the person. The task
- * stays either way, and a check that can't finish stays silent: it is advice, and must
- * not turn a saved task into a failed reply.
+ * A warning for the officer when the reminders for this task, or for this event step,
+ * won't reach the person. The assignment stays either way, and a check that can't finish
+ * stays silent: it is advice, and must not turn a saved change into a failed reply.
  *
  * A notice that was posted has just passed the client's check on this forum, so the
  * forum's row is only read again when it was not.
@@ -132,6 +132,7 @@ export async function reachWarning(
   event: EventRow,
   assigneeId: string,
   notice: NoticeOutcome,
+  subject: "task" | "step" = "task",
 ): Promise<SafeText | undefined> {
   const person = userMention(assigneeId);
   try {
@@ -143,10 +144,14 @@ export async function reachWarning(
             channelId: event.channel_id,
           });
     if (forum?.ok === true && forum.value?.status !== "active") {
-      return safe`This event's forum is no longer managed, so reminders for this task are off until an admin adds the forum back with /config.`;
+      return subject === "task"
+        ? safe`This event's forum is no longer managed, so reminders for this task are off until an admin adds the forum back with /config.`
+        : safe`This event's forum is no longer managed, so reminders for this step are off until an admin adds the forum back with /config.`;
     }
     if ((await canViewForum(ctx, event, assigneeId)) === false) {
-      return safe`${person} can't view this event's forum, going by its permissions, so they can't open the post, its reminders or its Mark done button. They can still see the task in /mytasks. Give them access, or assign someone who has it.`;
+      return subject === "task"
+        ? safe`${person} can't view this event's forum, going by its permissions, so they can't open the post, its reminders or its Mark done button. They can still see the task in /mytasks. Give them access, or assign someone who has it.`
+        : safe`${person} can't view this event's forum, going by its permissions, so they can't open the post, its reminders or its buttons. They can still see the step in /mytasks. Give them access, or assign someone who has it.`;
     }
   } catch (error) {
     console.error(

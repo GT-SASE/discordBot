@@ -132,10 +132,12 @@ describe("/task assign in an event's post", () => {
       .dbRequests()
       .filter((line) => line.includes("managed_channels"));
     expect(forumChecks).toHaveLength(2);
-    // Before: 9 Discord requests and 13 database requests.
+    // Before: 9 Discord requests and 13 database requests. One read each of the event,
+    // its tasks and its workflow after the overview edit checks that nothing it shows
+    // changed while it was drawn.
     expect({
       discord: discord.length,
       db: world.dbRequests().length,
-    }).toEqual({ discord: 7, db: 10 });
+    }).toEqual({ discord: 7, db: 12 });
   });
 });

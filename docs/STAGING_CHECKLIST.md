@@ -221,7 +221,7 @@ Use this as a task description. Replace the placeholders with real IDs copied fr
 
 - [ ] **Removing a forum stops its posts.**
   - Do: add a task due tomorrow, with the slot open. Remove the forum in `/config`, run the cron by hand and try `/task assign` there. Change a task on one of its events. Then add the forum again.
-  - Success: the panel warns with the open-task count, a new `succeeded` row appears, and no posts appear. `/task assign` keeps the task and warns that reminders are off until the forum is added back. `/mytasks` still lists the task. Adding it back says how many event posts were brought up to date, and the changed overview is current. It redraws the 10 most recently changed posts and says so if it could not reach them all. Reminders do not restart in a slot that has already succeeded. They resume with the next slot's run, so check that a day later.
+  - Success: the panel warns with the open-task count, a new `succeeded` row appears, and no posts appear. `/task assign` keeps the task and warns that reminders are off until the forum is added back. `/mytasks` still lists the task. Adding it back says how many event posts were brought up to date, and the changed overview is current. A step marked done while the forum was removed sends its ping in the post once the forum is added back, unless Budget approved is already done for a Budget Sheet. It redraws the 10 most recently changed posts and says so if it could not reach them all. Reminders do not restart in a slot that has already succeeded. They resume with the next slot's run, so check that a day later.
   - If it fails: check `assertManaged` in `src/discord/client.ts`, and `refreshForumPosts` in `src/handlers/config.ts`.
 
 - [ ] **A deleted channel and post are handled.**
@@ -281,7 +281,7 @@ These need the Treasury Committee and Marketing Committee roles chosen in `/setu
 
 - [ ] **Buttons on the overview obey the rules.** The overview is a post's first message, and buttons there have only been tried on the stand-in.
   - Do: as the member, who is on no step, click **Engage post done** and **Budget approved**. As a Treasury Committee member, click **Budget approved**. As a Marketing Committee member, click it on another event.
-  - Success: the member gets the fixed refusal privately for both, and the post does not change. Treasury approves, and the event's creator is pinged once with the `/event pickup` hint. Marketing is refused. Each done step loses its button, and the row goes once all three are done.
+  - Success: the member gets the fixed refusal privately for both, and the post does not change. Treasury approves, and the post gets one note that the budget is approved, which pings nobody. Marketing is refused. Each done step loses its button, and the row goes once all three are done.
   - If it fails: check `markStep` in `src/events/workflow.ts`. A click that changes the post for others is a bug.
 
 - [ ] **The checklist pings nobody.**
@@ -289,10 +289,20 @@ These need the Treasury Committee and Marketing Committee roles chosen in `/setu
   - Success: the checklist shows the member's name on each line and the time as `5:30 PM`, with no stray backslash, and the member gets no notification from the overview.
   - If it fails: check `renderOverview` in `src/events/overview.ts`, whose `mentionUserIds` must stay empty.
 
-- [ ] **Food pickup waits for the budget.**
-  - Do: on a new event, run `/event pickup time:5:30 PM` and `/event assign step:Food pickup`.
-  - Success: both are refused with `Food pickup can only be set up once the budget is approved.`, and nothing changes.
-  - If it fails: check `NOT_APPROVED` and its callers in `src/events/workflow.ts`. The database no longer enforces this, so the bot's own check is the only one.
+- [ ] **Food pickup can be set up at any time.**
+  - Do: on a new event, before the budget is approved, run `/event pickup time:5:30 PM` and `/event assign step:Food pickup`.
+  - Success: both work, and the overview shows Food pickup ticked with the time and the person.
+  - If it fails: check `pickup` and `assign` in `src/events/workflow.ts`. Nothing in the bot or the database waits for the budget.
+
+- [ ] **Two Done clicks at once leave the overview right.**
+  - Do: have two people click **Budget Sheet done** and **Engage post done** within a second of each other. Then click a button for a step that is already done, on an overview that still shows it.
+  - Success: the overview ends with both steps ticked and only **Budget approved** left. The click on the stale button says it is already done and redraws the overview without that button.
+  - If it fails: check `refresh` in `src/events/overview.ts`, which reads the workflow again after each edit and draws again if it changed.
+
+- [ ] **Assigning someone who can't see the forum.**
+  - Do: `/event assign` a member whose roles can't view the event's forum.
+  - Success: the step is assigned, and the reply warns that they can't view the forum, as `/task assign` does.
+  - If it fails: check `reachWarning` in `src/tasks/notify.ts`.
 
 - [ ] **The step option's choices show on desktop and mobile.**
   - Do: start typing `/event assign` on both.
@@ -610,11 +620,11 @@ Read [Running the cron by hand](#running-the-cron-by-hand) first. Each item here
 
 - [ ] **The daily step list.**
   - Do: make three events dated a few days ahead, after `/setup` has chosen the Events Directors role. On the first, assign one person to Budget Sheet and nobody to Engage post. On the second, mark Budget Sheet and Engage post done and approve the budget, and set up nothing for Food pickup. On the third, finish every step and set up Food pickup. Let the morning run go.
-  - Success: the first post gets one message that pings the Budget Sheet person and the Events Directors role, and lists Budget approved without a ping. The second gets one message that pings the event's creator about Food pickup. The third gets nothing. Role holders are notified, and no one else is. The `reminders` row has `event_reminders_sent: 2`. A second by-hand run in the same slot sends nothing.
+  - Success: the first post gets one message that pings the Budget Sheet person and the Events Directors role, and lists Budget approved without a ping. The second and third get nothing, and no list mentions Food pickup. Role holders are notified, and no one else is. The `reminders` row has `event_reminders_sent: 1`. A second by-hand run in the same slot sends nothing.
   - If it fails: a role holder who was not notified means the role ping was dropped, so check `allowed_mentions.roles` in Logs and `mentionRoleIds` in `src/reminders/event-render.ts`. A message for the third event needs a fix in `src/reminders/event-plan.ts`.
 
 - [ ] **Food pickup reminders on the right days.**
-  - Do: approve the budget on an event three days ahead, put two people on Food pickup, and set the time to `5:30 PM`. Let a run go on each of the next four days.
+  - Do: on an event three days ahead, whether or not its budget is approved, put two people on Food pickup and set the time to `5:30 PM`. Let a run go on each of the next four days.
   - Success: nothing about pickup three days before or the day before. Two days before and on the day, one message pings both people and shows `5:30 PM`, with the day. The day after, nothing at all. In `event_reminder_log` there is one `pickup_two_days` and one `pickup_day` row, both `sent`.
 
     ```sql

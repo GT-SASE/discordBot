@@ -19,11 +19,6 @@ export type DbErrorCategory =
   | "event_task_limit"
   /** This officer has created as many tasks as they may for now. */
   | "actor_task_limit"
-  /**
-   * Nothing raises this since Food pickup stopped waiting for the budget. It stays only
-   * while the handlers still name it, until they are changed to match.
-   */
-  | "step_not_ready"
   /** The step already has as many people as it may. */
   | "step_assignee_limit"
   | "conflict"

@@ -151,8 +151,11 @@ describe("renderOverview with the event's workflow", () => {
     expect(input.components).toEqual([]);
   });
 
-  it("leaves the components alone without a workflow", () => {
-    expect(renderOverview(eventRow(), NO_TASKS).components).toBeUndefined();
+  it("takes every button away when the workflow could not be read", () => {
+    expect(renderOverview(eventRow(), NO_TASKS).components).toEqual([]);
+    expect(
+      renderOverview(eventRow({ status: "closed" }), NO_TASKS).components,
+    ).toEqual([]);
   });
 });
 

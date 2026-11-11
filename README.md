@@ -23,8 +23,8 @@ The bot then reminds the person 3 days before, 1 day before, on the due day and 
 
 Each event's workflow steps get reminders in the event's post from the same daily run:
 
-- **Step list**, once a day up to and including the event's day, while any step is open. Budget Sheet and Engage post ping the people on them, or the Events Directors role if nobody is. Budget approved is listed without a ping. Once the budget is approved, Food pickup that has no time or nobody on it pings the event's creator. Nothing is sent when every step is done.
-- **Food pickup**, two days before the event and on the day, pinging everyone on Food pickup with the time, such as `5:30 PM`. These need Food pickup set up, which needs the budget approved first.
+- **Step list**, once a day up to and including the event's day, while any step is open. Budget Sheet and Engage post ping the people on them, or the Events Directors role if nobody is. Budget approved is listed without a ping. Food pickup is never on this list. Nothing is sent once Budget Sheet, Engage post and Budget approved are all done.
+- **Food pickup**, two days before the event and on the day, pinging everyone on Food pickup with the time, such as `5:30 PM`. These need Food pickup set up, which can be done at any time, before or after the budget is approved.
 
 None of these go out late: a day's message is sent on that day or not at all.
 
@@ -46,7 +46,7 @@ Checklist
 [Engage post done] [Budget approved]
 ```
 
-When Budget Sheet is marked done, the bot pings the Treasury Committee role once in the post. When the Engage post is marked done, it pings the Marketing Committee role. An officer or the Treasury Committee marks the budget approved, and the bot then asks the event's creator to set up food pickup: a time with `/event pickup`, and people with `/event assign step:Food pickup`. `/mytasks` lists your open steps and food pickups too.
+When Budget Sheet is marked done, the bot pings the Treasury Committee role once in the post. When the Engage post is marked done, it pings the Marketing Committee role. An officer or the Treasury Committee marks the budget approved, and the bot notes in the post that the budget is approved, without pinging anyone. Food pickup can be set up at any time: a time with `/event pickup`, and people with `/event assign step:Food pickup`. `/mytasks` lists your open steps and food pickups too, upcoming events soonest first, then any step still open on an event that has passed.
 
 The names, dates and ID above are made up.
 
@@ -117,14 +117,14 @@ Tiers come from the signed request each time, and nothing is cached. Every comma
 
 The event's steps have their own commands and buttons:
 
-| Command or button                           | Who can use it                         | What it does                                                 |
-| ------------------------------------------- | -------------------------------------- | ------------------------------------------------------------ |
-| `/event create` `budget:` `engage:`         | Officer                                | Puts one person each on Budget Sheet and Engage post.        |
-| `/event assign`                             | Officer                                | Puts someone on Budget Sheet, Engage post or Food pickup.    |
-| `/event unassign`                           | Officer                                | Takes someone off one of an event's steps.                   |
-| `/event pickup`                             | Officer                                | Sets the food pickup time, once the budget is approved.      |
-| **Budget Sheet done**, **Engage post done** | The people on that step, or an officer | Ticks the step and pings Treasury or Marketing once.         |
-| **Budget approved**                         | Officer or Treasury Committee          | Ticks the step and asks the event's creator for food pickup. |
+| Command or button                           | Who can use it                         | What it does                                              |
+| ------------------------------------------- | -------------------------------------- | --------------------------------------------------------- |
+| `/event create` `budget:` `engage:`         | Officer                                | Puts one person each on Budget Sheet and Engage post.     |
+| `/event assign`                             | Officer                                | Puts someone on Budget Sheet, Engage post or Food pickup. |
+| `/event unassign`                           | Officer                                | Takes someone off one of an event's steps.                |
+| `/event pickup`                             | Officer                                | Sets the food pickup time.                                |
+| **Budget Sheet done**, **Engage post done** | The people on that step, or an officer | Ticks the step and pings Treasury or Marketing once.      |
+| **Budget approved**                         | Officer or Treasury Committee          | Ticks the step and notes it in the post, pinging nobody.  |
 
 The buttons are on the event's overview. Anyone else who clicks one gets the refusal privately, and the post stays as it is. Food pickup is done once it has a time and at least one person.
 

@@ -15,7 +15,9 @@ import type {
 import { setEventThread } from "../../src/db/events.ts";
 import { createRouter } from "../../src/handlers/router.ts";
 import { handler } from "../../src/handlers/task.ts";
+import { handler as eventHandler } from "../../src/handlers/event.ts";
 import {
+  commandPayload,
   componentPayload,
   dependenciesFor,
   GUILD_ID,
@@ -223,6 +225,39 @@ describe("what an officer is told after a task change", () => {
       );
 
       expect(getGuildRoles).not.toHaveBeenCalled();
+    });
+
+    it("warns the officer when someone is put on an event step", async () => {
+      const person = testSnowflake();
+      const { eventId } = await eventWithPost();
+      const { client, edits } = privateForum();
+
+      await run(
+        createRouter([eventHandler]),
+        commandPayload(
+          "event",
+          { member: officer() },
+          {
+            options: [
+              {
+                name: "assign",
+                type: OPTION.subcommand,
+                options: [
+                  ...stringOptions({ step: "budget_sheet", event: eventId }),
+                  { name: "user", type: OPTION.user, value: person },
+                ],
+              },
+            ],
+            resolved: resolvedHuman(person),
+          },
+        ),
+        dependenciesFor(world.db(), client),
+      );
+
+      const reply = edits[0]?.content ?? "";
+      expect(reply).toContain(`Put <@${person}> on Budget Sheet`);
+      expect(reply).toContain(`<@${person}> can't view this event's forum`);
+      expect(reply).toContain("see the step in /mytasks");
     });
 
     it("stays quiet for someone a role lets in", async () => {

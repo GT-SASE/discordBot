@@ -19,9 +19,7 @@ export type OpenStep =
       /** Empty when nobody is on the step, and the Events Directors role is asked instead. */
       readonly assigneeIds: readonly string[];
     }
-  | { readonly kind: "budget_approved" }
-  /** Budget approved, but no pickup time or nobody on it: the event's creator is asked. */
-  | { readonly kind: "food_pickup"; readonly creatorId: string };
+  | { readonly kind: "budget_approved" };
 
 export interface EventReminderRef {
   readonly eventId: string;
@@ -71,8 +69,8 @@ function assigneesOf(event: EventReminderCandidate, kind: string): string[] {
 }
 
 /**
- * The event's unfinished steps, in the club's order. Food pickup is only listed once the
- * budget is approved, since it cannot be set up before. Empty when everything is done.
+ * The event's unfinished steps, in the club's order. Food pickup is never listed: it has
+ * its own reminders once it is set up. Empty when everything else is done.
  */
 export function openSteps(event: EventReminderCandidate): OpenStep[] {
   const steps: OpenStep[] = [];
@@ -83,8 +81,6 @@ export function openSteps(event: EventReminderCandidate): OpenStep[] {
   }
   if (!stepDone(event, "budget_approved")) {
     steps.push({ kind: "budget_approved" });
-  } else if (!stepDone(event, "food_pickup")) {
-    steps.push({ kind: "food_pickup", creatorId: event.created_by });
   }
   return steps;
 }

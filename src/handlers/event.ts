@@ -103,6 +103,7 @@ import {
   assignStartingOwners,
   assignSubcommand,
   pickupSubcommand,
+  retryHandoffs,
   STARTING_OWNER_OPTIONS,
   startingOwners,
   unassignSubcommand,
@@ -925,7 +926,9 @@ async function relinkOwnPost(
   }
   const relinked = valueOf(row);
   const linked = linkedText(relinked, true);
-  return (await refreshOverview(ctx, relinked))
+  const current = await refreshOverview(ctx, relinked);
+  await retryHandoffs(ctx, relinked);
+  return current
     ? message(linked)
     : message(safe`${linked} ${OVERVIEW_BEHIND}`);
 }
@@ -997,8 +1000,22 @@ async function linkChosen(
   });
 }
 
-/** The post is now the event's. What is left is an overview for it. */
+/**
+ * The post is now the event's. What is left is an overview for it, and any hand-off a
+ * done step is still owed because it had no post to go to.
+ */
 async function settleOverview(
+  ctx: FinishContext,
+  event: EventRow,
+  thread: ChannelSummary,
+  how: { adopted: boolean; recovered: boolean },
+): Promise<MessageInput> {
+  const reply = await settleOverviewOnly(ctx, event, thread, how);
+  await retryHandoffs(ctx, event);
+  return reply;
+}
+
+async function settleOverviewOnly(
   ctx: FinishContext,
   event: EventRow,
   thread: ChannelSummary,

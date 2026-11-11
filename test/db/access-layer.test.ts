@@ -3493,11 +3493,52 @@ describe("the event workflow against the real schema", () => {
     expect(
       list.rows.map((row) => [row.event_id, row.kind, row.step_status]),
     ).toEqual([
-      [past, "budget_sheet", "open"],
       [upcoming, "budget_sheet", "open"],
       [upcoming, "food_pickup", "open"],
+      [past, "budget_sheet", "open"],
     ]);
-    expect(list.rows[0]?.event_name).toBe("Workflow");
+    expect(list.rows[2]?.event_name).toBe("Workflow");
+  });
+
+  it("keeps the soonest upcoming steps for /mytasks when a member has too many", async () => {
+    const user = fakeId();
+    const today = date("2030-01-10");
+    // Older assignments on past events, more than the list holds, then two upcoming.
+    for (let index = 0; index < 101; index++) {
+      const past = await datedEvent("2029-12-01");
+      unwrap(await assign(past, "budget_sheet", user));
+    }
+    const done = await datedEvent("2030-01-11");
+    unwrap(await assign(done, "engage_post", user));
+    unwrap(
+      await completeEventStep(db, {
+        ...key(done),
+        kind: "engage_post",
+        actorId: user,
+      }),
+    );
+    const later = await datedEvent("2030-02-01");
+    unwrap(await assign(later, "food_pickup", user));
+    const sooner = await datedEvent("2030-01-12");
+    unwrap(await assign(sooner, "budget_sheet", user));
+
+    const list = unwrap(
+      await listOpenStepsForUser(db, {
+        guildId: guild.guildId,
+        userId: user,
+        today,
+      }),
+    );
+
+    expect(list.truncated).toBe(true);
+    expect(list.rows).toHaveLength(100);
+    expect(list.rows.map((row) => row.event_id)).not.toContain(done);
+    expect(
+      list.rows.slice(0, 2).map((row) => [row.event_id, row.kind]),
+    ).toEqual([
+      [sooner, "budget_sheet"],
+      [later, "food_pickup"],
+    ]);
   });
 
   describe("event reminders", () => {

@@ -9,9 +9,10 @@
  * of that step or an officer, and Budget approved takes an officer or the Treasury role.
  *
  * The router claims each interaction first, so a replay changes nothing. A step is done
- * by one call only, and only that call goes on to claim the ping that follows, which the
- * database hands out once. A double click, a replay or two people at once ping once, and
- * a crash between the claim and the send loses the ping rather than sending it twice.
+ * by one call only, but every click on a done step tries the ping that follows, which the
+ * database hands out once. A double click, a replay or two people at once ping once, a
+ * crash before the claim is made good by the next click or /event link, and a crash
+ * between the claim and the send loses the ping rather than sending it twice.
  */
 
 import { ApplicationCommandOptionType } from "discord-api-types/v10";
@@ -40,6 +41,7 @@ import {
   unassignEventStep,
 } from "../db/event-steps.ts";
 import { getEvent } from "../db/events.ts";
+import { getManagedChannel } from "../db/managed-channels.ts";
 import { findEventByThread } from "../db/task-events.ts";
 import type {
   AssignableStepKind,
@@ -71,6 +73,7 @@ import {
   REFUSED_TEXT,
   stringOption,
 } from "../tasks/shared.ts";
+import { reachWarning } from "../tasks/notify.ts";
 import { MAX_PICKUP_INPUT_LENGTH, parsePickupTime } from "./input.ts";
 import {
   dateText,
@@ -88,7 +91,6 @@ import {
 
 const EVENT_CLOSED = safe`That event is closed, so its steps can't change.`;
 const NO_EVENT = safe`Run this in an event's post, or choose the event in the event option.`;
-const NOT_APPROVED = safe`Food pickup can only be set up once the budget is approved. When someone marks Budget approved on the event's overview, try again. Nothing was changed.`;
 const OVERVIEW_BEHIND = safe`The change is saved, but I couldn't update the event's overview, so it's out of date until the next change.`;
 
 function message(content: SafeText): MessageInput {
@@ -246,8 +248,6 @@ async function assign(
   });
   if (!written.ok) {
     switch (written.error.category) {
-      case "step_not_ready":
-        return message(NOT_APPROVED);
       case "step_assignee_limit":
         return message(capText(kind));
       case "parent_unavailable":
@@ -265,7 +265,8 @@ async function assign(
   const reply = safe`Put ${userMention(person.id)} on ${stepName(kind)} for **${title}**.`;
   const hint =
     kind === "food_pickup" ? await pickupHint(ctx, event) : undefined;
-  return withNotes(reply, hint, await redraw(ctx, event));
+  const reach = await reachWarning(ctx, event, person.id, "no_post", "step");
+  return withNotes(reply, hint, reach, await redraw(ctx, event));
 }
 
 /** After a person is put on Food pickup, says if the time is still missing. */
@@ -335,8 +336,6 @@ async function pickup(
   });
   if (!written.ok) {
     switch (written.error.category) {
-      case "step_not_ready":
-        return message(NOT_APPROVED);
       case "parent_unavailable":
         return message(EVENT_CLOSED);
       case "not_found":
@@ -425,21 +424,19 @@ const ROLE_NAMES: Readonly<
 /**
  * The message that follows a finished step, for the event's post. A role pinged here
  * comes only from the signed guild's config row, and an unset one is named instead.
+ * Budget approved is only a note, and pings nobody.
  */
 export function handoffMessage(
   config: Pick<
     GuildConfig,
     "guild_id" | "treasury_role_id" | "marketing_role_id"
   >,
-  event: Pick<EventRow, "name" | "created_by">,
+  event: Pick<EventRow, "name">,
   kind: CompletableStepKind,
 ): MessageInput {
   const title = eventTitle(event);
   if (kind === "budget_approved") {
-    return {
-      content: safe`${userMention(event.created_by)} The budget for **${title}** is approved. Set up food pickup with /event pickup and /event assign step:Food pickup.`,
-      mentionUserIds: [event.created_by],
-    };
+    return message(safe`The budget for **${title}** is approved.`);
   }
   const roleId =
     kind === "budget_sheet"
@@ -474,25 +471,96 @@ function toldText(kind: CompletableStepKind, config: GuildConfig): SafeText {
         ? safe`I said so in the event's post. No Marketing Committee role is set, so nobody was pinged.`
         : safe`I let the Marketing Committee know in the event's post.`;
     case "budget_approved":
-      return safe`I asked the event's creator to set up food pickup, in the event's post.`;
+      return safe`I said so in the event's post.`;
   }
 }
 
 /**
- * Sends the one message that follows a step this call finished. The claim goes to one
- * caller ever, so a failed send is not tried again and nobody is pinged twice.
+ * Whether the event's forum is still managed and its post is active, read now rather than
+ * taken from the row a caller holds. Only then is the hand-off claimed, so one that could
+ * not be sent stays unclaimed for a later click, /event link, or /config adding the forum
+ * back. Otherwise says which of those it waits for.
+ */
+async function postReachable(
+  ctx: FinishContext,
+  given: EventRow,
+): Promise<
+  | { readonly event: EventRow; readonly threadId: string }
+  | { readonly waitsFor: "post" | "forum" }
+> {
+  const key = { guildId: given.guild_id, eventId: given.id };
+  const read = await getEvent(ctx.db, key);
+  const event = read.ok ? read.value : null;
+  const threadId = event?.thread_id ?? null;
+  if (
+    event?.status !== "active" ||
+    event.thread_status !== "active" ||
+    threadId === null
+  ) {
+    return { waitsFor: "post" };
+  }
+  const forum = await getManagedChannel(ctx.db, {
+    guildId: event.guild_id,
+    channelId: event.channel_id,
+  });
+  if (!forum.ok) {
+    return { waitsFor: "post" };
+  }
+  return forum.value?.status === "active"
+    ? { event, threadId }
+    : { waitsFor: "forum" };
+}
+
+/**
+ * Whether Budget approved is done, read now. A Budget Sheet hand-off sent late, after the
+ * budget was approved, would ask Treasury to look at a sheet already dealt with, so it is
+ * not sent. It stays unclaimed, and nothing is lost: Treasury has no more to do.
+ */
+async function budgetApproved(
+  ctx: FinishContext,
+  event: EventRow,
+): Promise<boolean> {
+  const workflow = await getEventWorkflow(ctx.db, {
+    guildId: event.guild_id,
+    eventId: event.id,
+  });
+  return (
+    workflow.ok &&
+    workflow.value?.steps.some(
+      (step) => step.kind === "budget_approved" && step.status === "done",
+    ) === true
+  );
+}
+
+/**
+ * Sends the one message that follows a done step, if nobody has yet. The claim goes to
+ * one caller ever, so a failed send is not tried again and nobody is pinged twice. It is
+ * tried on every click of a done step, so a crash before the claim is made good later.
+ * Undefined when there was nothing to send. `fresh` is for the call that finished the
+ * step, which alone says when there is no post to tell.
  */
 async function handOff(
   ctx: FinishContext,
-  event: EventRow,
+  given: EventRow,
   kind: CompletableStepKind,
+  fresh: boolean,
 ): Promise<SafeText | undefined> {
   const config = ctx.config;
   if (config === null) {
     return undefined;
   }
-  if (event.thread_id === null || event.thread_status !== "active") {
-    return safe`This event has no post, so nobody was told.`;
+  const reachable = await postReachable(ctx, given);
+  if ("waitsFor" in reachable) {
+    if (!fresh) {
+      return undefined;
+    }
+    return reachable.waitsFor === "forum"
+      ? safe`This event's forum is not one I manage right now, so nobody was told yet. Once it is added back with /config, they are told in the event's post.`
+      : safe`This event has no post I can use right now, so nobody was told yet. Once it has one again through /event link, they are told there.`;
+  }
+  const { event, threadId } = reachable;
+  if (!fresh && kind === "budget_sheet" && (await budgetApproved(ctx, event))) {
+    return undefined;
   }
   const key = { guildId: event.guild_id, eventId: event.id, kind };
   const claimed = await claimStepHandoff(ctx.db, key);
@@ -505,7 +573,7 @@ async function handOff(
   }
   try {
     await ctx.discord.sendMessage(
-      threadTarget(event.guild_id, event.thread_id),
+      threadTarget(event.guild_id, threadId),
       channelMessage(handoffMessage(config, event, kind)),
     );
   } catch (error) {
@@ -520,6 +588,32 @@ async function handOff(
     logFailure("hand-off record", errorSummary(marked.error));
   }
   return toldText(kind, config);
+}
+
+/**
+ * Sends any hand-off that a done step is still owed, such as after /event link gives the
+ * event a post again or /config adds its forum back. Each is claimed once, so this never pings twice.
+ */
+export async function retryHandoffs(
+  ctx: FinishContext,
+  event: EventRow,
+): Promise<void> {
+  const workflow = await getEventWorkflow(ctx.db, {
+    guildId: event.guild_id,
+    eventId: event.id,
+  });
+  if (!workflow.ok || workflow.value === null) {
+    return;
+  }
+  for (const step of workflow.value.steps) {
+    if (
+      step.kind !== "food_pickup" &&
+      step.status === "done" &&
+      step.handoff_claimed_at === null
+    ) {
+      await handOff(ctx, event, step.kind, false);
+    }
+  }
 }
 
 /**
@@ -564,9 +658,6 @@ async function markStep(
     return message(EVENT_CLOSED);
   }
   const title = eventTitle(event);
-  const already = message(
-    safe`${stepName(kind)} for **${title}** is already done, so nothing was changed.`,
-  );
   const written = await completeEventStep(ctx.db, {
     guildId,
     eventId: event.id,
@@ -579,12 +670,13 @@ async function markStep(
   if (!written.ok && written.error.category === "not_found") {
     return message(REFUSED_TEXT);
   }
-  if (!valueOf(written)) {
-    return already;
-  }
-  const told = await handOff(ctx, event, kind);
-  const reply =
-    kind === "budget_approved"
+  // Done by this click or an earlier one, the step is owed its hand-off and a current
+  // overview: the earlier click may have crashed, or drawn before this step was done.
+  const fresh = valueOf(written);
+  const told = await handOff(ctx, event, kind, fresh);
+  const reply = !fresh
+    ? safe`${stepName(kind)} for **${title}** is already done, so nothing was changed.`
+    : kind === "budget_approved"
       ? safe`Marked the budget for **${title}** approved.`
       : safe`Marked ${stepName(kind)} done for **${title}**.`;
   return withNotes(reply, told, await redraw(ctx, event));
@@ -639,8 +731,7 @@ export const unassignSubcommand: CommandOption = {
 export const pickupSubcommand: CommandOption = {
   type: SUBCOMMAND,
   name: "pickup",
-  description:
-    "Set the food pickup time on the event's day, once the budget is approved",
+  description: "Set the food pickup time on the event's day",
   options: [
     {
       type: STRING,

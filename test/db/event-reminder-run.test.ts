@@ -367,25 +367,7 @@ describe("the daily step list", () => {
     expect(message.roles).toEqual([]);
   });
 
-  it("asks the creator to set up Food pickup once the budget is approved", async () => {
-    const guild = await guildInUtc();
-    const made = await event(guild, 3);
-    await complete(guild, made, "budget_sheet");
-    await complete(guild, made, "engage_post");
-    await complete(guild, made, "budget_approved");
-
-    await run([guild]);
-
-    const message = present(sent[0]);
-    expect(message.users).toEqual([made.creatorId]);
-    expect(message.roles).toEqual([]);
-    expect(message.content).toContain(
-      `Food pickup: not set up yet. <@${made.creatorId}>`,
-    );
-    expect(message.content).not.toContain("Budget approved");
-  });
-
-  it("still asks the creator while Food pickup has people but no time", async () => {
+  it("sends no step list when only Food pickup is open", async () => {
     const guild = await guildInUtc();
     const made = await event(guild, 3);
     await complete(guild, made, "budget_sheet");
@@ -393,9 +375,23 @@ describe("the daily step list", () => {
     await complete(guild, made, "budget_approved");
     await assign(guild, made, "food_pickup");
 
+    const result = await run([guild]);
+
+    expect(result.status).toBe("succeeded");
+    expect(posts()).toEqual([]);
+    expect(await logRows(made.eventId)).toEqual([]);
+  });
+
+  it("never mentions Food pickup in the step list", async () => {
+    const guild = await guildInUtc();
+    const made = await event(guild, 3);
+    await complete(guild, made, "budget_sheet");
+
     await run([guild]);
 
-    expect(present(sent[0]).users).toEqual([made.creatorId]);
+    const message = present(sent[0]);
+    expect(message.content).not.toMatch(/food pickup/i);
+    expect(message.users).not.toContain(made.creatorId);
   });
 
   it("sends nothing and claims nothing when every step is done", async () => {
@@ -487,11 +483,12 @@ describe("Food pickup reminders", () => {
     expect(await logRows(made.eventId)).toEqual([]);
   });
 
-  it("sends nothing before the budget is approved, only the step list", async () => {
+  it("sends nothing until Food pickup has a time and a person, only the step list", async () => {
     const guild = await guildInUtc();
     const made = await event(guild, 2);
     await complete(guild, made, "budget_sheet");
     await complete(guild, made, "engage_post");
+    await assign(guild, made, "food_pickup");
 
     await run([guild]);
 
@@ -499,6 +496,30 @@ describe("Food pickup reminders", () => {
     expect(present(sent[0]).content).toContain("Budget approved");
     expect((await logRows(made.eventId)).map((row) => row.kind)).toEqual([
       "daily_steps",
+    ]);
+  });
+
+  it("reminds the pickup people before the budget is approved", async () => {
+    const guild = await guildInUtc();
+    const made = await event(guild, 2);
+    const person = await assign(guild, made, "food_pickup");
+    const set = await setEventPickupTime(db, {
+      guildId: guild.guildId,
+      eventId: made.eventId,
+      pickupTime: "17:30",
+      actorId: fakeId(),
+    });
+    expect(set).toEqual({ ok: true, value: true });
+
+    await run([guild]);
+
+    const pickup = sent.find((message) =>
+      message.content.includes("you are on food pickup"),
+    );
+    expect(present(pickup).users).toEqual([person]);
+    expect((await logRows(made.eventId)).map((row) => row.kind)).toEqual([
+      "daily_steps",
+      "pickup_two_days",
     ]);
   });
 

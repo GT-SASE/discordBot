@@ -17,10 +17,13 @@ import {
   and,
   asc,
   eq,
+  exists,
   gte,
   inArray,
   isNull,
   lt,
+  ne,
+  or,
   sql as fragment,
 } from "drizzle-orm";
 import { selected } from "./columns.ts";
@@ -351,7 +354,12 @@ const KIND_ORDER: readonly AssignableStepKind[] = ASSIGNABLE_STEP_KINDS;
 
 /**
  * For /mytasks: a member's open Budget Sheet and Engage post steps, and their Food pickups
- * from `today` on, on live active events in one guild. Soonest event first.
+ * from `today` on, on live active events in one guild. Events from `today` on come first,
+ * soonest first, then the open steps of events already past, most recent first.
+ *
+ * Done steps and past pickups are left out by the query, and the cap keeps the events from
+ * `today` on before any that are past, so a member with many old assignments still sees
+ * what is coming up.
  */
 export async function listOpenStepsForUser(
   db: DbClient,
@@ -393,9 +401,37 @@ export async function listOpenStepsForUser(
             isNull(eventStepAssignees.removedAt),
             eq(events.status, "active"),
             isNull(events.deletedAt),
+            or(
+              and(
+                eq(eventStepAssignees.kind, "food_pickup"),
+                gte(events.eventDate, today),
+              ),
+              and(
+                ne(eventStepAssignees.kind, "food_pickup"),
+                exists(
+                  sql
+                    .select({ kind: eventSteps.kind })
+                    .from(eventSteps)
+                    .where(
+                      and(
+                        eq(eventSteps.eventId, events.id),
+                        eq(eventSteps.guildId, events.guildId),
+                        eq(eventSteps.kind, eventStepAssignees.kind),
+                        eq(eventSteps.status, "open"),
+                      ),
+                    ),
+                ),
+              ),
+            ),
           ),
         )
-        .orderBy(asc(eventStepAssignees.createdAt), asc(eventStepAssignees.id))
+        .orderBy(
+          asc(lt(events.eventDate, today)),
+          asc(fragment`abs(${events.eventDate} - ${today}::date)`),
+          asc(eventStepAssignees.kind),
+          asc(events.id),
+          asc(eventStepAssignees.id),
+        )
         .limit(MAX_USER_STEPS + 1),
     ),
     parseUserStep,
@@ -414,14 +450,21 @@ export async function listOpenStepsForUser(
         ? [step]
         : [],
     )
-    .sort((a, b) =>
-      a.event_date === b.event_date
-        ? KIND_ORDER.indexOf(a.kind) - KIND_ORDER.indexOf(b.kind) ||
-          a.event_id.localeCompare(b.event_id)
-        : a.event_date < b.event_date
-          ? -1
-          : 1,
-    );
+    .sort((a, b) => {
+      const aPast = a.event_date < today;
+      const bPast = b.event_date < today;
+      if (aPast !== bPast) {
+        return aPast ? 1 : -1;
+      }
+      if (a.event_date !== b.event_date) {
+        // Upcoming soonest first, and past ones most recent first, as the cap keeps them.
+        return a.event_date < b.event_date === aPast ? 1 : -1;
+      }
+      return (
+        KIND_ORDER.indexOf(a.kind) - KIND_ORDER.indexOf(b.kind) ||
+        a.event_id.localeCompare(b.event_id)
+      );
+    });
   return { ok: true, value: { ...list.value, rows } };
 }
 

@@ -38,13 +38,16 @@ describe("handoffMessage", () => {
     });
   });
 
-  it("pings only the creator when the budget is approved", () => {
-    expect(
-      sent(handoffMessage(CONFIG, EVENT, "budget_approved")),
-    ).toMatchObject({
-      content: `<@${CREATOR}> The budget for **Fall Social** is approved. Set up food pickup with /event pickup and /event assign step:Food pickup.`,
-      allowed_mentions: { parse: [], users: [CREATOR] },
-    });
+  it("only notes in the post that the budget is approved, pinging nobody", () => {
+    const body = sent(handoffMessage(CONFIG, EVENT, "budget_approved"));
+    expect(body).toEqual(
+      expect.objectContaining({
+        content: "The budget for **Fall Social** is approved.",
+        allowed_mentions: { parse: [], users: [] },
+      }),
+    );
+    expect(body.content).not.toContain(CREATOR);
+    expect(body.content).not.toMatch(/food pickup/i);
   });
 
   it.each([

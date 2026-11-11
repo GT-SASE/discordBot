@@ -4,7 +4,7 @@
  * only role ever pinged is the guild's own Events Directors role from its config row.
  *
  * Each reminder is one message. Its size is bounded: an event name of at most 200
- * characters, at most 10 people on each of two steps plus the creator, or at most 15 on
+ * characters, at most 10 people on each of two steps, or at most 15 on
  * Food pickup, which is well inside a message.
  */
 
@@ -105,8 +105,6 @@ function stepLine(step: OpenStep, rolePing: SafeText): SafeText {
     }
     case "budget_approved":
       return safe`- Budget approved: waiting for approval`;
-    case "food_pickup":
-      return safe`- Food pickup: not set up yet. ${userMention(step.creatorId)}, set the time with /event pickup and the people with /event assign step:Food pickup`;
   }
 }
 
@@ -135,8 +133,6 @@ export function renderDailySteps(
     if (step.kind === "budget_sheet" || step.kind === "engage_post") {
       step.assigneeIds.forEach((userId) => users.add(userId));
       pingsRole ||= step.assigneeIds.length === 0;
-    } else if (step.kind === "food_pickup") {
-      users.add(step.creatorId);
     }
   }
   const body = lines.reduce((text, line) => safe`${text}\n${line}`);

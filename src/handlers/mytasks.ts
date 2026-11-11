@@ -17,7 +17,7 @@ import { listOpenStepsForUser } from "../db/event-steps.ts";
 import { listOpenTasksForAssignee } from "../db/tasks.ts";
 import type { OpenTask, UserStep } from "../db/types.ts";
 import { pickupTimeText, stepName } from "../events/steps.ts";
-import { todayInZone } from "../lib/dates.ts";
+import { todayInZone, type DateOnly } from "../lib/dates.ts";
 import { shownDate, shownId } from "../tasks/shared.ts";
 import { escapedName, lines } from "./render.ts";
 import { commandRoute, noRow, valueOf, type Handler } from "./router.ts";
@@ -31,10 +31,13 @@ function taskLine(task: OpenTask): SafeText {
   return safe`- ${shownId(task.id)}, due ${shownDate(task.due_date)}, ${escapedName(task.event_name, EVENT_NAME_SHOWN)}: ${escapedName(task.description, DESCRIPTION_SHOWN)}`;
 }
 
-function stepLine(step: UserStep): SafeText {
+/** A step of an event already past says so, after the upcoming ones it is listed below. */
+function stepLine(step: UserStep, today: DateOnly): SafeText {
   const event = safe`**${escapedName(step.event_name, EVENT_NAME_SHOWN)}** on ${shownDate(step.event_date)}`;
   if (step.kind !== "food_pickup") {
-    return safe`- ${stepName(step.kind)} for ${event}`;
+    return step.event_date < today
+      ? safe`- ${stepName(step.kind)} for ${event}, still open though the event has passed`
+      : safe`- ${stepName(step.kind)} for ${event}`;
   }
   const time =
     step.pickup_time === null
@@ -93,15 +96,12 @@ export const handler: Handler = {
             assigneeId: userId,
           }),
         );
+        const today = todayInZone(
+          new Date(),
+          ctx.config?.timezone ?? "America/New_York",
+        );
         const steps = valueOf(
-          await listOpenStepsForUser(ctx.db, {
-            guildId,
-            userId,
-            today: todayInZone(
-              new Date(),
-              ctx.config?.timezone ?? "America/New_York",
-            ),
-          }),
+          await listOpenStepsForUser(ctx.db, { guildId, userId, today }),
         );
         const failed = tasks.excluded.length + steps.excluded.length;
         if (failed > 0) {
@@ -121,7 +121,10 @@ export const handler: Handler = {
           };
         }
         const taskPart = linesThatFit(tasks.rows.map(taskLine), RESERVED);
-        const stepPart = linesThatFit(steps.rows.map(stepLine), taskPart.used);
+        const stepPart = linesThatFit(
+          steps.rows.map((step) => stepLine(step, today)),
+          taskPart.used,
+        );
         const sections: SafeText[] = [];
         if (tasks.rows.length + tasks.excluded.length > 0 || tasks.truncated) {
           sections.push(safe`**Your open tasks, soonest first**`);

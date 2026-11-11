@@ -444,15 +444,13 @@ As your second account, click **Budget approved**.
 
 **Expect:** the fixed refusal, because only officers and the Treasury Committee can approve.
 
-As yourself, run `/event pickup` with `time:5:30 PM` in the post.
+As yourself, run `/event pickup` with `time:5:30 PM` and `/event assign` with `step:Food pickup` and your second account, in the post.
 
-**Expect:** `Food pickup can only be set up once the budget is approved.` Nothing changes.
+**Expect:** both work before the budget is approved. The overview shows Food pickup ticked, at 5:30 PM, with your second account. As your second account, `/mytasks` lists that food pickup.
 
 Click **Budget approved**.
 
-**Expect:** a message in the post pinging the event's creator, asking them to set up food pickup. Then run `/event pickup` with `time:5:30 PM` and `/event assign` with `step:Food pickup` and your second account.
-
-**Expect:** the overview shows Food pickup ticked, at 5:30 PM, with your second account. As your second account, `/mytasks` lists that food pickup.
+**Expect:** a message in the post saying the budget is approved, which pings nobody, and the overview shows Budget approved ticked.
 
 **Failure looks like:**
 

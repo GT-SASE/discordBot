@@ -66,6 +66,8 @@ export interface DiscordServer {
   threadAgeMs: number;
   /** Runs when a post is made, before Discord answers: another retry could get in. */
   onThreadCreated?: (threadId: string) => Promise<unknown>;
+  /** Runs as a request arrives, before it is answered, as another change could. */
+  onRequest?: (method: string, path: string) => Promise<unknown>;
   fail: (
     method: string,
     path: RegExp,
@@ -250,23 +252,34 @@ export function discordServer(appId: string): DiscordServer {
           ? jsonObject(init.body, `the body of ${method} ${path}`)
           : undefined;
       requests.push({ method, path, body });
-      const failure = failureFor(method, path);
-      if (failure === undefined) {
-        const response = route(method, path, body);
-        const made = takeLastThread();
-        return made !== undefined && server.onThreadCreated !== undefined
-          ? server.onThreadCreated(made).then(() => response)
-          : Promise.resolve(response);
-      }
-      if (failure.kind === "network") {
-        return Promise.reject(new TypeError("fetch failed"));
-      }
-      if (failure.kind === "lost") {
-        route(method, path, body);
-        return Promise.reject(new TypeError("fetch failed"));
-      }
-      return Promise.resolve(answer(failure));
+      const before = server.onRequest?.(method, path);
+      return before === undefined
+        ? answerRequest(method, path, body)
+        : before.then(() => answerRequest(method, path, body));
     },
   };
+
+  function answerRequest(
+    method: string,
+    path: string,
+    body: Record<string, unknown> | undefined,
+  ): Promise<Response> {
+    const failure = failureFor(method, path);
+    if (failure === undefined) {
+      const response = route(method, path, body);
+      const made = takeLastThread();
+      return made !== undefined && server.onThreadCreated !== undefined
+        ? server.onThreadCreated(made).then(() => response)
+        : Promise.resolve(response);
+    }
+    if (failure.kind === "network") {
+      return Promise.reject(new TypeError("fetch failed"));
+    }
+    if (failure.kind === "lost") {
+      route(method, path, body);
+      return Promise.reject(new TypeError("fetch failed"));
+    }
+    return Promise.resolve(answer(failure));
+  }
   return server;
 }

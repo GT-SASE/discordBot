@@ -126,16 +126,25 @@ describe("renderDailySteps", () => {
     expect(rendered.mentionRoleIds).toEqual([ROLE]);
   });
 
-  it("asks the creator to set up Food pickup after approval", () => {
+  it("never mentions Food pickup or pings the creator", () => {
     const rendered = renderDailySteps(
-      candidate({}, ["budget_sheet", "engage_post", "budget_approved"]),
+      candidate({}, ["budget_sheet", "engage_post"]),
       TODAY,
     );
-    expect(safeTextValue(rendered.content)).toContain(
-      `- Food pickup: not set up yet. <@${CREATOR}>, set the time with /event pickup`,
-    );
-    expect(rendered.mentionUserIds).toEqual([CREATOR]);
+    const content = safeTextValue(rendered.content);
+    expect(content).not.toMatch(/food pickup/i);
+    expect(content).not.toContain(CREATOR);
+    expect(rendered.mentionUserIds).toEqual([]);
     expect(rendered.mentionRoleIds).toEqual([]);
+  });
+
+  it("has nothing to list once only Food pickup is open", () => {
+    expect(() =>
+      renderDailySteps(
+        candidate({}, ["budget_sheet", "engage_post", "budget_approved"]),
+        TODAY,
+      ),
+    ).toThrow(EventRenderError);
   });
 
   it("refuses to write a list with nothing on it", () => {
