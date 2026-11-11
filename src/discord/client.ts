@@ -7,7 +7,13 @@
  * is an ephemeral first response or an edit of one, which is seen by the invoking
  * user alone and posts nothing to the channel.
  *
- * Nothing here logs, and errors carry no request or response content and no
+ * Every body is checked once more right before it is sent, whatever built it: it must
+ * ping nobody but the users and roles it names, carry no embed, link button, URL or
+ * masked link, and hold no live @everyone or @here. The check reads the exact JSON that
+ * is sent (see `body-check.ts`). A body that fails is refused, and only the fixed reason
+ * is logged.
+ *
+ * Nothing else here logs, and errors carry no request or response content and no
  * underlying cause: URLs can hold interaction tokens, bodies hold user text, and
  * lower-level errors can quote either.
  *
@@ -20,6 +26,8 @@ import { setTimeout as delay } from "node:timers/promises";
 import { parsePermissions } from "../lib/actor.ts";
 import { ConfigError } from "../lib/config-error.ts";
 import { isSnowflake } from "../lib/snowflake.ts";
+import { checkedWireJson } from "./body-check.ts";
+import type { UnsafeBodyReason } from "./body-check.ts";
 import { isEphemeralInitialResponse } from "./outbound.ts";
 import type { OutboundBody } from "./outbound.ts";
 import { interactionToken, isThreadChannelType } from "./verify.ts";
@@ -97,6 +105,8 @@ export type DiscordFailure =
   | Readonly<{ kind: "not_forum"; channelId: string }>
   /** Could not confirm that this response or reply is ephemeral. */
   | Readonly<{ kind: "not_ephemeral" }>
+  /** The body failed the check made just before every send. Nothing was sent. */
+  | Readonly<{ kind: "unsafe_body"; reason: UnsafeBodyReason }>
   /** Still limited after the retries, or the wait would not fit the budget. */
   | Readonly<{
       kind: "rate_limited";
@@ -146,6 +156,8 @@ function describeFailure(failure: DiscordFailure): string {
       return "the target is not a forum or media channel";
     case "not_ephemeral":
       return "could not confirm the response is ephemeral";
+    case "unsafe_body":
+      return `the body is unsafe to send: ${failure.reason}`;
     case "rate_limited":
       return `rate limited after ${String(failure.attempts)} attempts, retry after ${String(failure.retryAfterMs)} ms`;
     case "unauthorized":
@@ -207,6 +219,9 @@ export function actionForFailure(failure: DiscordFailure): FailureAction {
       return failure.status === 400 && TEXT_REFUSED.has(failure.code)
         ? "skip_item"
         : "retry_later";
+    case "unsafe_body":
+      // The same body would be refused again, so it is the item, not the run.
+      return "skip_item";
     case "check_failed":
     case "budget_exhausted":
     case "network":
@@ -564,6 +579,29 @@ interface Route {
 }
 
 type Remaining = () => number;
+
+export { unsafeBodyReason } from "./body-check.ts";
+export type { UnsafeBodyReason } from "./body-check.ts";
+
+/**
+ * The body's JSON as it will be sent, and what that JSON parses back to, if it passes the
+ * check. Throws, and logs only why, if not.
+ */
+function checkedJson(
+  operation: Operation,
+  body: { readonly payload: object },
+  guildId: string,
+): { readonly json: string; readonly wire: object } {
+  const checked = checkedWireJson(body.payload, guildId);
+  if (!checked.ok) {
+    console.error(`Refused to ${operation}: ${checked.reason}`);
+    throw new DiscordClientError(operation, {
+      kind: "unsafe_body",
+      reason: checked.reason,
+    });
+  }
+  return checked;
+}
 
 export function createDiscordClient(
   options: DiscordClientOptions,
@@ -975,7 +1013,7 @@ export function createDiscordClient(
 
     async sendMessage(target, body) {
       const operation = "send message";
-      const json = JSON.stringify(body.payload);
+      const { json } = checkedJson(operation, body, target.guildId);
       const remaining = startBudget(operationBudgetMs);
       const channelId = targetChannelId(target);
       await assertManaged(
@@ -999,7 +1037,7 @@ export function createDiscordClient(
 
     async editMessage(target, messageId, body) {
       const operation = "edit message";
-      const json = JSON.stringify(body.payload);
+      const { json } = checkedJson(operation, body, target.guildId);
       if (!isSnowflake(messageId)) {
         throw new DiscordClientError(operation, { kind: "invalid_target" });
       }
@@ -1039,7 +1077,7 @@ export function createDiscordClient(
 
     async createThread(parent, body) {
       const operation = "create thread";
-      const json = JSON.stringify(body.payload);
+      const { json } = checkedJson(operation, body, parent.guildId);
       const { kind, guildId, channelId } = parent;
       if (
         (kind as string) !== "channel" ||
@@ -1087,7 +1125,7 @@ export function createDiscordClient(
 
     async replyToInteraction(interaction, body) {
       const operation = "reply to interaction";
-      const json = JSON.stringify(body.payload);
+      const { json } = checkedJson(operation, body, interaction.guildId);
       const route = callbackRoute(operation, interaction);
       const remaining = startBudget(callbackBudgetMs);
       await assertInteractionManaged(operation, interaction, remaining);
@@ -1096,7 +1134,7 @@ export function createDiscordClient(
 
     async editInteractionReply(interaction, body) {
       const operation = "edit interaction reply";
-      const json = JSON.stringify(body.payload);
+      const { json } = checkedJson(operation, body, interaction.guildId);
       const path = originalPath(operation, interaction);
       const remaining = startBudget(operationBudgetMs);
       await assertInteractionManaged(operation, interaction, remaining);
@@ -1105,7 +1143,7 @@ export function createDiscordClient(
 
     async sendFollowUp(interaction, body) {
       const operation = "send follow-up";
-      const json = JSON.stringify(body.payload);
+      const { json } = checkedJson(operation, body, interaction.guildId);
       const token = tokenOf(operation, interaction);
       const remaining = startBudget(operationBudgetMs);
       await assertInteractionManaged(operation, interaction, remaining);
@@ -1122,8 +1160,9 @@ export function createDiscordClient(
 
     async respondEphemerally(interaction, body) {
       const operation = "reply to interaction";
-      const json = JSON.stringify(body.payload);
-      if (!isEphemeralInitialResponse(body)) {
+      const { json, wire } = checkedJson(operation, body, interaction.guildId);
+      // Read from what is sent, so a getter cannot pass this and then send a public reply.
+      if (!isEphemeralInitialResponse({ kind: body.kind, payload: wire })) {
         throw new DiscordClientError(operation, { kind: "not_ephemeral" });
       }
       const route = callbackRoute(operation, interaction);
@@ -1132,7 +1171,7 @@ export function createDiscordClient(
 
     async editEphemeralReply(interaction, body) {
       const operation = "edit interaction reply";
-      const json = JSON.stringify(body.payload);
+      const { json } = checkedJson(operation, body, interaction.guildId);
       const path = originalPath(operation, interaction);
       const remaining = startBudget(operationBudgetMs);
       const original = await readOriginal(operation, path, remaining);

@@ -422,6 +422,24 @@ const ROLE_NAMES: Readonly<
 };
 
 /**
+ * The role a finished step's hand-off pings, or null when none may be pinged: unset, or
+ * the guild's own ID, which is @everyone.
+ */
+function handoffRole(
+  config: Pick<
+    GuildConfig,
+    "guild_id" | "treasury_role_id" | "marketing_role_id"
+  >,
+  kind: "budget_sheet" | "engage_post",
+): string | null {
+  const roleId =
+    kind === "budget_sheet"
+      ? config.treasury_role_id
+      : config.marketing_role_id;
+  return roleId === null || roleId === config.guild_id ? null : roleId;
+}
+
+/**
  * The message that follows a finished step, for the event's post. A role pinged here
  * comes only from the signed guild's config row, and an unset one is named instead.
  * Budget approved is only a note, and pings nobody.
@@ -438,15 +456,12 @@ export function handoffMessage(
   if (kind === "budget_approved") {
     return message(safe`The budget for **${title}** is approved.`);
   }
-  const roleId =
-    kind === "budget_sheet"
-      ? config.treasury_role_id
-      : config.marketing_role_id;
+  const roleId = handoffRole(config, kind);
   const done =
     kind === "budget_sheet"
       ? safe`Budget Sheet for **${title}** is done.`
       : safe`Engage post for **${title}** is up.`;
-  if (roleId === null || roleId === config.guild_id) {
+  if (roleId === null) {
     return message(
       safe`${done} Run /setup to choose the ${ROLE_NAMES[kind]} role, so the next one pings it.`,
     );
@@ -459,16 +474,25 @@ export function handoffMessage(
   };
 }
 
-/** Who was told, for the clicker's reply. */
-function toldText(kind: CompletableStepKind, config: GuildConfig): SafeText {
+/**
+ * Who was told, for the clicker's reply. It agrees with `handoffMessage` about whether a
+ * role was pinged.
+ */
+export function toldText(
+  kind: CompletableStepKind,
+  config: Pick<
+    GuildConfig,
+    "guild_id" | "treasury_role_id" | "marketing_role_id"
+  >,
+): SafeText {
   switch (kind) {
     case "budget_sheet":
-      return config.treasury_role_id === null
-        ? safe`I said so in the event's post. No Treasury Committee role is set, so nobody was pinged.`
+      return handoffRole(config, kind) === null
+        ? safe`I said so in the event's post. No usable Treasury Committee role is set, so nobody was pinged.`
         : safe`I let the Treasury Committee know in the event's post.`;
     case "engage_post":
-      return config.marketing_role_id === null
-        ? safe`I said so in the event's post. No Marketing Committee role is set, so nobody was pinged.`
+      return handoffRole(config, kind) === null
+        ? safe`I said so in the event's post. No usable Marketing Committee role is set, so nobody was pinged.`
         : safe`I let the Marketing Committee know in the event's post.`;
     case "budget_approved":
       return safe`I said so in the event's post.`;

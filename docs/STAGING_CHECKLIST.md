@@ -148,14 +148,14 @@ Use this as a task description. Replace the placeholders with real IDs copied fr
   - If it fails: the plain URL allowance in record 5 depends on this. Refuse URLs in task text until it is fixed.
 
 - [ ] **Masked links and invites are refused.**
-  - Do: try `[Log in](https://example.com/login)` as a description, then a real server invite link.
-  - Success: the reply says these aren't allowed, and no task is made.
-  - If it fails: check `containsInviteOrMaskedLink`.
+  - Do: try `[Log in](https://example.com/login)` as a description, then a real server invite link. Then try both as the name in `/event create`, and as a post's title with `/event link`.
+  - Success: the reply says these aren't allowed, and no task or event is made.
+  - If it fails: check `containsInviteOrMaskedLink` in `src/discord/safe-text.ts` and its callers in `src/tasks/checks.ts` and `src/handlers/event.ts`.
 
 - [ ] **Hostile text pings nobody.**
   - Do: have the other member and a role holder watch for notifications while you send the text above. Check the task notice, a reminder, an event post, a `/task edit` notice and every private reply and follow-up.
   - Success: only the assignee is notified. No role, `@everyone` or `@here` ping happens, including on follow-ups. This also shows whether Discord accepts `allowed_mentions` with `parse: []` and a `users` list, which every notice uses. If it did not, notices would fail with a 400 and code 50035 in Logs.
-  - If it fails: this is the worst failure on this list. Turn reminders off and do not launch. All message bodies must go through `src/discord/outbound.ts`.
+  - If it fails: this is the worst failure on this list. Turn reminders off and do not launch. All message bodies must go through `src/discord/outbound.ts`, and the client's last check, `unsafeBodyReason` in `src/discord/body-check.ts`, should have refused it. A `Refused to ...` line in Logs names the check that caught a body.
 
 - [ ] **Length limits match how Discord counts.**
   - Do: create text at each limit with emoji, such as a task description full of them.

@@ -31,8 +31,16 @@ import { testSnowflake } from "../support/mock-db.ts";
 import { softDeleteEvent } from "../../src/db/events.ts";
 import { REFUSED } from "../../src/lib/permissions.ts";
 import { handler } from "../../src/handlers/event.ts";
+import { containsInviteOrMaskedLink } from "../../src/discord/safe-text.ts";
 
 const world = eventWorld();
+// Invites and masked links are refused outright, and the rest are stored inert.
+const LINKING_TEXT = HOSTILE_TEXT.filter(([, text]) =>
+  containsInviteOrMaskedLink(text),
+);
+const INERT_TEXT = HOSTILE_TEXT.filter(
+  ([, text]) => !containsInviteOrMaskedLink(text),
+);
 const COMMANDS = handler.commands;
 
 const THREADS_POST = /^\/channels\/[0-9]+\/threads$/;
@@ -97,6 +105,22 @@ function postTitles(): unknown[] {
 }
 
 describe("/event create", () => {
+  it.each([
+    "Join discord.gg/abc",
+    "Social [log in](https://evil.example)",
+    "disc\u034Ford.gg/x",
+  ])("refuses a name holding an invite or a masked link: %j", async (name) => {
+    await world.addManagedForum();
+
+    await world.send(create({ name }));
+
+    expect(world.discord.lastReply()).toContain(
+      "can't hold a server invite or a masked link",
+    );
+    expect(await world.events()).toEqual([]);
+    expect(world.discord.posts()).toEqual([]);
+  });
+
   it("makes one active row and one post, and joins them", async () => {
     const forum = await world.addManagedForum();
 
@@ -236,7 +260,22 @@ describe("/event create", () => {
   });
 
   describe("names", () => {
-    it.each(HOSTILE_TEXT)(
+    it.each(LINKING_TEXT)(
+      "refuses a name with an invite or masked link: %s",
+      async (_label, name) => {
+        await world.addManagedForum();
+
+        await world.send(create({ name: name.slice(0, 100) }));
+
+        expect(await world.events()).toEqual([]);
+        expect(world.discord.publicWrites()).toEqual([]);
+        expect(world.discord.lastReply()).toContain(
+          "can't hold a server invite or a masked link",
+        );
+      },
+    );
+
+    it.each(INERT_TEXT)(
       "stores and posts an inert name: %s",
       async (_label, name) => {
         await world.addManagedForum();
@@ -1196,7 +1235,22 @@ describe("/event link", () => {
     expect(privateReplies()).toBe(1);
   });
 
-  it.each(HOSTILE_TEXT)(
+  it.each(LINKING_TEXT)(
+    "refuses a title with an invite or masked link: %s",
+    async (_label, title) => {
+      const { parent, threadId } = await post(title.slice(0, 100));
+
+      await world.send(link(threadId, parent));
+
+      expect(await world.events()).toEqual([]);
+      expect(world.discord.publicWrites()).toEqual([]);
+      expect(world.discord.lastReply()).toContain(
+        "holds a server invite or a masked link",
+      );
+    },
+  );
+
+  it.each(INERT_TEXT)(
     "names the event inertly from a hostile title: %s",
     async (_label, title) => {
       const { parent, threadId } = await post(title.slice(0, 100));

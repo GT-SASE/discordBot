@@ -5,6 +5,7 @@
  */
 
 import {
+  containsInviteOrMaskedLink,
   DISCORD_LIMITS,
   plainLabel,
   plainTextValue,
@@ -55,6 +56,16 @@ export function normaliseEventName(raw: unknown): EventName | undefined {
     }
     throw error;
   }
+}
+
+/**
+ * Whether a name as typed, or a post's title, holds a server invite or a masked link.
+ * The stored name could never keep one, since `normaliseEventName` drops the `.`, `/`
+ * and brackets they need, but a name that meant one is refused rather than quietly
+ * turned into something else. The same check guards task descriptions.
+ */
+export function hasInviteOrMaskedLink(raw: unknown): boolean {
+  return typeof raw === "string" && containsInviteOrMaskedLink(raw);
 }
 
 export type EventDateResult =

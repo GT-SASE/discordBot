@@ -83,6 +83,12 @@ ORDER BY reminder_date, kind;
 
 A reminder whose claim never finishes and is no longer due, such as a pickup reminder after Food pickup was undone, stays `claimed`. It sends nothing and does no harm.
 
+## A message refused before it was sent
+
+The client checks every body just before it sends it, and the interactions endpoint checks the replies it returns directly. A message that leaves out `allowed_mentions`, would parse mentions or ping the replied-to user, names a user or role that is not an ID, names the server's own ID as a role, carries an embed, has a link button, URL or masked link anywhere in its components, or holds an unescaped `@everyone` or `@here` in its content or components is not sent. Logs show `Refused to <operation>: <check>`, and nothing of the message. The endpoint returns a 500 instead, and logs only `Interaction failed: OutboundBodyError`.
+
+This should never happen: the builders in `src/discord/outbound.ts` make none of these. It means a body was built some other way, or a builder changed. The reminder run treats it like Discord refusing the text: that reminder is recorded as `skipped` and counted in `items_refused` or `event_items_refused`. A command gets its usual failure reply. Find the code that built the body and fix it there.
+
 ## The bot removed from a server, or the server deleted
 
 The bot is not told, because it has no gateway connection. It finds out on the next send or forum read.

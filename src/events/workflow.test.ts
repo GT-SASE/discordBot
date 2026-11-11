@@ -3,7 +3,7 @@ import { hasLiveSyntax } from "../../test/support/hostile-text.ts";
 import { testSnowflake } from "../../test/support/mock-db.ts";
 import { channelMessage } from "../discord/outbound.ts";
 import { safeTextValue } from "../discord/safe-text.ts";
-import { handoffMessage } from "./workflow.ts";
+import { handoffMessage, toldText } from "./workflow.ts";
 
 const GUILD = testSnowflake();
 const TREASURY = testSnowflake();
@@ -78,4 +78,32 @@ describe("handoffMessage", () => {
     expect(hasLiveSyntax(name.slice(0, -2))).toBe(false);
     expect(input.mentionRoleIds).toEqual([TREASURY]);
   });
+});
+
+describe("toldText", () => {
+  it.each([
+    ["budget_sheet", { treasury_role_id: null }],
+    ["budget_sheet", { treasury_role_id: GUILD }],
+    ["engage_post", { marketing_role_id: null }],
+    ["engage_post", { marketing_role_id: GUILD }],
+  ] as const)(
+    "says nobody was pinged for %s when the role is %j",
+    (kind, unset) => {
+      const config = { ...CONFIG, ...unset };
+
+      expect(safeTextValue(toldText(kind, config))).toContain(
+        "so nobody was pinged",
+      );
+      expect(
+        sent(handoffMessage(config, EVENT, kind)).allowed_mentions,
+      ).toEqual({ parse: [], users: [] });
+    },
+  );
+
+  it.each(["budget_sheet", "engage_post"] as const)(
+    "says the role was told for %s when it was pinged",
+    (kind) => {
+      expect(safeTextValue(toldText(kind, CONFIG))).toMatch(/^I let the /);
+    },
+  );
 });

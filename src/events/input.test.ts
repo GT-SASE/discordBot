@@ -6,6 +6,7 @@ import {
 } from "../../test/support/hostile-text.ts";
 import { plainTextValue, safeTextValue } from "../discord/safe-text.ts";
 import {
+  hasInviteOrMaskedLink,
   normaliseEventName,
   parseEventDate,
   parsePickupTime,
@@ -55,6 +56,24 @@ describe("parsePickupTime", () => {
 const ZONE = "America/New_York";
 // 04:30 UTC on the 16th is still the 15th in New York.
 const NOW = new Date("2026-11-16T04:30:00.000Z");
+
+describe("hasInviteOrMaskedLink", () => {
+  it.each([
+    "discord.gg/abc",
+    "Social [log in](https://evil.example)",
+    "disc\u034Ford.gg/x",
+    "discord\uFE00.gg/x",
+  ])("finds one in %j", (name) => {
+    expect(hasInviteOrMaskedLink(name)).toBe(true);
+  });
+
+  it.each(["Fall Social", "Budget (draft) [v2]", 42, undefined])(
+    "finds none in %j",
+    (name) => {
+      expect(hasInviteOrMaskedLink(name)).toBe(false);
+    },
+  );
+});
 
 describe("normaliseEventName", () => {
   it("keeps an ordinary name as it is", () => {

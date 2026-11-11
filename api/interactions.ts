@@ -41,8 +41,11 @@ const MAX_BODY_BYTES = 64 * 1024;
  * this path, so it takes only bodies that cannot post anything others can see.
  * Anything public defers first, then sends through the REST client.
  */
-function respond(body: OutboundBody<"direct-response">): Response {
-  return new Response(serializeDirectResponse(body), {
+function respond(
+  body: OutboundBody<"direct-response">,
+  guildId: string | undefined,
+): Response {
+  return new Response(serializeDirectResponse(body, guildId), {
     headers: { "content-type": "application/json" },
   });
 }
@@ -96,7 +99,7 @@ async function handle(request: Request): Promise<Response> {
   }
 
   if (isPingInteraction(interaction)) {
-    return respond(pong());
+    return respond(pong(), undefined);
   }
 
   const allowed = isAllowedGuildInteraction(interaction, {
@@ -119,7 +122,7 @@ async function handle(request: Request): Promise<Response> {
   if (after !== undefined) {
     waitUntil(after());
   }
-  return respond(reply);
+  return respond(reply, verified.guildId);
 }
 
 export async function POST(request: Request): Promise<Response> {

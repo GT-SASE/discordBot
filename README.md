@@ -158,8 +158,9 @@ No system is unhackable, and this one makes no such claim. The aim is to keep th
 
 **Outgoing messages**
 
-- User text reaches a message only after it is escaped, and every message is built by the same builder functions. Member names and nicknames are never rendered. Masked links and server invites are refused in task text, and plain URLs are escaped so that nothing can click them.
-- Every message sets `allowed_mentions` to the named users only, and suppresses link previews.
+- User text reaches a message only after it is escaped, and every message is built by the same builder functions. Member names and nicknames are never rendered. Masked links and server invites are refused in task text and event names, including a post's title on `/event link`, and plain URLs are escaped so that nothing can click them. Invisible characters, such as zero-width and default-ignorable ones, are removed first, so they cannot hide one.
+- Every message sets `allowed_mentions` to the named users and roles only, and suppresses link previews.
+- The client checks every body again just before it sends it, whatever built it, and so does the interactions endpoint for the replies it returns directly. Every message must set `allowed_mentions`, with `parse` empty and `replied_user` off; every named user and role must be a Discord ID and no role the server's own ID; no message may carry an embed; nothing in the components, at any depth and including text displays, may be a link button, a URL or a masked link; and no `@everyone` or `@here` may be left unescaped in the content or the components. The check reads the exact JSON that is sent, which is serialized once, so nothing on the body can change it afterwards. A body that fails is not sent, and the log says only which check failed.
 - Posts go through one client, which checks the channel or its parent is a managed forum in that server. For an event's post the parent is the forum stored on the event's row, so that check needs no request to Discord. CI fails on a direct Discord call anywhere else.
 - The bot is invited with `permissions=0` and given View Channel, Send Messages and Send Messages in Threads, per forum. It also gets whatever the server gives `@everyone`, so keep that role narrow.
 

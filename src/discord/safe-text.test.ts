@@ -139,6 +139,18 @@ describe("escapeUserText", () => {
   });
 
   it.each([
+    ["the combining grapheme joiner", "a\u{34F}b"],
+    ["a variation selector other than VS16", "a\u{FE00}b"],
+    ["VS15", "a\u{FE0E}b"],
+    ["a supplementary variation selector", "a\u{E0100}b"],
+    ["the object replacement character", "a\u{FFFC}b"],
+    ["the null notehead", "a\u{1D159}b"],
+    ["the Mongolian vowel separator", "a\u{180E}b"],
+  ])("removes %s", (_label, raw) => {
+    expect(render(raw)).toBe("ab");
+  });
+
+  it.each([
     "",
     "   ",
     "\n\n",
@@ -412,6 +424,13 @@ describe("containsInviteOrMaskedLink", () => {
     "[Portal login](https://evil.example)",
     "discord.\u200Bgg/abc",
     "[log in]\u200B(evil)",
+    "disc\u034Ford.gg/x",
+    "discord\uFE00.gg/x",
+    "[log in]\u034F(evil)",
+    "[log in](\u034Fevil)",
+    "discord\uFFFC.gg/x",
+    "discord.\u{1D159}gg/x",
+    "discord\u{E0100}.gg/x",
   ])("finds %s", (text) => {
     expect(containsInviteOrMaskedLink(text)).toBe(true);
   });

@@ -87,7 +87,11 @@ import { getEventWorkflow } from "../db/event-steps.ts";
 import { listEventTasks } from "../db/tasks.ts";
 import { REFUSED_TEXT, versionFingerprint } from "../tasks/shared.ts";
 import type { EventChoice, EventRow, ManagedChannel } from "../db/types.ts";
-import { normaliseEventName, parseEventDate } from "../events/input.ts";
+import {
+  hasInviteOrMaskedLink,
+  normaliseEventName,
+  parseEventDate,
+} from "../events/input.ts";
 import type { EventName } from "../events/input.ts";
 import {
   dateText,
@@ -161,6 +165,8 @@ const NOT_CONFIRMED = safe`Discord could not confirm what this channel is, so no
 const ALREADY_LINKED = safe`This post already belongs to an event, so nothing was changed.`;
 const NO_EVENT_HERE = safe`Run this in an event's post, or choose the event in the event option.`;
 const BAD_POST_NAME = safe`This post's title has no letters or numbers to name an event with. Rename the post, then try again.`;
+const LINK_IN_NAME = safe`An event's name can't hold a server invite or a masked link, because the bot shows it in pings and reminders. Choose a name without one. Nothing was created.`;
+const LINK_IN_POST_NAME = safe`This post's title holds a server invite or a masked link, so it can't name an event. Rename the post, then try again. Nothing was changed.`;
 const MANY_LOST = safe`More than one event with this name and date has lost its post, so nothing was changed. Run /event link inside a replacement post and choose one in the event option.`;
 const NO_DATE = safe`Give the date for a new event, or choose an existing event in the event option. Nothing was changed.`;
 const LOST_AND_CLOSED = safe`An event with this name and date exists, but it is closed and its post has gone, so nothing was changed.`;
@@ -659,6 +665,9 @@ async function finishCreate(ctx: FinishContext): Promise<MessageInput> {
     "name",
     ApplicationCommandOptionType.String,
   );
+  if (hasInviteOrMaskedLink(rawName)) {
+    return message(LINK_IN_NAME);
+  }
   const name = normaliseEventName(rawName);
   if (name === undefined) {
     return message(BAD_NAME);
@@ -1076,6 +1085,9 @@ async function finishLink(ctx: FinishContext): Promise<MessageInput> {
   }
   if (held !== null) {
     return message(ALREADY_LINKED);
+  }
+  if (hasInviteOrMaskedLink(thread.name)) {
+    return message(LINK_IN_POST_NAME);
   }
   const name = normaliseEventName(thread.name);
   if (name === undefined) {
