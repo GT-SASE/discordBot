@@ -56,6 +56,41 @@ describe("two overlapping reminder runs", () => {
     expect(rows).toEqual([{ attempts: 1, state: "claimed" }]);
   });
 
+  it("a batch claim waits for an overlapping batch in the other order, then claims nothing", async () => {
+    const guild = await insertGuild(db.connection);
+    const eventId = await insertEvent(db.connection, guild);
+    const first = await insertTask(db.connection, guild, eventId);
+    const second = await insertTask(db.connection, guild, eventId);
+    const claimSql = `SELECT public.claim_reminders(
+      $1::uuid[],
+      ARRAY['one_day', 'one_day']::public.reminder_kind[],
+      ARRAY['2030-01-10', '2030-01-10']::date[],
+      ARRAY[NULL, NULL]::text[],
+      ARRAY[NULL, NULL]::timestamptz[]
+    ) AS results`;
+
+    const outcome = await db.race(
+      [claimSql, [[first, second]]],
+      [claimSql, [[second, first]]],
+    );
+
+    expect(outcome.code).toBeUndefined();
+    expect(outcome.rows).toEqual([
+      {
+        results: [
+          { claim_token: null, changed: false },
+          { claim_token: null, changed: false },
+        ],
+      },
+    ]);
+    const { rows } = await db.observer.query(
+      `SELECT count(*)::int AS n FROM public.reminder_log
+       WHERE task_id = ANY($1::uuid[]) AND state = 'claimed'`,
+      [[first, second]],
+    );
+    expect(rows).toEqual([{ n: 2 }]);
+  });
+
   it("only one of two claims on an event's step reminder gets a token", async () => {
     const guild = await insertGuild(db.connection);
     const eventId = await insertEvent(db.connection, guild);
