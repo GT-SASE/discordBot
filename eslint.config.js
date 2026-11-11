@@ -47,6 +47,10 @@ const TABLES =
 // step around these rules by its name.
 const EXTENSIONS = "{ts,tsx,mts,cts,js,jsx,mjs,cjs}";
 
+const SEND_THROUGH_CLIENT = "Send to Discord through src/discord/client.ts.";
+// Node's networking modules, and the HTTP client fetch is built on.
+const NETWORK_MODULES = "^(node:)?(http2?|https|net|tls|dgram|undici)$";
+
 const SUPABASE_ONLY_IN_DB = "Only src/db/ may load Supabase packages.";
 const QUERIES_ONLY_IN_DB = "Database queries belong in src/db/.";
 
@@ -78,8 +82,13 @@ export default defineConfig([
     extends: [tseslint.configs.disableTypeChecked],
   },
   {
+    name: "base/disable-directives",
+    linterOptions: { reportUnusedDisableDirectives: "error" },
+  },
+  {
     // Only the Discord client sends to Discord, so that every send runs the managed
-    // channel check. The database client is the other caller of fetch.
+    // channel check. The database client is the other caller of fetch. Inline
+    // disable comments are ignored here, so only the two client files can opt out.
     name: "discord/one-send-path",
     files: [`{src,api}/**/*.${EXTENSIONS}`],
     ignores: [
@@ -87,23 +96,54 @@ export default defineConfig([
       "src/db/client.ts",
       `**/*.test.${EXTENSIONS}`,
     ],
+    linterOptions: { noInlineConfig: true },
     rules: {
       "no-restricted-globals": [
         "error",
-        {
-          name: "fetch",
-          message: "Send to Discord through src/discord/client.ts.",
-        },
+        ...["fetch", "globalThis", "window", "self"].map((name) => ({
+          name,
+          message: SEND_THROUGH_CLIENT,
+        })),
+      ],
+      "no-restricted-properties": [
+        "error",
+        ...["globalThis", "window", "self"].map((object) => ({
+          object,
+          property: "fetch",
+          message: SEND_THROUGH_CLIENT,
+        })),
       ],
       "no-restricted-imports": [
         "error",
         {
           patterns: [
+            { regex: NETWORK_MODULES, message: SEND_THROUGH_CLIENT },
             {
-              regex: "^(node:)?(http2?|https|undici)$",
-              message: "Send to Discord through src/discord/client.ts.",
+              regex: "^discord-api-types(/.*)?$",
+              importNames: ["RouteBases", "Routes"],
+              message: SEND_THROUGH_CLIENT,
             },
           ],
+        },
+      ],
+      "no-restricted-syntax": [
+        "error",
+        {
+          selector: `ImportExpression[source.value=/${NETWORK_MODULES}/]`,
+          message: SEND_THROUGH_CLIENT,
+        },
+        {
+          selector: "ImportExpression:not([source.type='Literal'])",
+          message: "Import a module by its literal name.",
+        },
+        {
+          selector: `CallExpression[callee.name='require'][arguments.0.value=/${NETWORK_MODULES}/]`,
+          message: SEND_THROUGH_CLIENT,
+        },
+        {
+          selector:
+            "CallExpression[callee.property.name='getBuiltinModule'], CallExpression[callee.name='getBuiltinModule']",
+          message: SEND_THROUGH_CLIENT,
         },
       ],
     },
