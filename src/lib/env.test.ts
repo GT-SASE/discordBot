@@ -108,12 +108,14 @@ describe("DATABASE_URL", () => {
   };
 
   it.each([
-    url("ep-example-pooler.example.test/bot?sslmode=require"),
+    url("ep-example-pooler.example.test/bot?sslmode=verify-full"),
     url(
       "ep-example-pooler.example.test/bot?sslmode=verify-full&channel_binding=require",
     ),
     url("localhost:5432/bot"),
+    url("localhost:5432/bot?sslmode=disable"),
     url("127.0.0.1/bot").replace("postgresql:", "postgres:"),
+    url("[::1]/bot"),
   ])("accepts %s", (value) => {
     vi.stubEnv("DATABASE_URL", value);
     expect(getDatabaseUrl()).toBe(value);
@@ -122,26 +124,81 @@ describe("DATABASE_URL", () => {
   it.each([
     [
       "the owner's role",
-      url("db.example.test/bot?sslmode=require", "neondb_owner"),
+      url("db.example.test/bot?sslmode=verify-full", "neondb_owner"),
     ],
-    ["no password", "postgresql://bot_app@db.example.test/bot?sslmode=require"],
+    [
+      "no password",
+      "postgresql://bot_app@db.example.test/bot?sslmode=verify-full",
+    ],
     ["no TLS to a remote host", url("db.example.test/bot")],
     ["TLS that may be skipped", url("db.example.test/bot?sslmode=prefer")],
-    ["no database", url("db.example.test/?sslmode=require")],
+    ["TLS turned off", url("db.example.test/bot?sslmode=disable")],
+    ["no database", url("db.example.test/?sslmode=verify-full")],
     [
       "another scheme",
-      url("db.example.test/bot?sslmode=require").replace(
+      url("db.example.test/bot?sslmode=verify-full").replace(
         "postgresql:",
         "https:",
       ),
     ],
     ["no URL at all", "bot_app"],
+    [
+      "a user in the query",
+      url("db.example.test/bot?sslmode=verify-full&user=neondb_owner"),
+    ],
+    [
+      "a password in the query",
+      url(`db.example.test/bot?sslmode=verify-full&password=${password}`),
+    ],
+    [
+      "a host in the query, behind a local name",
+      url("localhost/bot?host=db.example.test"),
+    ],
+    [
+      "a port in the query",
+      url("db.example.test/bot?sslmode=verify-full&port=6543"),
+    ],
+    [
+      "options in the query",
+      url(
+        "db.example.test/bot?sslmode=verify-full&options=-c%20statement_timeout%3D0",
+      ),
+    ],
+    [
+      "sslmode given twice",
+      url("db.example.test/bot?sslmode=verify-full&sslmode=disable"),
+    ],
+    [
+      "channel_binding given twice",
+      url(
+        "db.example.test/bot?sslmode=verify-full&channel_binding=require&channel_binding=disable",
+      ),
+    ],
+    [
+      "any other query parameter",
+      url("db.example.test/bot?sslmode=verify-full&application_name=bot"),
+    ],
+    [
+      "an unknown sslmode on a local host",
+      url("localhost/bot?sslmode=no-verify"),
+    ],
   ])("refuses %s, naming only the setting", (_name, value) => {
     vi.stubEnv("DATABASE_URL", value);
     expect(getDatabaseUrl).toThrow(ConfigError);
     expect(getDatabaseUrl).toThrow("DATABASE_URL");
     expect(getDatabaseUrl).not.toThrow(password);
   });
+
+  it.each(["require", "verify-ca"])(
+    "refuses sslmode=%s to a remote host and says why",
+    (mode) => {
+      vi.stubEnv("DATABASE_URL", url(`db.example.test/bot?sslmode=${mode}`));
+      expect(getDatabaseUrl).toThrow(ConfigError);
+      expect(getDatabaseUrl).toThrow("must use sslmode=verify-full");
+      expect(getDatabaseUrl).toThrow("pg 9");
+      expect(getDatabaseUrl).not.toThrow(password);
+    },
+  );
 
   it("refuses it missing or blank", () => {
     vi.stubEnv("DATABASE_URL", undefined);

@@ -24,32 +24,67 @@ const GuildIds = z
 export const DATABASE_ROLE = "bot_app";
 
 const LOCAL_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]"]);
-const TLS_MODES = new Set(["require", "verify-ca", "verify-full"]);
 
 /**
- * A Postgres URL for bot_app, with a password, a host and a database. Anything but a
- * local server must ask for TLS. Parsed with the URL parser alone, so no error can quote
- * the password.
+ * The only query parameters allowed, with the values each may take. pg copies every
+ * query parameter into its config over what the rest of the URL says, so `?user=`,
+ * `?password=`, `?host=`, `?port=` or `?options=` would connect as another role, to
+ * another host or with other settings than the ones checked here. Neon's own strings
+ * carry channel_binding, which pg ignores.
  */
-const DatabaseUrl = z.string().refine((value) => {
+const QUERY_VALUES = new Map<string, ReadonlySet<string>>([
+  ["sslmode", new Set(["disable", "require", "verify-ca", "verify-full"])],
+  ["channel_binding", new Set(["disable", "prefer", "require"])],
+]);
+
+type DatabaseUrlProblem = "malformed" | "weak_tls";
+
+/**
+ * Why a URL is refused, or null if it is a Postgres URL for bot_app with a password, a
+ * host and a database. A non-local host must ask for sslmode=verify-full. pg 8 treats
+ * require and verify-ca as verify-full but warns that pg 9 will follow libpq, where
+ * neither checks the server's name, so they are refused rather than left to weaken on
+ * an upgrade. Each query parameter may appear once: pg reads the last of a repeated
+ * one, and this check would read the first. Parsed with the URL parser alone, so no
+ * error can quote the password.
+ */
+function databaseUrlProblem(value: string): DatabaseUrlProblem | null {
   let url: URL;
   try {
     url = new URL(value);
   } catch {
-    return false;
+    return "malformed";
   }
-  const sslmode = url.searchParams.get("sslmode");
-  return (
+  const keys = [...url.searchParams.keys()];
+  if (
+    new Set(keys).size !== keys.length ||
+    [...url.searchParams].some(
+      ([key, setting]) => QUERY_VALUES.get(key)?.has(setting) !== true,
+    )
+  ) {
+    return "malformed";
+  }
+  const wellFormed =
     (url.protocol === "postgresql:" || url.protocol === "postgres:") &&
     decodeURIComponent(url.username) === DATABASE_ROLE &&
     url.password !== "" &&
     url.hostname !== "" &&
     /^\/[A-Za-z0-9_-]+$/.test(url.pathname) &&
-    url.hash === "" &&
-    (LOCAL_HOSTS.has(url.hostname) ||
-      (sslmode !== null && TLS_MODES.has(sslmode)))
-  );
-});
+    url.hash === "";
+  if (!wellFormed) {
+    return "malformed";
+  }
+  if (LOCAL_HOSTS.has(url.hostname)) {
+    return null;
+  }
+  const sslmode = url.searchParams.get("sslmode");
+  if (sslmode === "verify-full") {
+    return null;
+  }
+  return sslmode === "require" || sslmode === "verify-ca"
+    ? "weak_tls"
+    : "malformed";
+}
 
 /** Reads a setting. Zod's own messages are not used, so no error can quote a value. */
 function read<T>(
@@ -69,11 +104,25 @@ function read<T>(
 }
 
 export function getDatabaseUrl(): string {
-  return read(
-    "DATABASE_URL",
-    DatabaseUrl,
-    `must be a postgresql:// URL for ${DATABASE_ROLE}, with a password, a database and sslmode=require or stricter`,
-  );
+  const name = "DATABASE_URL";
+  const value = process.env[name]?.trim();
+  if (value === undefined || value === "") {
+    throw new ConfigError(name, "must be set");
+  }
+  switch (databaseUrlProblem(value)) {
+    case null:
+      return value;
+    case "weak_tls":
+      throw new ConfigError(
+        name,
+        "must use sslmode=verify-full, not require or verify-ca: pg 9 will read those as libpq does, where they do not check the server's name, so a connection could go to an impostor",
+      );
+    case "malformed":
+      throw new ConfigError(
+        name,
+        `must be a postgresql:// URL for ${DATABASE_ROLE}, with a password, a database, sslmode=verify-full for a non-local host, and no query parameters but sslmode and channel_binding, each once`,
+      );
+  }
 }
 
 export function getDiscordAppId(): string {

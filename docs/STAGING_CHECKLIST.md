@@ -508,7 +508,7 @@ Run the SQL in this section as the owner, in Neon's SQL editor or `psql "$OWNER_
   psql "${BOT_URL/sslmode=verify-full/sslmode=disable}" -c 'SELECT 1;'
   ```
 
-  - Success: Neon refuses the connection. The bot itself refuses a non-local `DATABASE_URL` without `sslmode=require`, `verify-ca` or `verify-full` at startup.
+  - Success: Neon refuses the connection. The bot itself refuses a non-local `DATABASE_URL` without `sslmode=verify-full` at startup.
   - If it fails: Neon accepts plain connections. The bot still asks for TLS, but record it.
 
 - [ ] **The bot's connection string works, and connections are as expected.**
