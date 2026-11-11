@@ -1198,6 +1198,28 @@ BEGIN
 END;
 $$;
 
+-- A closed event stays closed. The bot tells people there is no way to reopen one, and
+-- reopening would bring back reminders for its tasks. Only the tables' owner may, by
+-- hand, as docs/RECOVERY.md describes.
+CREATE FUNCTION public.refuse_reopen() RETURNS trigger
+    LANGUAGE plpgsql
+    SET search_path TO ''
+    AS $$
+BEGIN
+  IF OLD.status = 'closed'
+    AND NEW.status IS DISTINCT FROM OLD.status
+    AND NOT pg_catalog.pg_has_role(
+      current_user,
+      (SELECT c.relowner FROM pg_catalog.pg_class AS c WHERE c.oid = TG_RELID),
+      'USAGE'
+    )
+  THEN
+    RAISE EXCEPTION 'a closed event stays closed' USING ERRCODE = '42501';
+  END IF;
+  RETURN NEW;
+END;
+$$;
+
 CREATE FUNCTION public.refuse_future_job_run_times() RETURNS trigger
     LANGUAGE plpgsql
     SET search_path TO ''
@@ -1804,6 +1826,8 @@ CREATE TRIGGER events_record_delete AFTER DELETE ON public.events FOR EACH ROW E
 CREATE TRIGGER events_record_update AFTER UPDATE ON public.events FOR EACH ROW WHEN ((old.* IS DISTINCT FROM new.*)) EXECUTE FUNCTION history.record_row_version();
 
 CREATE TRIGGER events_reject_truncate BEFORE TRUNCATE ON public.events FOR EACH STATEMENT EXECUTE FUNCTION history.reject_truncate();
+
+CREATE TRIGGER events_refuse_reopen BEFORE UPDATE OF status ON public.events FOR EACH ROW EXECUTE FUNCTION public.refuse_reopen();
 
 CREATE TRIGGER events_require_open_parent BEFORE INSERT ON public.events FOR EACH ROW EXECUTE FUNCTION public.require_open_parent();
 
