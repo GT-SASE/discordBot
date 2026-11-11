@@ -337,6 +337,9 @@ BEGIN
 END;
 $$;
 
+-- Adds a person to a step. True if this call added them, false if they were already on
+-- it. Raises 22023 for Budget approved, CF428 for Food pickup before the budget is
+-- approved, and CF431 once the step has its most people: 10, or 15 for Food pickup.
 CREATE FUNCTION public.assign_event_step(p_event_id uuid, p_guild_id text, p_kind public.event_step_kind, p_user_id text, p_actor_id text) RETURNS boolean
     LANGUAGE plpgsql SECURITY DEFINER
     SET search_path TO ''
@@ -366,6 +369,13 @@ BEGIN
   END IF;
   IF v_event.status = 'closed' THEN
     RAISE EXCEPTION 'event is closed' USING ERRCODE = 'CF410';
+  END IF;
+
+  IF p_kind = 'food_pickup' AND NOT EXISTS (
+    SELECT 1 FROM public.event_steps
+    WHERE event_id = p_event_id AND kind = 'budget_approved' AND status = 'done'
+  ) THEN
+    RAISE EXCEPTION 'budget is not approved' USING ERRCODE = 'CF428';
   END IF;
 
   IF EXISTS (
@@ -1198,6 +1208,28 @@ BEGIN
 END;
 $$;
 
+-- A closed event stays closed. The bot tells people there is no way to reopen one, and
+-- reopening would bring back reminders for its tasks. Only the tables' owner may, by
+-- hand, as docs/RECOVERY.md describes.
+CREATE FUNCTION public.refuse_reopen() RETURNS trigger
+    LANGUAGE plpgsql
+    SET search_path TO ''
+    AS $$
+BEGIN
+  IF OLD.status = 'closed'
+    AND NEW.status IS DISTINCT FROM OLD.status
+    AND NOT pg_catalog.pg_has_role(
+      current_user,
+      (SELECT c.relowner FROM pg_catalog.pg_class AS c WHERE c.oid = TG_RELID),
+      'USAGE'
+    )
+  THEN
+    RAISE EXCEPTION 'a closed event stays closed' USING ERRCODE = '42501';
+  END IF;
+  RETURN NEW;
+END;
+$$;
+
 CREATE FUNCTION public.refuse_future_job_run_times() RETURNS trigger
     LANGUAGE plpgsql
     SET search_path TO ''
@@ -1293,6 +1325,8 @@ BEGIN
 END;
 $$;
 
+-- Sets the time of the food pickup. Raises CF428 before the budget is approved. Returns
+-- whether Food pickup is now done, which also needs at least one person on it.
 CREATE FUNCTION public.set_event_pickup_time(p_event_id uuid, p_guild_id text, p_pickup_time time without time zone, p_actor_id text) RETURNS boolean
     LANGUAGE plpgsql SECURITY DEFINER
     SET search_path TO ''
@@ -1321,6 +1355,13 @@ BEGIN
   END IF;
   IF v_event.status = 'closed' THEN
     RAISE EXCEPTION 'event is closed' USING ERRCODE = 'CF410';
+  END IF;
+
+  IF NOT EXISTS (
+    SELECT 1 FROM public.event_steps
+    WHERE event_id = p_event_id AND kind = 'budget_approved' AND status = 'done'
+  ) THEN
+    RAISE EXCEPTION 'budget is not approved' USING ERRCODE = 'CF428';
   END IF;
 
   UPDATE public.events
@@ -1804,6 +1845,8 @@ CREATE TRIGGER events_record_delete AFTER DELETE ON public.events FOR EACH ROW E
 CREATE TRIGGER events_record_update AFTER UPDATE ON public.events FOR EACH ROW WHEN ((old.* IS DISTINCT FROM new.*)) EXECUTE FUNCTION history.record_row_version();
 
 CREATE TRIGGER events_reject_truncate BEFORE TRUNCATE ON public.events FOR EACH STATEMENT EXECUTE FUNCTION history.reject_truncate();
+
+CREATE TRIGGER events_refuse_reopen BEFORE UPDATE OF status ON public.events FOR EACH ROW EXECUTE FUNCTION public.refuse_reopen();
 
 CREATE TRIGGER events_require_open_parent BEFORE INSERT ON public.events FOR EACH ROW EXECUTE FUNCTION public.require_open_parent();
 

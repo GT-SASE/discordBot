@@ -19,7 +19,7 @@ import type {
   ManagedChannelCheck,
   ThreadTarget,
 } from "./client.ts";
-import type { OutboundBody } from "./outbound.ts";
+import type { OutboundBody, OutboundKind } from "./outbound.ts";
 import {
   actionRow,
   autocompleteResult,
@@ -1979,11 +1979,11 @@ describe("the check made before every send", () => {
   const SAFE_MENTIONS = { parse: [], users: [USER], roles: [ROLE] };
 
   /** A body written by hand, as no builder would write it. */
-  function handBuilt<K extends "channel-message" | "message-edit">(
+  function handBuilt<K extends OutboundKind>(
     kind: K,
     payload: object,
   ): OutboundBody<K> {
-    return { kind, payload };
+    return { kind, payload } as OutboundBody<K>;
   }
 
   const BUTTON_ROW = (button: object) => [{ type: 1, components: [button] }];
@@ -2153,26 +2153,26 @@ describe("the check made before every send", () => {
     const unsafe = { content: "@everyone", allowed_mentions: { parse: [] } };
     const attempts: Promise<unknown>[] = [
       client().editMessage(MANAGED, MESSAGE, handBuilt("message-edit", unsafe)),
-      client().createThread(MANAGED, {
-        kind: "thread-create",
-        payload: { name: "Event", message: unsafe },
-      }),
-      client().replyToInteraction(IN_MANAGED, {
-        kind: "checked-response",
-        payload: { type: 4, data: unsafe },
-      }),
+      client().createThread(
+        MANAGED,
+        handBuilt("thread-create", { name: "Event", message: unsafe }),
+      ),
+      client().replyToInteraction(
+        IN_MANAGED,
+        handBuilt("checked-response", { type: 4, data: unsafe }),
+      ),
       client().editInteractionReply(
         IN_MANAGED,
         handBuilt("message-edit", unsafe),
       ),
-      client().sendFollowUp(IN_MANAGED, {
-        kind: "follow-up",
-        payload: unsafe,
-      }),
-      client().respondEphemerally(IN_MANAGED, {
-        kind: "direct-response",
-        payload: { type: 4, data: { ...unsafe, flags: 64 } },
-      }),
+      client().sendFollowUp(IN_MANAGED, handBuilt("follow-up", unsafe)),
+      client().respondEphemerally(
+        IN_MANAGED,
+        handBuilt("direct-response", {
+          type: 4,
+          data: { ...unsafe, flags: 64 },
+        }),
+      ),
       client().editEphemeralReply(
         IN_MANAGED,
         handBuilt("message-edit", unsafe),
@@ -2325,10 +2325,10 @@ describe("the check made before every send", () => {
     };
 
     const failure = await failureOf(
-      client().respondEphemerally(IN_MANAGED, {
-        kind: "direct-response",
-        payload: { type: 4, data },
-      }),
+      client().respondEphemerally(
+        IN_MANAGED,
+        handBuilt("direct-response", { type: 4, data }),
+      ),
     );
 
     expect(failure.kind).toBe("not_ephemeral");

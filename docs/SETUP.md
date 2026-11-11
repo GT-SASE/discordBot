@@ -138,7 +138,7 @@ On the Free plan, the compute stops after a few minutes with no queries, and the
 
 ### Run the migrations
 
-Open the project's **Connect** dialog. Choose the `neondb_owner` role and the database, and turn connection pooling off, so the host has no `-pooler` in it. Migrations work through either host, but the direct one is the better choice: a run holds a lock for its whole session, which a pooler may not keep. Copy the connection string into the password manager.
+Open the project's **Connect** dialog. Choose the `neondb_owner` role and the database, and turn connection pooling off, so the host has no `-pooler` in it. Migrations work through either host, but the direct one is the better choice for the owner's occasional runs. Copy the connection string into the password manager.
 
 Then apply the migrations. `read -rs` waits for you to paste the string, and keeps it out of your shell history and off the screen.
 
@@ -185,7 +185,7 @@ postgresql://bot_app:<password>@<pooled-host>/<database>?sslmode=verify-full
 
 `<password>` is the one you set with `ALTER ROLE` above. It must be percent-encoded: hex needs no change, but `+`, `/`, `=`, `@`, `:` and `%` each do.
 
-Use `sslmode=verify-full`, which checks the server's certificate and name. The bot also accepts `require` and `verify-ca`, and refuses any other role, a missing password, and a non-local host without one of these modes. Keep it in the password manager. It goes into Vercel in the next part.
+Use `sslmode=verify-full`, which checks the server's certificate and name. Neon's Connect dialog gives `sslmode=require`: change it. The bot refuses `require` and `verify-ca` for a non-local host, because pg 9 will read them as libpq does, where neither checks the server's name. It also refuses any other role, a missing password, and any query parameter but `sslmode` and `channel_binding`, or either one given twice, since pg lets `?user=`, `?host=` and the like override the rest of the URL. Keep it in the password manager. It goes into Vercel in the next part.
 
 Check that it logs in, after pasting it at the prompt:
 
@@ -244,7 +244,7 @@ Go to Settings > Environment Variables. Add each one below with **Production** a
 
 Never put the owner's connection string here. The bot refuses any role but `bot_app` at startup, and the owner's would bypass every grant.
 
-The bot connects through `pg` (node-postgres) and Drizzle ORM, with a pool of at most 3 connections per function instance, closed after 10 seconds idle, with TCP keepalive on and an 11 second limit on any one query. A read that meets a connection that died while the instance was frozen is sent once more; a write never is. A request Discord is waiting on gives up after 1.5 seconds, and others after 8. The cron waits at most 1 second for the pool to close. The role's `statement_timeout` of 10 seconds bounds the work on the server for a session that keeps the default. It is only a default: anyone logged in as `bot_app` can lift it with `SET`, or for later sessions with `ALTER ROLE bot_app SET`, so it does not contain a leaked password.
+The bot connects through `pg` (node-postgres) and Drizzle ORM, with a pool of at most 10 connections per function instance, since under Fluid compute one instance serves several requests at once. Idle connections close after 10 seconds. The interaction pool waits at most 1 second to open a connection, inside the 1.5 seconds a request Discord is waiting on may take, and is attached to the instance with `attachDatabasePool` from `@vercel/functions`, so the instance stays up until its idle connections close. The cron's own pool waits up to 5 seconds. Each pool has TCP keepalive on and an 11 second limit on any one query. A read that meets a connection that died while the instance was frozen is sent once more; a write never is. A request Discord is waiting on gives up after 1.5 seconds, and others after 8. The cron waits at most 1 second for the pool to close. The role's `statement_timeout` of 10 seconds bounds the work on the server for a session that keeps the default. It is only a default: anyone logged in as `bot_app` can lift it with `SET`, or for later sessions with `ALTER ROLE bot_app SET`, so it does not contain a leaked password.
 
 ### Lock down old deployments
 

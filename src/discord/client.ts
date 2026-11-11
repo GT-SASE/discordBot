@@ -1162,7 +1162,7 @@ export function createDiscordClient(
       const operation = "reply to interaction";
       const { json, wire } = checkedJson(operation, body, interaction.guildId);
       // Read from what is sent, so a getter cannot pass this and then send a public reply.
-      if (!isEphemeralInitialResponse({ kind: body.kind, payload: wire })) {
+      if (!isEphemeralInitialResponse({ ...body, payload: wire })) {
         throw new DiscordClientError(operation, { kind: "not_ephemeral" });
       }
       const route = callbackRoute(operation, interaction);

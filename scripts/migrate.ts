@@ -6,8 +6,9 @@
  * each file's sha256, and a run fails if an applied file has changed since: changes go
  * in new numbered files.
  *
- * Connect as the role that owns the schema, never as bot_app. Errors print only their
- * Postgres code and the file, since a message can quote the connection string or data.
+ * Connect as the role that owns the schema, never as bot_app. Errors print only the
+ * file, the Postgres code and, when Postgres gives a position, where in the file it
+ * failed, since a message can quote the connection string or data.
  *
  * Usage: DATABASE_URL=<owner connection string> pnpm db:migrate
  */
@@ -102,9 +103,15 @@ async function inTransaction<T>(
   }
 }
 
-/** The hex sha256 of a migration's text, as the ledger records it. */
+/**
+ * The hex sha256 of a migration's text, as the ledger records it. Line endings are
+ * made LF first, so a checkout with CRLF endings, as Git gives on Windows by default,
+ * hashes the same as any other.
+ */
 export function migrationHash(sql: string): string {
-  return createHash("sha256").update(sql, "utf8").digest("hex");
+  return createHash("sha256")
+    .update(sql.replaceAll("\r\n", "\n"), "utf8")
+    .digest("hex");
 }
 
 /** Each applied version and the hash recorded for it. */
@@ -149,6 +156,119 @@ async function closeDatabase(connection: MigrationConnection): Promise<void> {
   }
 }
 
+/** The index just past the comment, quoted text or dollar-quoted body at `index`. */
+function skipQuoted(sql: string, index: number): number {
+  if (sql.startsWith("--", index)) {
+    const end = sql.indexOf("\n", index);
+    return end === -1 ? sql.length : end;
+  }
+  if (sql.startsWith("/*", index)) {
+    let depth = 0;
+    let at = index;
+    while (at < sql.length) {
+      if (sql.startsWith("/*", at)) {
+        depth += 1;
+        at += 2;
+      } else if (sql.startsWith("*/", at)) {
+        depth -= 1;
+        at += 2;
+        if (depth === 0) {
+          return at;
+        }
+      } else {
+        at += 1;
+      }
+    }
+    return sql.length;
+  }
+  const char = sql.charAt(index);
+  if (char === "'" || char === '"') {
+    let at = index + 1;
+    while (at < sql.length) {
+      if (sql.charAt(at) !== char) {
+        at += 1;
+      } else if (sql.charAt(at + 1) === char) {
+        at += 2;
+      } else {
+        return at + 1;
+      }
+    }
+    return sql.length;
+  }
+  const tag = /^\$(?:[A-Za-z_][A-Za-z0-9_]*)?\$/.exec(
+    sql.slice(index, index + 64),
+  );
+  if (char === "$" && tag !== null) {
+    const close = sql.indexOf(tag[0], index + tag[0].length);
+    return close === -1 ? sql.length : close + tag[0].length;
+  }
+  return index + 1;
+}
+
+/**
+ * Where a 1-based character position in a file falls: its line, and the first line of
+ * the statement holding it, past any comments. Statements end at a semicolon outside
+ * comments, quotes and function bodies.
+ */
+export function locateInMigration(
+  sql: string,
+  position: number,
+): { line: number; statement: string } {
+  // Postgres counts characters, and a string index counts UTF-16 units.
+  const offset = Array.from(sql)
+    .slice(0, Math.max(position - 1, 0))
+    .join("").length;
+  let start = 0;
+  let index = 0;
+  while (index < offset) {
+    if (sql.charAt(index) === ";") {
+      start = index + 1;
+      index += 1;
+    } else {
+      index = skipQuoted(sql, index);
+    }
+  }
+  let first = start;
+  for (;;) {
+    while (/\s/.test(sql.charAt(first))) {
+      first += 1;
+    }
+    if (!sql.startsWith("--", first) && !sql.startsWith("/*", first)) {
+      break;
+    }
+    first = skipQuoted(sql, first);
+  }
+  const lineEnd = sql.slice(first).search(/\r?\n/);
+  const statement = sql
+    .slice(first, lineEnd === -1 ? sql.length : first + lineEnd)
+    .trim();
+  return {
+    line: sql.slice(0, offset).split("\n").length,
+    statement:
+      statement.length > 120 ? `${statement.slice(0, 117)}...` : statement,
+  };
+}
+
+/**
+ * What a failed file reports: its SQLSTATE and, when Postgres gives one, the position
+ * of the error, its line, and the first line of the statement there, all from the file
+ * itself. The server's message and detail are left out, since they can quote row data,
+ * and the connection string never reaches this.
+ */
+function failureMessage(migration: Migration, error: unknown): string {
+  const { code, position } = error as { code?: unknown; position?: unknown };
+  let message = `${migration.name} failed`;
+  if (typeof code === "string") {
+    message += ` with ${code}`;
+  }
+  const at = typeof position === "string" ? Number(position) : Number.NaN;
+  if (Number.isInteger(at) && at > 0) {
+    const { line, statement } = locateInMigration(migration.sql, at);
+    message += ` at position ${String(at)}, line ${String(line)}, in the statement starting: ${statement}`;
+  }
+  return message;
+}
+
 /** Applies what is missing and returns the names of the files it applied. */
 export async function migrate(
   connection: MigrationConnection,
@@ -191,10 +311,7 @@ export async function migrate(
       try {
         await connection.exec(migration.sql);
       } catch (error) {
-        const code = (error as { code?: unknown }).code;
-        throw new MigrationError(
-          `${migration.name} failed${typeof code === "string" ? ` with ${code}` : ""}`,
-        );
+        throw new MigrationError(failureMessage(migration, error));
       }
       await connection.query(
         "INSERT INTO public.schema_migrations (version, name, sha256) VALUES ($1, $2, $3)",

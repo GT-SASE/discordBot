@@ -1,0 +1,7 @@
+# Checked out with LF on every platform. scripts/migrate.ts records each migration's
+# sha256, and scripts/check-lockfile.ts reads the lockfile line by line, so a CRLF
+# checkout must not change either. Shell scripts fail under bash with CRLF.
+*.sql text eol=lf
+pnpm-lock.yaml text eol=lf
+*.sh text eol=lf
+.githooks/* text eol=lf

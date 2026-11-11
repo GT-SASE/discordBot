@@ -1,3 +1,4 @@
+import pg from "pg";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { testSnowflake } from "../../test/support/mock-db.ts";
 import {
@@ -9,9 +10,12 @@ import { getGuildConfig } from "./guild-config.ts";
 import { claimInteraction } from "./interaction-claims.ts";
 import { markTaskDoneAsOfficer } from "./tasks.ts";
 import type { DateOnly } from "../lib/dates.ts";
+import { DATABASE_ROLE, getDatabaseUrl } from "../lib/env.ts";
 import type { EventResource, TaskResource } from "../lib/permissions.ts";
 import {
   INTERACTION_DEADLINE_MS,
+  INTERACTION_POOL,
+  JOB_POOL,
   createDbClient,
   withDeadline,
   type DbClient,
@@ -181,6 +185,38 @@ describe("client", () => {
 
     vi.stubEnv("DATABASE_URL", testDatabaseUrl());
     expect(getDb()).toBe(getDb());
+  });
+
+  it("gives up connecting for an interaction before Discord's deadline does", () => {
+    expect(INTERACTION_POOL.connectionTimeoutMillis).toBeLessThan(
+      INTERACTION_DEADLINE_MS,
+    );
+    expect(INTERACTION_POOL.attachToInstance).toBe(true);
+    expect(JOB_POOL.attachToInstance).toBe(false);
+  });
+
+  it("gives pg the role, host, database and TLS that the settings check passed", () => {
+    for (const query of [
+      "sslmode=verify-full",
+      "sslmode=verify-full&channel_binding=require",
+    ]) {
+      const url = new URL(testDatabaseUrl());
+      url.search = query;
+      vi.stubEnv("DATABASE_URL", url.toString());
+      // Built the way the pool builds it, and nothing connects.
+      const client = new pg.Client({ connectionString: getDatabaseUrl() });
+      expect({
+        user: client.user,
+        host: client.host,
+        database: client.database,
+        ssl: client.ssl,
+      }).toEqual({
+        user: DATABASE_ROLE,
+        host: url.hostname,
+        database: "bot",
+        ssl: {},
+      });
+    }
   });
 });
 

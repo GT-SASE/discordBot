@@ -11,7 +11,7 @@ import {
   type DbClient,
   type SqlDatabase,
 } from "./internal.ts";
-import { closePool, poolDatabase } from "./pool.ts";
+import { closePool, poolDatabase, type PoolUse } from "./pool.ts";
 
 export type { DbClient, SqlDatabase };
 
@@ -53,9 +53,37 @@ export function withDeadline(db: DbClient, deadlineMs: number): DbClient {
   return rebuildWithDeadline(db, deadlineMs);
 }
 
-/** A new client from DATABASE_URL, with a pool shared with no other caller. */
-export function createDbFromEnv(): DbClient {
-  return createDbClient(poolDatabase(getDatabaseUrl()));
+/**
+ * The instance's shared pool, for interaction requests. Discord waits on these, and the
+ * read before the first reply gets `INTERACTION_DEADLINE_MS`, 1.5 seconds. Opening a
+ * connection may take at most 1 second of that, leaving half a second for the query, so
+ * a pool that cannot connect fails in time for the fixed reply instead of Discord timing
+ * out. Attached to the instance with `attachDatabasePool`, so under Fluid compute the
+ * instance stays up until idle connections close, rather than being suspended with
+ * them open.
+ */
+export const INTERACTION_POOL: PoolUse = {
+  connectionTimeoutMillis: 1_000,
+  attachToInstance: true,
+};
+
+/**
+ * A pool for one cron run, closed when the run ends. Nobody waits on a reply, so it
+ * allows 5 seconds to connect, which leaves room for a Neon compute starting from idle,
+ * within
+ * the run's own 8 second limit per query.
+ */
+export const JOB_POOL: PoolUse = {
+  connectionTimeoutMillis: 5_000,
+  attachToInstance: false,
+};
+
+/**
+ * A new client from DATABASE_URL, with a pool shared with no other caller. A one-off
+ * job's pool by default: see `JOB_POOL`.
+ */
+export function createDbFromEnv(use: PoolUse = JOB_POOL): DbClient {
+  return createDbClient(poolDatabase(getDatabaseUrl(), use));
 }
 
 /** How long closing a client may take before its caller stops waiting. */
@@ -84,7 +112,7 @@ let client: DbClient | undefined;
 
 /** One client for the life of the function instance, for interaction handlers. */
 export function getDb(): DbClient {
-  client ??= createDbFromEnv();
+  client ??= createDbFromEnv(INTERACTION_POOL);
   return client;
 }
 

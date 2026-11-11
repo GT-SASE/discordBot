@@ -24,7 +24,12 @@ import {
   threadCreate,
   updateMessage,
 } from "./outbound.ts";
-import type { MessageInput, OutboundBody, OutboundKind } from "./outbound.ts";
+import type {
+  MessageInput,
+  OutboundBody,
+  OutboundKind,
+  Part,
+} from "./outbound.ts";
 import {
   escapeUserText,
   plain,
@@ -450,10 +455,9 @@ describe("serializeDirectResponse", () => {
     });
   });
 
-  const direct = (payload: object): OutboundBody<"direct-response"> => ({
-    kind: "direct-response",
-    payload,
-  });
+  /** A body written by hand, as no builder would write it. */
+  const direct = (payload: object) =>
+    ({ kind: "direct-response", payload }) as OutboundBody<"direct-response">;
   const EPHEMERAL = {
     content: "hi",
     allowed_mentions: { parse: [], users: [] },
@@ -899,5 +903,34 @@ describe("components", () => {
     );
 
     expect(JSON.stringify(body)).not.toContain("evil");
+  });
+});
+
+describe("built bodies", () => {
+  it("refuses a body or part written by hand at compile time", () => {
+    const takesBody = (body: OutboundBody<"channel-message">) => body.kind;
+    const takesButton = (part: Part<"button">) => part.kind;
+
+    const attempts = [
+      () =>
+        takesBody(
+          // @ts-expect-error Only the builders make a body.
+          {
+            kind: "channel-message",
+            payload: {
+              content: "@everyone",
+              allowed_mentions: { parse: ["everyone"] },
+            },
+          },
+        ),
+      () =>
+        // @ts-expect-error Only the builders make a part.
+        takesButton({ kind: "button", component: { type: 2 } }),
+    ];
+
+    expect(attempts).toHaveLength(2);
+    expect(
+      takesBody(channelMessage({ content: safe`hi`, mentionUserIds: [] })),
+    ).toBe("channel-message");
   });
 });

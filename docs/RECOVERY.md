@@ -44,6 +44,14 @@ unset OWNER_URL
 
 Restoring an export is untested. Rehearse it on a new, empty test project before relying on it, restoring as that project's owner with `pg_restore --no-owner --single-transaction`. The export holds `public.schema_migrations`, so `pnpm db:migrate` afterwards should print `Nothing to apply.` It does not hold roles, and its grants name `bot_app`, so that role has to exist first. Unverified: the order of steps that works. Then set `bot_app`'s password and point `DATABASE_URL` in Vercel at the new project's pooled string. Write down what worked here.
 
+## If you ran the old backup job
+
+Earlier versions ran a daily job in a separate private repo that committed `age`-encrypted dumps, logged in as a `backup_ro` role on the old database. The Neon baseline has no such role. If that job was ever set up, clean it up:
+
+1. Disable the private repo's backup workflow, then delete the repo. Its encrypted dumps hold member IDs and task text.
+2. Rotate `BACKUP_PGPASSWORD`, or drop `backup_ro`, on the old database for as long as it is kept.
+3. Ask each key holder to delete their `age` identity file, including the password manager entry and the offline copy, so that no copy of a dump can be read again.
+
 ## Undoing a change
 
 No bot command reverses `/event close`, Mark done or `/event delete`, because nothing is really deleted and a mistake is rare. A maintainer does it by hand. Run these as the tables' owner, which on Neon is the project's owner role, in Neon's SQL editor or `psql`. Each one should report that it changed 1 row. `test/db/recovery-procedures.test.ts` runs this SQL, as the tables' owner on PGlite. It has not been run on Neon.

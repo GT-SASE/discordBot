@@ -368,13 +368,15 @@ describe("/event assign and unassign", () => {
     );
   });
 
-  it("puts someone on Food pickup before the budget is approved", async () => {
+  it("refuses Food pickup before the budget is approved", async () => {
     const event = await seed();
-    const person = testSnowflake();
 
-    await assign(event, "food_pickup", person);
+    await assign(event, "food_pickup", testSnowflake());
 
-    expect(await owners(event.id, "food_pickup")).toEqual([person]);
+    expect(world.discord.lastReply()).toContain(
+      "Food pickup can only be set up once the budget is approved.",
+    );
+    expect(await owners(event.id, "food_pickup")).toEqual([]);
   });
 
   it("refuses a closed event", async () => {
@@ -431,12 +433,15 @@ describe("/event pickup", () => {
   const pickup = (event: Seeded, time: string, who = officer()) =>
     world.send(command("pickup", { event: event.id, time }, {}, who));
 
-  it("sets the time before the budget is approved", async () => {
+  it("refuses before the budget is approved", async () => {
     const event = await seed();
 
     await pickup(event, "5:30 PM");
 
-    expect(await pickupTime(event.id)).toBe("17:30");
+    expect(world.discord.lastReply()).toContain(
+      "Food pickup can only be set up once the budget is approved.",
+    );
+    expect(await pickupTime(event.id)).toBeNull();
   });
 
   it("sets the time once approved, and finishes the step with people on it", async () => {

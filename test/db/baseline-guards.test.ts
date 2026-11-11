@@ -77,6 +77,65 @@ describe("the baseline's guards", () => {
     });
   });
 
+  describe("a closed event", () => {
+    async function closedEvent(): Promise<string> {
+      const guild = await insertGuild(db);
+      const eventId = await insertEvent(db, guild);
+      await queryAs(
+        db,
+        BOT_APP,
+        "UPDATE public.events SET status = 'closed' WHERE id = $1",
+        [eventId],
+      );
+      return eventId;
+    }
+
+    const status = async (eventId: string): Promise<unknown> => {
+      const { rows } = await db.query<{ status: string }>(
+        "SELECT status FROM public.events WHERE id = $1",
+        [eventId],
+      );
+      return rows[0]?.status;
+    };
+
+    it("cannot be reopened by the bot", async () => {
+      const eventId = await closedEvent();
+      expect(
+        await errorCodeOf(
+          queryAs(
+            db,
+            BOT_APP,
+            "UPDATE public.events SET status = 'active' WHERE id = $1",
+            [eventId],
+          ),
+        ),
+      ).toBe(INSUFFICIENT_PRIVILEGE);
+      expect(await status(eventId)).toBe("closed");
+    });
+
+    it("can still have its other columns, and a repeated close, written by the bot", async () => {
+      const eventId = await closedEvent();
+      await queryAs(
+        db,
+        BOT_APP,
+        "UPDATE public.events SET status = 'closed', name = 'Renamed' WHERE id = $1",
+        [eventId],
+      );
+      expect(await status(eventId)).toBe("closed");
+    });
+
+    it("can be reopened by the tables' owner, by hand", async () => {
+      const eventId = await closedEvent();
+      await queryAs(
+        db,
+        MIGRATION_OWNER,
+        "UPDATE public.events SET status = 'active' WHERE id = $1",
+        [eventId],
+      );
+      expect(await status(eventId)).toBe("active");
+    });
+  });
+
   describe("a change of person", () => {
     it.each([
       "UPDATE public.tasks SET assignee_id = assignee_id",
@@ -170,10 +229,36 @@ describe("the baseline's guards", () => {
     ).toBe("CF410");
   });
 
-  it("sets up Food pickup and its reminders without waiting for the budget", async () => {
+  it("sets up Food pickup and its reminders once the budget is approved", async () => {
     const guild = await insertGuild(db);
     const eventId = await insertEvent(db, guild);
     const actor = fakeId();
+    expect(
+      await errorCodeOf(
+        queryAs(
+          db,
+          BOT_APP,
+          "SELECT public.assign_event_step($1, $2, 'food_pickup', $3, $3)",
+          [eventId, guild.guildId, actor],
+        ),
+      ),
+    ).toBe("CF428");
+    expect(
+      await errorCodeOf(
+        queryAs(
+          db,
+          BOT_APP,
+          "SELECT public.set_event_pickup_time($1, $2, '17:30', $3)",
+          [eventId, guild.guildId, actor],
+        ),
+      ),
+    ).toBe("CF428");
+    await queryAs(
+      db,
+      BOT_APP,
+      "SELECT public.complete_event_step($1, $2, 'budget_approved', $3)",
+      [eventId, guild.guildId, actor],
+    );
     await queryAs(
       db,
       BOT_APP,
