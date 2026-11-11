@@ -44,6 +44,8 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       - run: bash scripts/install-gitleaks.sh
+      - name: Refuse a .gitleaksignore file
+        run: test ! -e .gitleaksignore
       - name: Scan every commit on every ref
         run: .tools/gitleaks git . --config .gitleaks.toml --redact --ignore-gitleaks-allow --no-banner --log-opts="--all -m --text --no-color"
       - name: Scan every commit on every ref with the project rules
