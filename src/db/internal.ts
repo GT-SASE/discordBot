@@ -1,15 +1,22 @@
 /**
- * The link between an opaque `DbClient` and the query clients behind it. Lint stops
+ * The link between an opaque `DbClient` and the Drizzle database behind it. Lint stops
  * anything outside `src/db/` importing this file, so code elsewhere can hold a client
  * and pass it to the functions here, but cannot build a query with it.
  */
 
-import type { PostgrestClient } from "@supabase/postgrest-js";
-import { sql as fragment, type SQL } from "drizzle-orm";
-import type { PgDatabase, PgQueryResultHKT } from "drizzle-orm/pg-core";
-import { failure, failureFromError, type DbResult } from "./errors.ts";
+import { is, sql as fragment, type SQL } from "drizzle-orm";
+import {
+  PgSelectBase,
+  type PgDatabase,
+  type PgQueryResultHKT,
+} from "drizzle-orm/pg-core";
+import {
+  failure,
+  failureFromError,
+  isDeadConnection,
+  type DbResult,
+} from "./errors.ts";
 import { functionValue } from "./result.ts";
-import type { Database } from "./types.ts";
 
 declare const dbClientBrand: unique symbol;
 
@@ -18,13 +25,10 @@ export interface DbClient {
   readonly [dbClientBrand]: true;
 }
 
-export type RestClient = PostgrestClient<Database>;
-
 /** A Drizzle database on any driver: node-postgres in production, PGlite in tests. */
 export type SqlDatabase = PgDatabase<PgQueryResultHKT>;
 
 interface Registered {
-  readonly client: RestClient;
   readonly sql: SqlDatabase;
   readonly deadlineMs: number;
   readonly withDeadline: (deadlineMs: number) => DbClient;
@@ -47,10 +51,6 @@ function registered(db: DbClient): Registered {
   return entry;
 }
 
-export function rest(db: DbClient): RestClient {
-  return registered(db).client;
-}
-
 /** The Drizzle database behind a client, for closing it. Queries go through `run`. */
 export function sqlDatabase(db: DbClient): SqlDatabase {
   return registered(db).sql;
@@ -64,10 +64,37 @@ export function rebuildWithDeadline(
 }
 
 /**
+ * Sends the query, and sends it once more if it is a read that failed on a dead
+ * connection. A read is told apart by the builder it returns, a select, so a write or a
+ * function call, which may have run before its connection died, is never sent twice.
+ */
+async function attempt<T>(
+  sql: SqlDatabase,
+  query: (sql: SqlDatabase) => PromiseLike<T>,
+): Promise<DbResult<T>> {
+  let read = false;
+  try {
+    const pending = query(sql);
+    read = is(pending, PgSelectBase);
+    return { ok: true, value: await pending };
+  } catch (error) {
+    if (!read || !isDeadConnection(error)) {
+      return failureFromError(error);
+    }
+  }
+  try {
+    return { ok: true, value: await query(sql) };
+  } catch (error) {
+    return failureFromError(error);
+  }
+}
+
+/**
  * Runs one query and turns its outcome into a result. A query still running at the
  * client's deadline is abandoned and fails as `unavailable`: the caller gets its answer
  * in time, though the database may still finish the statement. The role's own
- * statement_timeout bounds that.
+ * statement_timeout bounds that. A read that meets a dead connection is tried once more
+ * within the same deadline.
  */
 export async function run<T>(
   db: DbClient,
@@ -80,12 +107,7 @@ export async function run<T>(
       resolve(failure("unavailable"));
     }, deadlineMs);
   });
-  const outcome = Promise.resolve()
-    .then(() => query(sql))
-    .then(
-      (value): DbResult<T> => ({ ok: true, value }),
-      (error: unknown) => failureFromError(error),
-    );
+  const outcome = attempt(sql, query);
   try {
     return await Promise.race([outcome, deadline]);
   } finally {

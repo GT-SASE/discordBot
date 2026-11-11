@@ -41,95 +41,12 @@ describe("database lint rules", () => {
   };
 
   describe("inside src/db", () => {
-    it.each([
-      "or",
-      "match",
-      "order",
-      "textSearch",
-      "rpc",
-      "eq",
-      "neq",
-      "is",
-      "lte",
-    ])("refuses a variable as the first argument of .%s()", (method) => {
-      refused(`db.${method}(userInput, {});`);
-    });
-
-    it.each(["or", "order", "select", "from", "textSearch", "eq"])(
-      "refuses a template as the first argument of .%s()",
-      (method) => {
-        refused(`db.${method}(\`name.ilike.\${term}\`);`);
-      },
-    );
-
-    it("refuses an object passed to .match()", () => {
-      refused(`q.match({ id });`);
-    });
-
-    it.each([
-      "filter",
-      "not",
-      "upsert",
-      "delete",
-      "schema",
-      "setHeader",
-      "explain",
-      "ilikeAnyOf",
-      "ilikeAllOf",
-      "likeAnyOf",
-      "likeAllOf",
-      "regexMatch",
-      "regexIMatch",
-      "notIn",
-      "isDistinct",
-      "throwOnError",
-      "rollback",
-      "csv",
-      "geojson",
-      "abortSignal",
-      "returns",
-      "overrideTypes",
-      "range",
-      "rangeGt",
-      "rangeGte",
-      "rangeLt",
-      "rangeLte",
-      "rangeAdjacent",
-    ])("refuses .%s() even with literal arguments", (method) => {
-      refused(`q.${method}("name", "eq", "x");`);
-    });
-
-    it("refuses selecting every column, and a call with no columns", () => {
-      refused(`q.select("*");`);
-      refused(`q.select("id,events(*)");`);
-      refused(`q.select();`);
-    });
-
-    it("refuses .in() values that skip a validator", () => {
-      refused(`q.in("id", ids);`);
-      refused(`q.in("id", ["a"]);`);
-      refused(`q.in("id", clean(ids));`);
-    });
-
-    it("accepts .in() values from a validator", () => {
-      expect(problems(`q.in("id", snowflakeList(ids));`)).toEqual([]);
-      expect(problems(`q.in("id", uuidList(ids));`)).toEqual([]);
-    });
-
-    it("refuses a search pattern not built by the helper", () => {
-      refused("q.ilike('name', `%${term}%`);");
-      expect(problems(`q.ilike("name", searchPattern(term));`)).toEqual([]);
-    });
-
-    it("lets .or() take only a literal", () => {
-      refused(`q.or(term);`);
-      refused(`q.or(helper(term));`);
-      expect(problems(`q.or("a.eq.1");`)).toEqual([]);
-    });
-
-    it("names a table by a string or a schema table, never anything built", () => {
-      refused("db.from(`events${x}`);");
-      refused(`db.from(pick(name));`);
+    it("reads from and writes to schema tables only, never a name built at run time", () => {
+      refused(`sql.select(COLUMNS).from("events");`);
+      refused("sql.select(COLUMNS).from(`events${x}`);");
+      refused(`sql.select(COLUMNS).from(pick(name));`);
+      refused(`sql.update("tasks").set({ name });`);
+      refused(`sql.insert(tableFor(name)).values({ name });`);
       expect(problems(`sql.select(COLUMNS).from(events);`)).toEqual([]);
     });
 
@@ -137,6 +54,7 @@ describe("database lint rules", () => {
       refused("sql.raw(`DELETE FROM ${table}`);");
       refused(`const raw = sql.raw;`);
       refused(`sql(text);`);
+      refused(`fragment(text);`);
       refused(`db.execute(text);`);
       refused("db.execute(`SELECT ${x}`);");
       expect(problems("db.execute(sql`SELECT public.f(${x})`);")).toEqual([]);
@@ -152,25 +70,36 @@ describe("database lint rules", () => {
 
     it("refuses selecting or returning every column", () => {
       refused(`sql.select().from(events);`);
+      refused(`sql.select("*").from(events);`);
       refused(`sql.update(tasks).set({ name }).returning();`);
       expect(problems(`sql.select({ id: events.id }).from(events);`)).toEqual(
         [],
       );
+      expect(problems(`sql.select(EVENT_COLUMNS).from(events);`)).toEqual([]);
     });
 
-    it("refuses reaching the driver behind Drizzle, and named prepared statements", () => {
+    it("refuses reaching the driver behind Drizzle", () => {
       refused(`db.$client.query("DELETE FROM tasks");`);
-      refused(`q.prepare("named");`);
     });
+
+    it.each(["delete", "prepare", "onConflictDoUpdate", "onConflictDoNothing"])(
+      "refuses .%s(), which the bot has no use for",
+      (method) => {
+        refused(`q.${method}(tasks);`);
+      },
+    );
 
     it("refuses inArray() and ilike() values that skip a validator", () => {
       refused(`inArray(events.id, ids);`);
+      refused(`inArray(events.id, clean(ids));`);
       refused("ilike(events.name, `%${term}%`);");
+      refused(`like(events.name, term);`);
       expect(problems(`inArray(events.id, uuidList(ids));`)).toEqual([]);
+      expect(problems(`inArray(events.id, snowflakeList(ids));`)).toEqual([]);
       expect(problems(`ilike(events.name, searchPattern(term));`)).toEqual([]);
     });
 
-    it("refuses spread, computed keys or a variable in Drizzle writes", () => {
+    it("refuses spread, computed keys or a variable in a write", () => {
       refused(`sql.update(tasks).set({ ...input });`);
       refused(`sql.update(tasks).set({ [column]: value });`);
       refused(`sql.update(tasks).set(input);`);
@@ -181,64 +110,35 @@ describe("database lint rules", () => {
       ).toEqual([]);
     });
 
-    it("refuses spread, computed keys or a variable in RPC arguments and writes", () => {
-      refused(`db.rpc("claim_reminder", { ...input });`);
-      refused(`db.rpc("claim_reminder", { [name]: value });`);
-      refused(`db.rpc("claim_reminder", input);`);
-      refused(`q.update({ ...input });`);
-      refused(`q.update({ [column]: value });`);
-      refused(`q.insert({ [column]: value });`);
-    });
-
-    it("accepts literal RPC arguments and writes", () => {
-      expect(problems(`db.rpc("claim_reminder", { p_task_id: id });`)).toEqual(
-        [],
-      );
-      expect(problems(`q.update({ name });`)).toEqual([]);
+    it("leaves a map's own set() alone", () => {
+      expect(problems(`registry.set(handle, entry);`)).toEqual([]);
     });
 
     it("refuses a method called through a computed key", () => {
-      refused(`q["or"](x);`);
+      refused(`q["delete"](x);`);
       refused(`q[name](x);`);
     });
 
-    it("refuses reaching into a query's URL or headers", () => {
-      refused(`q.url.searchParams.append("a", "b");`);
-      refused(`q.headers.set("Prefer", "x");`);
-      refused(`const u = q?.url;`);
-    });
-
     it("does not honour inline disable comments", () => {
-      refused(`// eslint-disable-next-line no-restricted-syntax\nq.or(term);`);
-    });
-
-    it("allows Supabase imports", () => {
-      expect(
-        problems(`import { PostgrestClient } from "@supabase/postgrest-js";`),
-      ).toEqual([]);
+      refused(
+        `// eslint-disable-next-line no-restricted-syntax\nsql.raw(text);`,
+      );
     });
   });
 
   describe("outside src/db", () => {
-    it("refuses Supabase packages, however they are loaded", () => {
-      refused(
-        `import { PostgrestClient } from "@supabase/postgrest-js";`,
-        OUTSIDE,
-      );
-      refused(`const m = await import("@supabase/supabase-js");`, "api/x.ts");
-      refused(`const m = require("@supabase/supabase-js");`, "api/x.ts");
-    });
-
     it.each(["../db/internal.ts", "../../src/db/internal"])(
       "refuses importing the query client through %s",
       (path) => {
-        refused(`import { rest } from "${path}";`, OUTSIDE);
+        refused(`import { run } from "${path}";`, OUTSIDE);
+        refused(`import { run } from "${path}";`, "test/db/x.ts");
       },
     );
 
     it.each([
       `import { drizzle } from "drizzle-orm/node-postgres";`,
       `import { eq } from "drizzle-orm";`,
+      `import { createSelectSchema } from "drizzle-zod";`,
       `import pg from "pg";`,
       `import { PGlite } from "@electric-sql/pglite";`,
     ])("refuses loading a driver in the bot's code: %s", (code) => {
@@ -258,31 +158,9 @@ describe("database lint rules", () => {
     });
 
     it.each([
-      "guild_config",
-      "managed_channels",
-      "events",
-      "tasks",
-      "reminder_log",
-      "job_runs",
-      "config_audit",
-      "interaction_claims",
-      "task_reassignments",
-      "setup_drafts",
-      "event_steps",
-      "event_step_assignees",
-      "event_reminder_log",
-    ])("refuses .from() on the table %s", (table) => {
-      refused(`db.from("${table}");`, OUTSIDE);
-    });
-
-    it.each([
-      `db.rpc("claim_reminder", {});`,
-      `q.or("a.eq.1");`,
-      `q.textSearch("a", "b");`,
-      `q.ilike("a", "b");`,
-      `q.update({ name });`,
-      `q.update(input);`,
-      `q.insert({ name });`,
+      "db.execute(sql`SELECT 1`);",
+      `q.update(tasks);`,
+      `q.insert(tasks);`,
       `q.upsert({ name });`,
       `q.delete();`,
       `q.delete({ count: "exact" });`,

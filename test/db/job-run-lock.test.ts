@@ -10,7 +10,6 @@ import {
 } from "../../src/db/job-runs.ts";
 import { applyConfigChange } from "../../src/db/guild-config.ts";
 import { listActiveManagedChannels } from "../../src/db/managed-channels.ts";
-import { TEST_ORIGIN, TEST_SECRET_KEY } from "../support/mock-postgrest.ts";
 import { insertGuild } from "./fixtures.ts";
 import {
   OTHER_ROLE,
@@ -20,7 +19,6 @@ import {
   present,
   queryAs,
 } from "./harness.ts";
-import { postgrestShim } from "./postgrest-shim.ts";
 
 const STALE_SECONDS = 120;
 
@@ -44,12 +42,7 @@ describe("begin_job_run", () => {
 
   beforeAll(async () => {
     database = await createMigratedDb();
-    db = createDbClient({
-      url: TEST_ORIGIN,
-      secretKey: TEST_SECRET_KEY,
-      fetch: postgrestShim(database),
-      sql: pgliteSql(database),
-    });
+    db = createDbClient(pgliteSql(database));
   });
 
   afterAll(() => database.close());
@@ -190,18 +183,12 @@ describe("begin_job_run", () => {
 
   it("refuses bad arguments before any query", async () => {
     let requests = 0;
-    const counting = createDbClient({
-      url: TEST_ORIGIN,
-      secretKey: TEST_SECRET_KEY,
-      fetch: () => {
-        requests += 1;
-        return Promise.reject(new Error("no request expected"));
-      },
-      sql: recordingSql(() => {
+    const counting = createDbClient(
+      recordingSql(() => {
         requests += 1;
         return new Error("no request expected");
       }).sql,
-    });
+    );
     for (const seconds of [-1, 1.5, Number.NaN]) {
       expect(
         await beginJobRun(counting, {
@@ -470,12 +457,7 @@ describe("listActiveManagedChannels", () => {
 
   beforeAll(async () => {
     database = await createMigratedDb();
-    db = createDbClient({
-      url: TEST_ORIGIN,
-      secretKey: TEST_SECRET_KEY,
-      fetch: postgrestShim(database),
-      sql: pgliteSql(database),
-    });
+    db = createDbClient(pgliteSql(database));
   });
 
   afterAll(() => database.close());
@@ -506,18 +488,12 @@ describe("a time zone in a config change", () => {
     "is refused before any query for %j",
     async (timezone) => {
       let requests = 0;
-      const counting = createDbClient({
-        url: TEST_ORIGIN,
-        secretKey: TEST_SECRET_KEY,
-        fetch: () => {
-          requests += 1;
-          return Promise.reject(new Error("no request expected"));
-        },
-        sql: recordingSql(() => {
+      const counting = createDbClient(
+        recordingSql(() => {
           requests += 1;
           return new Error("no request expected");
         }).sql,
-      });
+      );
       const result = await applyConfigChange(counting, {
         guildId: fakeId(),
         actorId: fakeId(),

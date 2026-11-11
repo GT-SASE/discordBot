@@ -27,7 +27,7 @@ import {
   type SentRequest,
   UNKNOWN_CHANNEL,
 } from "../support/discord-server.ts";
-import { testSnowflake } from "../support/mock-postgrest.ts";
+import { testSnowflake } from "../support/mock-db.ts";
 import { softDeleteEvent } from "../../src/db/events.ts";
 import { REFUSED } from "../../src/lib/permissions.ts";
 import { handler } from "../../src/handlers/event.ts";

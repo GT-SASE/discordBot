@@ -221,5 +221,5 @@ export function callsFunction(call: SqlCall, name: string): boolean {
 
 /** A failure that never reached the server, such as a dropped connection. */
 export function unavailable(): Error {
-  return new Error("connection lost");
+  return new Error("Connection terminated unexpectedly");
 }

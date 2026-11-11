@@ -64,12 +64,25 @@ const sqlReads = vi.hoisted(() => ({
   targets: [] as string[],
 }));
 
+/** Each database the run made, and the close of its pool. */
+const pools = vi.hoisted(() => ({
+  closePool: vi.fn<(database: unknown) => Promise<void>>(() =>
+    Promise.resolve(),
+  ),
+  made: [] as unknown[],
+}));
+
 vi.mock("../db/pool.ts", async () => {
   const { recordingSql } = await import("../../test/support/sql-client.ts");
   return {
-    poolDatabase: () =>
-      recordingSql((call) => sqlReads.answer(call) as { rows: unknown[] }).sql,
-    closePool: () => Promise.resolve(),
+    poolDatabase: () => {
+      const { sql } = recordingSql(
+        (call) => sqlReads.answer(call) as { rows: unknown[] },
+      );
+      pools.made.push(sql);
+      return sql;
+    },
+    closePool: pools.closePool,
   };
 });
 
@@ -209,14 +222,15 @@ beforeEach(() => {
   clients.options = [];
   clients.made = [];
   databases.made = [];
+  pools.made = [];
+  pools.closePool.mockReset();
+  pools.closePool.mockImplementation(() => Promise.resolve());
   sqlReads.answer = reads();
   sqlReads.targets = [];
   vi.stubEnv("DATABASE_URL", testDatabaseUrl());
   fetchMock.mockReset();
   vi.stubGlobal("fetch", fetchMock);
   vi.stubEnv("CRON_SECRET", SECRET);
-  vi.stubEnv("SUPABASE_URL", "https://project.example.test");
-  vi.stubEnv("SUPABASE_SECRET_KEY", ["sb", "secret", "x".repeat(24)].join("_"));
   vi.stubEnv("DISCORD_BOT_TOKEN", "unit-test-token");
   vi.stubEnv("DISCORD_APP_ID", (10n ** 17n).toString());
   vi.stubEnv("ALLOWED_GUILD_IDS", (10n ** 17n + 1n).toString());
@@ -339,13 +353,37 @@ describe("an authorized request", () => {
     expect(await response.text()).toBe("ok");
   });
 
+  it("closes the run's pool once after a run that succeeded", async () => {
+    const response = await get(authorized);
+    expect(response.status).toBe(200);
+    expect(pools.made).toHaveLength(1);
+    expect(pools.closePool).toHaveBeenCalledTimes(1);
+    expect(pools.closePool).toHaveBeenCalledWith(pools.made[0]);
+  });
+
+  it("closes the run's pool once after a run that failed", async () => {
+    sqlReads.answer = () => serverError("XX000");
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const response = await get(authorized);
+    expect(response.status).toBe(500);
+    expect(pools.made).toHaveLength(1);
+    expect(pools.closePool).toHaveBeenCalledTimes(1);
+    expect(pools.closePool).toHaveBeenCalledWith(pools.made[0]);
+  });
+
+  it("still answers when closing the pool hangs", async () => {
+    pools.closePool.mockImplementation(
+      () => new Promise<void>(() => undefined),
+    );
+    const started = Date.now();
+    const response = await get(authorized);
+    expect(response.status).toBe(200);
+    expect(pools.closePool).toHaveBeenCalledTimes(1);
+    expect(Date.now() - started).toBeLessThan(5_000);
+  });
+
   it("gives a fixed 500 and no detail when the database fails", async () => {
     const canary = "canary-row-text";
-    fetchMock.mockImplementation(() =>
-      Promise.resolve(
-        Response.json({ code: "XX000", message: canary }, { status: 500 }),
-      ),
-    );
     sqlReads.answer = () => serverError("XX000", canary);
     const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     const response = await get(authorized);
@@ -407,6 +445,10 @@ describe("an authorized request", () => {
     expect(clients.made[1]).not.toBe(clients.made[0]);
     expect(databases.made).toHaveLength(2);
     expect(databases.made[1]).not.toBe(databases.made[0]);
+    expect(pools.closePool).toHaveBeenCalledTimes(2);
+    expect(pools.closePool.mock.calls.map(([database]) => database)).toEqual(
+      pools.made,
+    );
   });
 });
 

@@ -19,7 +19,6 @@ import {
   MIGRATION_OWNER,
   queryAs,
 } from "../db/harness.ts";
-import { postgrestShim } from "../db/postgrest-shim.ts";
 import { discordServer, type DiscordServer } from "./discord-server.ts";
 import {
   ADMIN_ROLE,
@@ -30,11 +29,7 @@ import {
   run,
   type Ran,
 } from "./interactions.ts";
-import {
-  TEST_ORIGIN,
-  TEST_SECRET_KEY,
-  testSnowflake,
-} from "./mock-postgrest.ts";
+import { testSnowflake } from "./mock-db.ts";
 
 // Built at runtime: the secret scan refuses a literal value for this setting.
 const TOKEN = ["test", "bot", "token"].join("-");
@@ -83,40 +78,14 @@ const EVENT_SELECT = `SELECT id, guild_id, channel_id, name, event_date::text AS
 /** Call once per test file. The fields are ready inside each test. */
 export function eventWorld(): World {
   let pg: Database;
-  let shim: ReturnType<typeof postgrestShim>;
   let server: DiscordServer;
   let errorSpy: MockInstance<typeof console.error>;
   let dbFailures: { pattern: RegExp; status: number; times: number }[] = [];
   let seen: string[] = [];
   let allowed = { users: new Set<string>(), roles: new Set<string>() };
 
-  const db = createDbClient({
-    url: TEST_ORIGIN,
-    secretKey: TEST_SECRET_KEY,
-    fetch: (input, init) => {
-      const url = new URL(
-        typeof input === "string" || input instanceof URL ? input : input.url,
-      );
-      const target = `${init?.method ?? "GET"} ${decodeURIComponent(url.pathname + url.search)}`;
-      seen.push(target);
-      const failure = dbFailures.find(
-        (entry) => entry.times > 0 && entry.pattern.test(target),
-      );
-      if (failure !== undefined) {
-        failure.times -= 1;
-        if (failure.status === 200) {
-          return Promise.resolve(Response.json([]));
-        }
-        return Promise.resolve(
-          Response.json(
-            { code: "XX000", message: "canary row text" },
-            { status: failure.status },
-          ),
-        );
-      }
-      return shim(input, init);
-    },
-    sql: pgliteSql(
+  const db = createDbClient(
+    pgliteSql(
       () => pg,
       ({ sql }) => {
         const target = `SQL ${sql}`;
@@ -131,11 +100,10 @@ export function eventWorld(): World {
         return failure.status === 200 ? { rows: [] } : serverError("XX000");
       },
     ),
-  });
+  );
 
   beforeAll(async () => {
     pg = await createMigratedDb();
-    shim = postgrestShim(pg);
     await queryAs(
       pg,
       "bot_app",

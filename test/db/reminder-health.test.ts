@@ -26,10 +26,8 @@ import {
 } from "../../src/reminders/health.ts";
 import { managedChannelCheck } from "../../src/reminders/run.ts";
 import { insertFinishedJobRun } from "../support/job-runs-fixture.ts";
-import { TEST_ORIGIN, TEST_SECRET_KEY } from "../support/mock-postgrest.ts";
 import { insertGuild, type GuildFixture } from "./fixtures.ts";
 import { createMigratedDb, fakeId, present } from "./harness.ts";
-import { postgrestShim } from "./postgrest-shim.ts";
 
 const API = "https://discord.com/api/v10";
 const TOKEN = ["unit", "test", "token"].join("-");
@@ -100,13 +98,7 @@ async function succeededRun(jobName: string, hoursAgo: number): Promise<void> {
 
 beforeAll(async () => {
   database = await createMigratedDb();
-  const shim = postgrestShim(database);
-  db = createDbClient({
-    url: TEST_ORIGIN,
-    secretKey: TEST_SECRET_KEY,
-    fetch: shim,
-    sql: pgliteSql(database, (call) => sqlGate(call)),
-  });
+  db = createDbClient(pgliteSql(database, (call) => sqlGate(call)));
 });
 
 afterAll(() => database.close());

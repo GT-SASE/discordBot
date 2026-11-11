@@ -305,8 +305,19 @@ function roleLines(config: GuildConfig): SafeText {
   );
 }
 
+/**
+ * The UTC day of a timestamp. Its text carries the offset of the session that read it,
+ * so the first ten characters are that zone's day, not UTC's.
+ */
+function utcDay(timestamp: string): string {
+  const time = new Date(timestamp);
+  return Number.isNaN(time.getTime())
+    ? "unknown day"
+    : time.toISOString().slice(0, 10);
+}
+
 function changeLine(change: ConfigChange): SafeText {
-  const day = escapeUserText(change.created_at.slice(0, 10));
+  const day = escapeUserText(utcDay(change.created_at));
   return safe`- ${day}, ${userMention(change.actor_id)}: ${changeSummary(change)}`;
 }
 

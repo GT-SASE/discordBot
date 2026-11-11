@@ -24,7 +24,7 @@ import {
   type ChangeRow,
   type FakeDiscordData,
 } from "../../test/support/interactions.ts";
-import { testSnowflake } from "../../test/support/mock-postgrest.ts";
+import { testSnowflake } from "../../test/support/mock-db.ts";
 import type {
   DiscordClient,
   GuildChannel,
@@ -608,6 +608,17 @@ describe("/config", () => {
       });
     });
 
+    it("dates a change by its UTC day, whatever offset its text carries", async () => {
+      const { dependencies, edits } = world({
+        changes: [change({ created_at: "2030-01-02T21:00:00-05:00" })],
+      });
+
+      await run(ROUTER, commandPayload("config"), dependencies);
+
+      expect(edits[0]?.content).toContain("2030\\-01\\-03");
+      expect(edits[0]?.content).not.toContain("2030\\-01\\-02");
+    });
+
     it.each([
       [
         "the first role bindings",
@@ -754,7 +765,7 @@ describe("/config", () => {
 
   it("says only try again when the database fails", async () => {
     const { dependencies, edits, state } = world();
-    state.failing = { path: "managed_channels", status: 503 };
+    state.failing = { path: "managed_channels" };
 
     await run(ROUTER, commandPayload("config"), dependencies);
 
@@ -1462,7 +1473,7 @@ describe("adding a forum", () => {
 
   it("says it may have saved when the write fails for another reason", async () => {
     const { dependencies, edits, state } = world();
-    state.failing = { path: "apply_config_change", status: 503 };
+    state.failing = { path: "apply_config_change" };
 
     await run(ROUTER, addPayload(NEW_FORUM), dependencies);
 
@@ -1790,7 +1801,7 @@ describe("adding a forum back", () => {
 
   it("keeps the forum and says so when the events can't be read", async () => {
     const { dependencies, edits, edit, state } = removedForum([eventRow(1)]);
-    state.failing = { path: "select events", status: 503 };
+    state.failing = { path: "select events" };
 
     await run(ROUTER, addPayload(FORUM), dependencies);
 

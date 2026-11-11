@@ -1,7 +1,7 @@
 /**
- * Database failures as a fixed category and a Postgres code. PostgREST also returns
- * `message`, `details` and `hint`, which can quote the failing row, so those are
- * dropped here and never reach a caller, a log line or `job_runs`.
+ * Database failures as a fixed category and a Postgres code (SQLSTATE). The driver also
+ * gives a message, a detail and a hint, which can quote the failing row or the query,
+ * so those are dropped here and never reach a caller, a log line or `job_runs`.
  */
 
 export type DbErrorCategory =
@@ -63,16 +63,12 @@ const CATEGORY_BY_CODE = new Map<string, DbErrorCategory>([
   ["22007", "constraint"],
   ["22008", "constraint"],
   ["42501", "forbidden"],
-  ["PGRST301", "forbidden"],
-  ["PGRST302", "forbidden"],
   // Lost a lock or was cancelled: nothing was wrong with the request, so try later.
   ["40001", "unavailable"],
   ["40P01", "unavailable"],
   ["55P03", "unavailable"],
   ["57014", "unavailable"],
 ]);
-
-const POSTGRES_CODE = /^(?:[0-9A-Z]{5}|PGRST[0-9]{3})$/;
 
 export function failure(
   category: DbErrorCategory,
@@ -85,46 +81,40 @@ export function refused(): DbFailure {
   return failure("invalid_input");
 }
 
-/**
- * Reads only the code from a PostgREST error. A status of 0 means the request never
- * got an answer, and the client then fills `code` from the network error instead.
- */
-export function failureFromResponse(error: unknown, status: number): DbFailure {
-  if (status === 0) {
-    return failure("unavailable");
-  }
-  const raw =
-    typeof error === "object" && error !== null && "code" in error
-      ? error.code
-      : undefined;
-  if (typeof raw === "string" && POSTGRES_CODE.test(raw)) {
-    return failure(
-      CATEGORY_BY_CODE.get(raw) ??
-        (status >= 500 ? "unavailable" : "unexpected"),
-      raw,
-    );
-  }
-  if (status === 401 || status === 403) {
-    return failure("forbidden");
-  }
-  return failure(
-    status === 429 || status >= 500 ? "unavailable" : "unexpected",
-  );
-}
-
 /** SQLSTATE classes that say the server could not do the work now, not that it was wrong. */
 const UNAVAILABLE_CLASSES = new Set(["08", "53", "57", "58", "XX"]);
+
+/** SQLSTATE classes for a refused login or role, which look like any other refusal. */
+const FORBIDDEN_CLASSES = new Set(["28"]);
 
 const SQLSTATE = /^[0-9A-Z]{5}$/;
 
 /**
- * Reads only the SQLSTATE from a failed query. The driver's message can quote the
- * statement, its parameters or the failing row, and Drizzle wraps the error in one whose
- * message holds the whole query, so neither is ever read. An error with no server
- * severity never reached the database, such as a refused connection or a dropped socket,
- * so it is `unavailable` whatever code it carries.
+ * What node-postgres throws, with no code, when a connection is lost, cannot be made or
+ * times out, rather than a query being wrong. Each is compared whole and never passed on.
  */
-export function failureFromError(error: unknown): DbFailure {
+const CONNECTION_FAILURES = new Set([
+  "Connection terminated unexpectedly",
+  "Connection terminated",
+  "Client has encountered a connection error and is not queryable",
+  "Client was closed and is not queryable",
+  "timeout expired",
+  "timeout exceeded when trying to connect",
+  "Query read timeout",
+  "The server does not support SSL connections",
+  "There was an error establishing an SSL connection",
+]);
+
+/** The ones that mean an open connection died, so the statement never ran to an end. */
+const DEAD_CONNECTION = new Set([
+  "Connection terminated unexpectedly",
+  "Client has encountered a connection error and is not queryable",
+]);
+/** Socket codes for the same, from Node rather than node-postgres. */
+const DEAD_SOCKET_CODES = new Set(["ECONNRESET", "EPIPE"]);
+
+/** The driver's error under Drizzle's wrapper, whose message holds the whole query. */
+function driverError(error: unknown): object | null {
   const cause =
     typeof error === "object" &&
     error !== null &&
@@ -133,19 +123,69 @@ export function failureFromError(error: unknown): DbFailure {
     error.cause !== null
       ? error.cause
       : error;
-  if (typeof cause !== "object" || cause === null) {
+  return typeof cause === "object" && cause !== null ? cause : null;
+}
+
+function messageOf(cause: object): unknown {
+  return "message" in cause ? cause.message : undefined;
+}
+
+/**
+ * Whether a query failed because its connection died under it, such as a pooled
+ * connection the server closed while the function instance was frozen. Nothing came
+ * back from the server, so a read can safely be sent once more.
+ */
+export function isDeadConnection(error: unknown): boolean {
+  const cause = driverError(error);
+  if (cause === null || "severity" in cause) {
+    return false;
+  }
+  const code = "code" in cause ? cause.code : undefined;
+  if (typeof code === "string") {
+    return DEAD_SOCKET_CODES.has(code);
+  }
+  const message = messageOf(cause);
+  return typeof message === "string" && DEAD_CONNECTION.has(message);
+}
+
+/**
+ * Reads only the SQLSTATE from a failed query. The driver's message can quote the
+ * statement, its parameters or the failing row, and Drizzle wraps the error in one whose
+ * message holds the whole query, so neither is ever passed on. An error with no server
+ * severity never reached the database. With a code, such as a refused connection or a
+ * SQLSTATE the driver made up, it is `unavailable`. With none, it is one of the driver's
+ * own connection failures, matched by its exact text, or else a fault in the code, such
+ * as a TypeError, which is `unexpected` so that it is not retried as an outage.
+ */
+export function failureFromError(error: unknown): DbFailure {
+  const cause = driverError(error);
+  if (cause === null) {
     return failure("unexpected");
   }
   const fromServer = "severity" in cause && typeof cause.severity === "string";
   const code = "code" in cause ? cause.code : undefined;
-  if (!fromServer || typeof code !== "string" || !SQLSTATE.test(code)) {
+  if (!fromServer) {
+    if (typeof code === "string" || typeof code === "number") {
+      return failure("unavailable");
+    }
+    const message = messageOf(cause);
+    return failure(
+      typeof message === "string" && CONNECTION_FAILURES.has(message)
+        ? "unavailable"
+        : "unexpected",
+    );
+  }
+  if (typeof code !== "string" || !SQLSTATE.test(code)) {
     return failure("unavailable");
   }
+  const codeClass = code.slice(0, 2);
   return failure(
     CATEGORY_BY_CODE.get(code) ??
-      (UNAVAILABLE_CLASSES.has(code.slice(0, 2))
-        ? "unavailable"
-        : "unexpected"),
+      (FORBIDDEN_CLASSES.has(codeClass)
+        ? "forbidden"
+        : UNAVAILABLE_CLASSES.has(codeClass)
+          ? "unavailable"
+          : "unexpected"),
     code,
   );
 }

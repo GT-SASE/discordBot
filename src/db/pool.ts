@@ -7,12 +7,17 @@ import type { SqlDatabase } from "./internal.ts";
 /**
  * Few connections, since each function instance serves one request at a time and the
  * pooler in front of the database shares its own. Idle ones close soon, so a frozen
- * instance holds little.
+ * instance holds little. TCP keepalive finds a connection that died while the instance
+ * was frozen, and `query_timeout`, just over the role's 10 second statement_timeout,
+ * gives up on a socket that went silent, so a query cannot hold its connection forever
+ * after the caller's own deadline has passed.
  */
 const POOL = {
   max: 3,
   idleTimeoutMillis: 10_000,
   connectionTimeoutMillis: 5_000,
+  query_timeout: 11_000,
+  keepAlive: true,
   allowExitOnIdle: true,
 } as const;
 

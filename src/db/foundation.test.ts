@@ -1,16 +1,13 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  TEST_ORIGIN,
-  TEST_SECRET_KEY,
-  mockPostgrest,
-  testSnowflake,
-} from "../../test/support/mock-postgrest.ts";
+import { testSnowflake } from "../../test/support/mock-db.ts";
 import {
   recordingSql,
+  serverError,
   testDatabaseUrl,
 } from "../../test/support/sql-client.ts";
 import { getGuildConfig } from "./guild-config.ts";
-import { ConfigError } from "../lib/config-error.ts";
+import { claimInteraction } from "./interaction-claims.ts";
+import { markTaskDoneAsOfficer } from "./tasks.ts";
 import type { DateOnly } from "../lib/dates.ts";
 import type { EventResource, TaskResource } from "../lib/permissions.ts";
 import {
@@ -19,12 +16,7 @@ import {
   withDeadline,
   type DbClient,
 } from "./client.ts";
-import {
-  errorSummary,
-  failureFromError,
-  failureFromResponse,
-} from "./errors.ts";
-import { rest } from "./internal.ts";
+import { errorSummary, failureFromError, isDeadConnection } from "./errors.ts";
 import {
   cappedList,
   functionValue,
@@ -32,7 +24,7 @@ import {
   oneOrNone,
   rowList,
 } from "./result.ts";
-import { parseJobRun, parseTask, type Database } from "./types.ts";
+import { parseJobRun, parseTask } from "./types.ts";
 import {
   MAX_SEARCH_LENGTH,
   isDbDate,
@@ -55,37 +47,13 @@ afterEach(() => {
 });
 
 describe("client", () => {
-  const settings = {
-    url: TEST_ORIGIN,
-    secretKey: TEST_SECRET_KEY,
-    sql: recordingSql().sql,
-  };
-
-  it("sends the key only in the apikey header, to the REST path", async () => {
-    const { db, requests } = mockPostgrest();
-    await rest(db).from("guild_config").select("guild_id").limit(1);
-    expect(requests[0]?.rawTarget).toBe(
-      "/rest/v1/guild_config?select=guild_id&limit=1",
-    );
-    expect(requests[0]?.headers.get("apikey")).toBe(TEST_SECRET_KEY);
-    expect(requests[0]?.headers.get("authorization")).toBeNull();
-    expect(requests[0]?.headers.get("accept-profile")).toBe("public");
-  });
-
-  it("refuses redirects and sets a timeout on every request", async () => {
-    const send = vi.fn<typeof fetch>(() =>
-      Promise.resolve(new Response("[]", { status: 200 })),
-    );
-    const db = createDbClient({ ...settings, fetch: send });
-    await rest(db).from("guild_config").select("guild_id").limit(1);
-    const init = send.mock.calls[0]?.[1];
-    expect(init?.redirect).toBe("error");
-    expect(init?.signal).toBeInstanceOf(AbortSignal);
-  });
+  const sql = () => recordingSql().sql;
 
   it("abandons a query at its deadline and reports it as unavailable", async () => {
-    const { sql } = recordingSql(() => new Promise<never>(() => undefined));
-    const db = withDeadline(createDbClient({ ...settings, sql }), 10);
+    const { sql: hanging } = recordingSql(
+      () => new Promise<never>(() => undefined),
+    );
+    const db = withDeadline(createDbClient(hanging), 10);
     const started = Date.now();
     expect(await getGuildConfig(db, { guildId: testSnowflake() })).toEqual({
       ok: false,
@@ -101,142 +69,118 @@ describe("client", () => {
   it.each([0, -1, 1.5, Number.NaN, 8001])(
     "refuses the deadline %d",
     (deadline) => {
-      const db = createDbClient(settings);
+      const db = createDbClient(sql());
       expect(() => withDeadline(db, deadline)).toThrow(RangeError);
     },
   );
 
   it("gives code outside src/db nothing to query with", () => {
-    const db: DbClient = createDbClient(settings);
+    const db: DbClient = createDbClient(sql());
     // @ts-expect-error the client is opaque outside src/db
-    expect(db.from).toBeUndefined();
+    expect(db.select).toBeUndefined();
     // @ts-expect-error the client is opaque outside src/db
-    expect(db.rpc).toBeUndefined();
+    expect(db.execute).toBeUndefined();
   });
 
-  it("refuses an object that is not a client", () => {
-    expect(() => rest({} as DbClient)).toThrow(TypeError);
+  it("refuses an object that is not a client", async () => {
+    await expect(
+      getGuildConfig({} as DbClient, { guildId: testSnowflake() }),
+    ).rejects.toThrow(TypeError);
   });
 
-  it("does not retry a failed read", async () => {
-    const send = vi.fn<typeof fetch>(() =>
-      Promise.resolve(new Response("{}", { status: 503 })),
+  it("does not retry a query the server refused", async () => {
+    const { sql: failing, calls } = recordingSql(() => serverError("57P01"));
+    await getGuildConfig(createDbClient(failing), { guildId: testSnowflake() });
+    expect(calls).toHaveLength(1);
+  });
+
+  it("sends a read once more after its connection died, and returns the second answer", async () => {
+    let sent = 0;
+    const { sql: thawed, calls } = recordingSql(() => {
+      sent += 1;
+      return sent === 1
+        ? new Error("Connection terminated unexpectedly")
+        : { rows: [] };
+    });
+    expect(
+      await getGuildConfig(createDbClient(thawed), {
+        guildId: testSnowflake(),
+      }),
+    ).toEqual({ ok: true, value: null });
+    expect(calls).toHaveLength(2);
+  });
+
+  it("tries a read only twice on a connection that keeps dying", async () => {
+    const { sql: dead, calls } = recordingSql(() =>
+      Object.assign(new Error("canary"), { code: "ECONNRESET" }),
     );
-    const db = createDbClient({ ...settings, fetch: send });
-    await rest(db).from("guild_config").select("guild_id").limit(1);
-    expect(send).toHaveBeenCalledTimes(1);
+    expect(
+      await getGuildConfig(createDbClient(dead), { guildId: testSnowflake() }),
+    ).toEqual({ ok: false, error: { category: "unavailable", code: null } });
+    expect(calls).toHaveLength(2);
   });
 
-  it.each([
-    "http://project.example.test",
-    "https://user:pass@project.example.test",
-    "https://project.example.test/rest/v1",
-    "https://project.example.test?x=1",
-    "not a url",
-  ])("refuses the URL %s without quoting it", (url) => {
-    expect(() => createDbClient({ ...settings, url })).toThrow(ConfigError);
+  it("does not retry a read that timed out or a programming error", async () => {
+    for (const error of [new Error("Query read timeout"), new TypeError("x")]) {
+      const { sql: failing, calls } = recordingSql(() => error);
+      await getGuildConfig(createDbClient(failing), {
+        guildId: testSnowflake(),
+      });
+      expect(calls).toHaveLength(1);
+    }
   });
 
-  it.each(["anon-key", "sb_publishable_abc", "sb_secret_", "sb_secret_a b"])(
-    "refuses the key %s without quoting it",
-    (secretKey) => {
-      try {
-        createDbClient({ ...settings, secretKey });
-        expect.unreachable();
-      } catch (error) {
-        expect(error).toBeInstanceOf(ConfigError);
-        expect((error as Error).message).not.toContain(secretKey);
-      }
-    },
-  );
+  it("never sends a write or a function call twice after its connection died", async () => {
+    const dying = () => {
+      const recorded = recordingSql(
+        () => new Error("Connection terminated unexpectedly"),
+      );
+      return { db: createDbClient(recorded.sql), calls: recorded.calls };
+    };
+    const update = dying();
+    expect(
+      await markTaskDoneAsOfficer(update.db, {
+        guildId: testSnowflake(),
+        taskId: "11111111-2222-4333-8444-555555555555",
+        now: new Date(),
+      }),
+    ).toMatchObject({ ok: false, error: { category: "unavailable" } });
+    expect(update.calls).toHaveLength(1);
+
+    const call = dying();
+    expect(
+      await claimInteraction(call.db, { interactionId: testSnowflake() }),
+    ).toMatchObject({ ok: false, error: { category: "unavailable" } });
+    expect(call.calls).toHaveLength(1);
+  });
+
+  it("reports a refused connection as unavailable, with no text from the error", async () => {
+    const canary = "canary-host-and-password";
+    const { sql: refusing } = recordingSql(() =>
+      Object.assign(new Error(canary), { code: "ECONNREFUSED" }),
+    );
+    const result = await getGuildConfig(createDbClient(refusing), {
+      guildId: testSnowflake(),
+    });
+    expect(result).toEqual({
+      ok: false,
+      error: { category: "unavailable", code: null },
+    });
+    expect(JSON.stringify(result)).not.toContain(canary);
+  });
 
   it("refuses to run where a browser global exists", () => {
     vi.stubGlobal("window", {});
-    expect(() => createDbClient(settings)).toThrow("server-side only");
+    expect(() => createDbClient(sql())).toThrow("server-side only");
   });
 
-  it("reads settings on first use, not on import, and reuses one client", async () => {
-    vi.stubEnv("SUPABASE_URL", "");
-    vi.stubEnv("SUPABASE_SECRET_KEY", "");
+  it("reads its setting on first use, not on import, and reuses one client", async () => {
     vi.stubEnv("DATABASE_URL", "");
     const { getDb } = await import("./client.ts");
-    expect(() => getDb()).toThrow("SUPABASE_URL");
-
-    vi.stubEnv("SUPABASE_URL", TEST_ORIGIN);
-    expect(() => getDb()).toThrow("SUPABASE_SECRET_KEY");
-
-    vi.stubEnv("SUPABASE_SECRET_KEY", TEST_SECRET_KEY);
     expect(() => getDb()).toThrow("DATABASE_URL");
 
     vi.stubEnv("DATABASE_URL", testDatabaseUrl());
     expect(getDb()).toBe(getDb());
-  });
-});
-
-describe("errors", () => {
-  const canary = "canary-row-text";
-  const pgError = {
-    code: "23514",
-    message: `failing row contains ${canary}`,
-    details: canary,
-    hint: canary,
-  };
-
-  it("keeps only a category and the code", () => {
-    const result = failureFromResponse(pgError, 400);
-    expect(result.error).toEqual({ category: "constraint", code: "23514" });
-    expect(JSON.stringify(result)).not.toContain(canary);
-    expect(errorSummary(result.error)).toBe("constraint:23514");
-  });
-
-  it.each([
-    ["CF409", "stale_version"],
-    ["CF410", "parent_unavailable"],
-    ["23505", "conflict"],
-    ["42501", "forbidden"],
-    ["XX000", "unexpected"],
-    ["PGRST116", "unexpected"],
-    ["40001", "unavailable"],
-    ["40P01", "unavailable"],
-    ["55P03", "unavailable"],
-    ["57014", "unavailable"],
-  ])("maps %s to %s", (code, category) => {
-    expect(failureFromResponse({ code }, 400).error).toEqual({
-      category,
-      code,
-    });
-  });
-
-  it("treats an unknown code on a server error as unavailable", () => {
-    expect(failureFromResponse({ code: "XX000" }, 500).error).toEqual({
-      category: "unavailable",
-      code: "XX000",
-    });
-  });
-
-  it.each([
-    [401, "forbidden"],
-    [403, "forbidden"],
-    [429, "unavailable"],
-    [500, "unavailable"],
-    [503, "unavailable"],
-    [400, "unexpected"],
-    [404, "unexpected"],
-  ])("with no code, reads status %d as %s", (status, category) => {
-    expect(failureFromResponse({ message: canary }, status).error).toEqual({
-      category,
-      code: null,
-    });
-  });
-
-  it.each([
-    ["a network error's code", { code: "EPIPE", message: canary }, 0],
-    ["a gateway error with no code", { message: canary }, 502],
-    ["a code that is not a code", { code: canary }, 400],
-  ])("drops %s", (_name, error, status) => {
-    const result = failureFromResponse(error, status);
-    expect(result.error.code).toBeNull();
-    expect(JSON.stringify(result)).not.toContain(canary);
   });
 });
 
@@ -253,6 +197,9 @@ describe("errors from the driver", () => {
       ok: false,
       error: { category: "constraint", code: "23514" },
     });
+    expect(errorSummary(failureFromError(error).error)).toBe(
+      "constraint:23514",
+    );
   });
 
   it("reads the code under Drizzle's wrapper, whose message quotes the query", () => {
@@ -276,6 +223,8 @@ describe("errors from the driver", () => {
     ["CF431", "step_assignee_limit"],
     ["23505", "conflict"],
     ["42501", "forbidden"],
+    ["28P01", "forbidden"],
+    ["28000", "forbidden"],
     ["57014", "unavailable"],
     ["08006", "unavailable"],
     ["53300", "unavailable"],
@@ -298,12 +247,74 @@ describe("errors from the driver", () => {
       "a short network code",
       Object.assign(new Error(canary), { code: "EPIPE" }),
     ],
-    ["a dropped connection", new Error(canary)],
+    ["a dropped connection", new Error("Connection terminated unexpectedly")],
+    [
+      "a connection that could not be made in time",
+      new Error("timeout expired"),
+    ],
+    ["a full pool", new Error("timeout exceeded when trying to connect")],
     ["a timeout", new Error("Query read timeout")],
   ])("reports %s as unavailable, with no code or text", (_name, error) => {
     const result = failureFromError(error);
     expect(result.error).toEqual({ category: "unavailable", code: null });
     expect(JSON.stringify(result)).not.toContain(canary);
+  });
+
+  it.each([
+    ["a TypeError", new TypeError(canary)],
+    ["a plain error with no code", new Error(canary)],
+    [
+      "a programming error under Drizzle's wrapper",
+      Object.assign(new Error(`Failed query: ${canary}`), {
+        cause: new RangeError(canary),
+      }),
+    ],
+  ])("reports %s as unexpected, with no code or text", (_name, error) => {
+    const result = failureFromError(error);
+    expect(result.error).toEqual({ category: "unexpected", code: null });
+    expect(JSON.stringify(result)).not.toContain(canary);
+  });
+
+  it.each([
+    [
+      "a dropped connection",
+      new Error("Connection terminated unexpectedly"),
+      true,
+    ],
+    [
+      "a reset socket",
+      Object.assign(new Error(canary), { code: "ECONNRESET" }),
+      true,
+    ],
+    [
+      "a broken pipe",
+      Object.assign(new Error(canary), { code: "EPIPE" }),
+      true,
+    ],
+    [
+      "a dropped connection under Drizzle's wrapper",
+      Object.assign(new Error(`Failed query: ${canary}`), {
+        cause: new Error("Connection terminated unexpectedly"),
+      }),
+      true,
+    ],
+    [
+      "a refused connection",
+      Object.assign(new Error(canary), { code: "ECONNREFUSED" }),
+      false,
+    ],
+    ["a timeout", new Error("Query read timeout"), false],
+    ["a programming error", new TypeError(canary), false],
+    [
+      "an error from the server",
+      Object.assign(new Error("Connection terminated unexpectedly"), {
+        code: "57P01",
+        severity: "FATAL",
+      }),
+      false,
+    ],
+  ])("tells whether %s is a dead connection", (_name, error, dead) => {
+    expect(isDeadConnection(error)).toBe(dead);
   });
 
   it("refuses a value that is not an error at all", () => {
@@ -439,15 +450,6 @@ describe("row checks", () => {
 
   it("requires job results to be an object", () => {
     expect(parseJobRun({ results: [] }).ok).toBe(false);
-  });
-
-  it("types writes to the granted columns, and never a null deleted_at", () => {
-    type TaskUpdate = Database["public"]["Tables"]["tasks"]["Update"];
-    // @ts-expect-error a soft delete cannot be undone through this type
-    const revive: TaskUpdate = { deleted_at: null };
-    // @ts-expect-error a task cannot move to another guild
-    const moved: TaskUpdate = { guild_id: "x" };
-    expect([revive, moved]).toHaveLength(2);
   });
 });
 

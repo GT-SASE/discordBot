@@ -1,6 +1,7 @@
 /**
  * What needs a failing database or a row the schema could not hold, which the tests on
- * the real schema in test/db/task-commands.test.ts cannot arrange.
+ * the real schema in test/db/task-done.test.ts and test/db/task-manage.test.ts cannot
+ * arrange.
  */
 
 import { describe, expect, it, vi } from "vitest";
@@ -17,34 +18,31 @@ import {
   verify,
 } from "../../test/support/interactions.ts";
 import {
-  mockPostgrest,
+  mockDb,
   testSnowflake,
   type MockResponse,
   type RecordedRequest,
-} from "../../test/support/mock-postgrest.ts";
+} from "../../test/support/mock-db.ts";
 import { asSelected, sqlTarget } from "../../test/support/sql-client.ts";
 import { COMMANDS, ROUTER } from "./registry.ts";
 
 const TASK_ID = "11111111-1111-4111-8111-111111111111";
-const FAILED = { status: 503, body: { code: "XX000", message: "canary text" } };
+const FAILED = { error: "XX000" };
 const SUBCOMMAND = 1;
 
 function database(
   answerTasks: (request: RecordedRequest) => MockResponse,
   config: unknown[] = [configRow()],
 ) {
-  return mockPostgrest((request) => {
+  return mockDb((request) => {
     const path = request.target.split("?")[0] ?? "";
-    if (
-      request.method === "SQL" &&
-      sqlTarget(request.target) === "select guild_config"
-    ) {
+    if (sqlTarget(request.target) === "select guild_config") {
       return {
-        body: asSelected(request.target, config as Record<string, unknown>[]),
+        rows: asSelected(request.target, config as Record<string, unknown>[]),
       };
     }
     if (path.endsWith("/rpc/claim_interaction")) {
-      return { body: true };
+      return { value: true };
     }
     return answerTasks(request);
   });
@@ -136,7 +134,7 @@ describe("before setup", () => {
       componentPayload(`task.done:${TASK_ID}`, { member: member() }),
     ],
   ])("refuses %s, however the member is placed", async (_name, payload) => {
-    const { db } = database(() => ({ body: [] }), []);
+    const { db } = database(() => ({ rows: [] }), []);
     const { discord, edits } = fakeDiscord();
 
     const ran = await run(ROUTER, payload, dependenciesFor(db, discord));
@@ -149,7 +147,7 @@ describe("before setup", () => {
   });
 
   it("offers nothing in a picker", async () => {
-    const { db, requests } = database(() => ({ body: [] }), []);
+    const { db, requests } = database(() => ({ rows: [] }), []);
     const { discord } = fakeDiscord();
 
     const ran = await run(
@@ -240,7 +238,7 @@ describe("/mytasks with a row that fails its checks", () => {
     const { db } = database((request) =>
       sqlTarget(request.target) === "select tasks"
         ? {
-            body: [
+            rows: [
               [TASK_ID, TASK_ID, "Fine", "2040-01-01", "Meeting"],
               [
                 "22222222-2222-4222-8222-222222222222",
@@ -251,7 +249,7 @@ describe("/mytasks with a row that fails its checks", () => {
               ],
             ],
           }
-        : { body: [] },
+        : { rows: [] },
     );
     const { discord, edits } = fakeDiscord();
 

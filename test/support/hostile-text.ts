@@ -4,7 +4,7 @@
  * forms are built at runtime so no long literal is tracked.
  */
 
-import { testSnowflake } from "./mock-postgrest.ts";
+import { testSnowflake } from "./mock-db.ts";
 
 const SOME_ID = testSnowflake();
 

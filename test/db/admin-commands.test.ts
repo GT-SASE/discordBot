@@ -17,7 +17,7 @@ import {
   run,
   setupCommandPayload,
 } from "../support/interactions.ts";
-import { testSnowflake } from "../support/mock-postgrest.ts";
+import { testSnowflake } from "../support/mock-db.ts";
 import { openBackend, type Backend } from "./backend.ts";
 import { MIGRATION_OWNER, queryAs } from "./harness.ts";
 import { insertEvent, insertTask } from "./fixtures.ts";

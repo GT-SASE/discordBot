@@ -6,10 +6,10 @@
 import { describe, expect, it } from "vitest";
 import {
   HOSTILE_STRINGS,
-  mockPostgrest,
+  mockDb,
   testSnowflake,
   type MockResponse,
-} from "../../test/support/mock-postgrest.ts";
+} from "../../test/support/mock-db.ts";
 import type { DateOnly } from "../lib/dates.ts";
 import {
   assignEventStep,
@@ -96,12 +96,11 @@ function workflowRow() {
   };
 }
 
-const rpc = (name: string, body: unknown) => ({
-  method: "SQL",
+const rpc = (name: string, values: unknown) => ({
   target: expect.stringMatching(
     new RegExp(`^select public\\.${name}\\(`),
   ) as string,
-  body,
+  values,
 });
 /**
  * Rows as a read built with Drizzle returns them: each one's values in the order
@@ -131,14 +130,14 @@ const reminderKey = {
 describe("exact requests", () => {
   const cases: [
     string,
-    (db: ReturnType<typeof mockPostgrest>["db"]) => Promise<{ ok: boolean }>,
+    (db: ReturnType<typeof mockDb>["db"]) => Promise<{ ok: boolean }>,
     MockResponse,
-    { method: string; target: string; body: unknown },
+    { target: string; values: unknown },
   ][] = [
     [
       "assignEventStep",
       (db) => assignEventStep(db, assignment),
-      { body: true },
+      { value: true },
       rpc("assign_event_step", {
         p_event_id: ID,
         p_guild_id: GUILD,
@@ -150,7 +149,7 @@ describe("exact requests", () => {
     [
       "unassignEventStep",
       (db) => unassignEventStep(db, { ...assignment, kind: "food_pickup" }),
-      { body: false },
+      { value: false },
       rpc("unassign_event_step", {
         p_event_id: ID,
         p_guild_id: GUILD,
@@ -168,7 +167,7 @@ describe("exact requests", () => {
           kind: "budget_approved",
           actorId: ACTOR,
         }),
-      { body: true },
+      { value: true },
       rpc("complete_event_step", {
         p_event_id: ID,
         p_guild_id: GUILD,
@@ -184,7 +183,7 @@ describe("exact requests", () => {
           eventId: ID,
           kind: "engage_post",
         }),
-      { body: true },
+      { value: true },
       rpc("claim_step_handoff", {
         p_event_id: ID,
         p_guild_id: GUILD,
@@ -199,7 +198,7 @@ describe("exact requests", () => {
           eventId: ID,
           kind: "engage_post",
         }),
-      { body: true },
+      { value: true },
       rpc("mark_step_handoff_sent", {
         p_event_id: ID,
         p_guild_id: GUILD,
@@ -215,7 +214,7 @@ describe("exact requests", () => {
           pickupTime: "17:30",
           actorId: ACTOR,
         }),
-      { body: false },
+      { value: false },
       rpc("set_event_pickup_time", {
         p_event_id: ID,
         p_guild_id: GUILD,
@@ -226,7 +225,7 @@ describe("exact requests", () => {
     [
       "claimEventReminder",
       (db) => claimEventReminder(db, reminderKey),
-      { body: TOKEN },
+      { value: TOKEN },
       rpc("claim_event_reminder", {
         p_event_id: ID,
         p_kind: "daily_steps",
@@ -236,7 +235,7 @@ describe("exact requests", () => {
     [
       "reclaimEventReminder",
       (db) => reclaimEventReminder(db, { ...reminderKey, claimToken: TOKEN }),
-      { body: null },
+      { value: null },
       rpc("reclaim_event_reminder", {
         p_event_id: ID,
         p_kind: "daily_steps",
@@ -252,7 +251,7 @@ describe("exact requests", () => {
           claimToken: TOKEN,
           messageId: USER,
         }),
-      { body: true },
+      { value: true },
       rpc("mark_event_reminder_sent", {
         p_event_id: ID,
         p_kind: "daily_steps",
@@ -265,7 +264,7 @@ describe("exact requests", () => {
       "markEventReminderSkipped",
       (db) =>
         markEventReminderSkipped(db, { ...reminderKey, claimToken: TOKEN }),
-      { body: true },
+      { value: true },
       rpc("mark_event_reminder_skipped", {
         p_event_id: ID,
         p_kind: "daily_steps",
@@ -277,7 +276,7 @@ describe("exact requests", () => {
       "saveSetupDraft",
       (db) =>
         saveSetupDraft(db, { guildId: GUILD, actorId: ACTOR, roles: ROLES }),
-      { body: true },
+      { value: true },
       rpc("save_setup_draft", {
         p_guild_id: GUILD,
         p_actor_id: ACTOR,
@@ -293,14 +292,13 @@ describe("exact requests", () => {
   ];
 
   it.each(cases)("%s", async (_name, call, response, expected) => {
-    const { db, requests } = mockPostgrest(() => response);
+    const { db, requests } = mockDb(() => response);
     const result = await call(db);
     expect(result.ok).toBe(true);
     expect(requests).toHaveLength(1);
     expect({
-      method: requests[0]?.method,
       target: requests[0]?.target,
-      body: requests[0]?.body,
+      values: requests[0]?.values,
     }).toEqual(expected);
   });
 });
@@ -309,27 +307,27 @@ describe("reads built with Drizzle", () => {
   it.each([
     [
       "listEventWorkflows",
-      (db: ReturnType<typeof mockPostgrest>["db"]) =>
+      (db: ReturnType<typeof mockDb>["db"]) =>
         listEventWorkflows(db, { guildId: GUILD, eventIds: [ID, OTHER_ID] }),
     ],
     [
       "listOpenStepsForUser",
-      (db: ReturnType<typeof mockPostgrest>["db"]) =>
+      (db: ReturnType<typeof mockDb>["db"]) =>
         listOpenStepsForUser(db, { guildId: GUILD, userId: USER, today: DATE }),
     ],
     [
       "listEventReminderCandidates",
-      (db: ReturnType<typeof mockPostgrest>["db"]) =>
+      (db: ReturnType<typeof mockDb>["db"]) =>
         listEventReminderCandidates(db, { fromDate: DATE }),
     ],
     [
       "listStaleEventReminderClaims",
-      (db: ReturnType<typeof mockPostgrest>["db"]) =>
+      (db: ReturnType<typeof mockDb>["db"]) =>
         listStaleEventReminderClaims(db, { claimedBefore: NOW }),
     ],
     [
       "getSetupDraft",
-      (db: ReturnType<typeof mockPostgrest>["db"]) =>
+      (db: ReturnType<typeof mockDb>["db"]) =>
         getSetupDraft(db, {
           guildId: GUILD,
           actorId: ACTOR,
@@ -340,7 +338,7 @@ describe("reads built with Drizzle", () => {
   ])(
     "%s sends one select, with every value as a parameter",
     async (_name, call) => {
-      const { db, requests } = mockPostgrest();
+      const { db, requests } = mockDb();
       await call(db);
       expect(requests).toHaveLength(1);
       const [request] = requests;
@@ -353,12 +351,12 @@ describe("reads built with Drizzle", () => {
   );
 
   it("reads only live assignments, of live events in this guild", async () => {
-    const { db, requests } = mockPostgrest();
+    const { db, requests } = mockDb();
     await listEventWorkflows(db, { guildId: GUILD, eventIds: [ID] });
     const sql = requests[0]?.target ?? "";
     expect(sql).toContain('"event_step_assignees"."removed_at" IS NULL');
     expect(sql).toContain('"events"."deleted_at" is null');
-    expect(requests[0]?.body).toEqual([GUILD, ID, 100]);
+    expect(requests[0]?.values).toEqual([GUILD, ID, 100]);
   });
 });
 
@@ -366,7 +364,7 @@ describe("refusals before any query", () => {
   const calls: [
     string,
     (
-      db: ReturnType<typeof mockPostgrest>["db"],
+      db: ReturnType<typeof mockDb>["db"],
       hostile: string,
     ) => Promise<{ ok: boolean }>,
   ][] = [
@@ -507,7 +505,7 @@ describe("refusals before any query", () => {
 
   describe.each(calls)("%s", (_name, call) => {
     it.each(HOSTILE_STRINGS)("refuses %j", async (hostile) => {
-      const { db, requests } = mockPostgrest();
+      const { db, requests } = mockDb();
       const result = await call(db, hostile);
       expect(result).toEqual({
         ok: false,
@@ -521,7 +519,7 @@ describe("refusals before any query", () => {
     ["budget_approved", "assignEventStep", assignEventStep],
     ["budget_approved", "unassignEventStep", unassignEventStep],
   ] as const)("refuses %s for %s", async (kind, _name, call) => {
-    const { db, requests } = mockPostgrest();
+    const { db, requests } = mockDb();
     const result = await call(db, {
       ...assignment,
       kind: kind as "budget_sheet",
@@ -531,7 +529,7 @@ describe("refusals before any query", () => {
   });
 
   it("refuses food_pickup as a step to complete or hand off", async () => {
-    const { db, requests } = mockPostgrest();
+    const { db, requests } = mockDb();
     const key = {
       guildId: GUILD,
       eventId: ID,
@@ -547,7 +545,7 @@ describe("refusals before any query", () => {
   it.each(["5:30", "24:00", "17:60", "17:30:00", "5:30 PM", " 17:30"])(
     "refuses the pickup time %j",
     async (pickupTime) => {
-      const { db, requests } = mockPostgrest();
+      const { db, requests } = mockDb();
       const result = await setEventPickupTime(db, {
         guildId: GUILD,
         eventId: ID,
@@ -560,7 +558,7 @@ describe("refusals before any query", () => {
   );
 
   it("refuses more than 100 events in one read, and reads nothing for none", async () => {
-    const { db, requests } = mockPostgrest();
+    const { db, requests } = mockDb();
     const many = Array.from({ length: 101 }, () => ID);
     expect(
       (await listEventWorkflows(db, { guildId: GUILD, eventIds: many })).ok,
@@ -572,7 +570,7 @@ describe("refusals before any query", () => {
   });
 
   it("refuses the guild ID as any of the six roles", async () => {
-    const { db, requests } = mockPostgrest();
+    const { db, requests } = mockDb();
     for (const role of Object.keys(ROLES) as (keyof SetupRoles)[]) {
       const result = await saveSetupDraft(db, {
         guildId: GUILD,
@@ -585,7 +583,7 @@ describe("refusals before any query", () => {
   });
 
   it("refuses an invalid instant", async () => {
-    const { db, requests } = mockPostgrest();
+    const { db, requests } = mockDb();
     const bad = new Date(Number.NaN);
     expect(
       (await listStaleEventReminderClaims(db, { claimedBefore: bad })).ok,
@@ -606,7 +604,7 @@ describe("refusals before any query", () => {
 
 describe("reading answers", () => {
   it("orders a workflow's steps by kind and its people oldest first, as HH:MM", async () => {
-    const { db } = mockPostgrest(() => ({ body: values(workflowRow()) }));
+    const { db } = mockDb(() => ({ rows: values(workflowRow()) }));
     const result = await getEventWorkflow(db, { guildId: GUILD, eventId: ID });
     expect(result.ok).toBe(true);
     const workflow = result.ok ? result.value : null;
@@ -624,7 +622,7 @@ describe("reading answers", () => {
   });
 
   it("returns null for an event that is not there", async () => {
-    const { db } = mockPostgrest(() => ({ body: [] }));
+    const { db } = mockDb(() => ({ rows: [] }));
     expect(await getEventWorkflow(db, { guildId: GUILD, eventId: ID })).toEqual(
       { ok: true, value: null },
     );
@@ -633,7 +631,7 @@ describe("reading answers", () => {
   it("treats a workflow with a step missing as a bad row", async () => {
     const row = workflowRow();
     row.event_steps.pop();
-    const { db } = mockPostgrest(() => ({ body: values(row) }));
+    const { db } = mockDb(() => ({ rows: values(row) }));
     expect(await getEventWorkflow(db, { guildId: GUILD, eventId: ID })).toEqual(
       { ok: false, error: { category: "bad_row", code: null } },
     );
@@ -642,17 +640,16 @@ describe("reading answers", () => {
   it.each([
     [
       "assignEventStep",
-      (db: ReturnType<typeof mockPostgrest>["db"]) =>
-        assignEventStep(db, assignment),
+      (db: ReturnType<typeof mockDb>["db"]) => assignEventStep(db, assignment),
     ],
     [
       "unassignEventStep",
-      (db: ReturnType<typeof mockPostgrest>["db"]) =>
+      (db: ReturnType<typeof mockDb>["db"]) =>
         unassignEventStep(db, assignment),
     ],
     [
       "completeEventStep",
-      (db: ReturnType<typeof mockPostgrest>["db"]) =>
+      (db: ReturnType<typeof mockDb>["db"]) =>
         completeEventStep(db, {
           guildId: GUILD,
           eventId: ID,
@@ -662,7 +659,7 @@ describe("reading answers", () => {
     ],
     [
       "setEventPickupTime",
-      (db: ReturnType<typeof mockPostgrest>["db"]) =>
+      (db: ReturnType<typeof mockDb>["db"]) =>
         setEventPickupTime(db, {
           guildId: GUILD,
           eventId: ID,
@@ -671,7 +668,7 @@ describe("reading answers", () => {
         }),
     ],
   ])("reports a null from %s as not found", async (_name, call) => {
-    const { db } = mockPostgrest(() => ({ body: null }));
+    const { db } = mockDb(() => ({ value: null }));
     expect(await call(db)).toEqual({
       ok: false,
       error: { category: "not_found", code: null },
@@ -682,10 +679,7 @@ describe("reading answers", () => {
     ["CF431", "step_assignee_limit"],
     ["CF410", "parent_unavailable"],
   ])("reports %s as %s", async (code, category) => {
-    const { db } = mockPostgrest(() => ({
-      status: 400,
-      body: { code, message: "row text" },
-    }));
+    const { db } = mockDb(() => ({ error: code }));
     expect(await assignEventStep(db, assignment)).toEqual({
       ok: false,
       error: { category, code },
@@ -708,8 +702,8 @@ describe("reading answers", () => {
     const later = event(ID, "2030-02-01", "open");
     const sooner = event(OTHER_ID, "2030-01-20", "done");
     const past = event(OTHER_ID, "2030-01-01", "open");
-    const { db } = mockPostgrest(() => ({
-      body: values(
+    const { db } = mockDb(() => ({
+      rows: values(
         { id: ID, kind: "budget_sheet", events: later },
         { id: TOKEN, kind: "budget_sheet", events: sooner },
         { id: OTHER_ID, kind: "food_pickup", events: sooner },
@@ -735,8 +729,8 @@ describe("reading answers", () => {
 
   it("reads a reminder candidate with its guild's zone and Events Directors role", async () => {
     const role = testSnowflake();
-    const { db } = mockPostgrest(() => ({
-      body: values({
+    const { db } = mockDb(() => ({
+      rows: values({
         id: ID,
         guild_id: GUILD,
         name: "Social",
@@ -825,7 +819,7 @@ describe("setup drafts", () => {
   });
 
   it("returns the fingerprint it saved", async () => {
-    const { db } = mockPostgrest(() => ({ body: true }));
+    const { db } = mockDb(() => ({ value: true }));
     expect(
       await saveSetupDraft(db, {
         guildId: GUILD,
@@ -836,7 +830,7 @@ describe("setup drafts", () => {
   });
 
   it("reads a draft back, and gives its roles in the bindings' shape", async () => {
-    const { db } = mockPostgrest(() => ({ body: values(draftRow()) }));
+    const { db } = mockDb(() => ({ rows: values(draftRow()) }));
     const result = await getSetupDraft(db, {
       guildId: GUILD,
       actorId: ACTOR,
@@ -849,8 +843,8 @@ describe("setup drafts", () => {
   });
 
   it("ignores a stored draft whose fingerprint does not match its roles", async () => {
-    const { db } = mockPostgrest(() => ({
-      body: values(draftRow({ treasury_role_id: testSnowflake() })),
+    const { db } = mockDb(() => ({
+      rows: values(draftRow({ treasury_role_id: testSnowflake() })),
     }));
     expect(
       await getSetupDraft(db, {

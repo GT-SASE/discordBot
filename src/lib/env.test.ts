@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { ConfigError } from "./config-error.ts";
 import {
   getAllowedGuildIds,
+  getDatabaseUrl,
   getDiscordAppId,
   getDiscordBotToken,
   getDiscordPublicKey,
@@ -92,5 +93,60 @@ describe("getAllowedGuildIds", () => {
   it("refuses an empty entry", () => {
     vi.stubEnv("ALLOWED_GUILD_IDS", `${GUILD_A},`);
     expect(getAllowedGuildIds).toThrow(ConfigError);
+  });
+});
+
+describe("DATABASE_URL", () => {
+  // The user and password are set on a parsed URL, so no credential-shaped text is
+  // tracked.
+  const password = ["placeholder", "only"].join("-");
+  const url = (rest: string, user = "bot_app") => {
+    const parsed = new URL(`postgresql://${rest}`);
+    parsed.username = user;
+    parsed.password = password;
+    return parsed.toString();
+  };
+
+  it.each([
+    url("ep-example-pooler.example.test/bot?sslmode=require"),
+    url(
+      "ep-example-pooler.example.test/bot?sslmode=verify-full&channel_binding=require",
+    ),
+    url("localhost:5432/bot"),
+    url("127.0.0.1/bot").replace("postgresql:", "postgres:"),
+  ])("accepts %s", (value) => {
+    vi.stubEnv("DATABASE_URL", value);
+    expect(getDatabaseUrl()).toBe(value);
+  });
+
+  it.each([
+    [
+      "the owner's role",
+      url("db.example.test/bot?sslmode=require", "neondb_owner"),
+    ],
+    ["no password", "postgresql://bot_app@db.example.test/bot?sslmode=require"],
+    ["no TLS to a remote host", url("db.example.test/bot")],
+    ["TLS that may be skipped", url("db.example.test/bot?sslmode=prefer")],
+    ["no database", url("db.example.test/?sslmode=require")],
+    [
+      "another scheme",
+      url("db.example.test/bot?sslmode=require").replace(
+        "postgresql:",
+        "https:",
+      ),
+    ],
+    ["no URL at all", "bot_app"],
+  ])("refuses %s, naming only the setting", (_name, value) => {
+    vi.stubEnv("DATABASE_URL", value);
+    expect(getDatabaseUrl).toThrow(ConfigError);
+    expect(getDatabaseUrl).toThrow("DATABASE_URL");
+    expect(getDatabaseUrl).not.toThrow(password);
+  });
+
+  it("refuses it missing or blank", () => {
+    vi.stubEnv("DATABASE_URL", undefined);
+    expect(getDatabaseUrl).toThrow("must be set");
+    vi.stubEnv("DATABASE_URL", "  ");
+    expect(getDatabaseUrl).toThrow("must be set");
   });
 });

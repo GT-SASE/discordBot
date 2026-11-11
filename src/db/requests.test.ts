@@ -7,10 +7,10 @@
 import { describe, expect, it } from "vitest";
 import {
   HOSTILE_STRINGS,
-  mockPostgrest,
+  mockDb,
   testSnowflake,
   type MockResponse,
-} from "../../test/support/mock-postgrest.ts";
+} from "../../test/support/mock-db.ts";
 import type { DateOnly } from "../lib/dates.ts";
 import { countOpenTasksInChannel } from "./tasks.ts";
 import {
@@ -98,10 +98,10 @@ const VERSION = "2030-01-01T11:00:00.123456+00:00";
 
 /**
  * An update as recorded: the columns it sets, and a statement that filters on each of
- * the old PostgREST-style filters given, `column=eq.value` or `column=is.null`, and
- * returns the row.
+ * filters given in short form, `column=eq.value`, `column=neq.value` or
+ * `column=is.null`, and returns the row.
  */
-function update(table: string, body: unknown, filters: string) {
+function update(table: string, values: unknown, filters: string) {
   const conditions = filters.split("&").map((filter) => {
     const [column = "", test = ""] = filter.split("=");
     const operator = test.startsWith("is.null")
@@ -112,13 +112,12 @@ function update(table: string, body: unknown, filters: string) {
     return `(?=.*"${table}"\\."${column}"${operator})`;
   });
   return {
-    method: "SQL",
     target: expect.stringMatching(
       new RegExp(
         `^update "${table}" set .* where ${conditions.join("")}.* returning `,
       ),
     ) as string,
-    body,
+    values,
   };
 }
 
@@ -139,10 +138,9 @@ const editText = (
 
 /** Rows as a statement built with Drizzle returns them: each one's values, in order. */
 function asRows(response: MockResponse): MockResponse {
-  return Array.isArray(response.body)
+  return "rows" in response
     ? {
-        ...response,
-        body: response.body.map((row: unknown) =>
+        rows: response.rows.map((row: unknown) =>
           typeof row === "object" && row !== null ? Object.values(row) : row,
         ),
       }
@@ -183,16 +181,15 @@ function eventRow() {
 }
 
 describe("exact requests", () => {
-  const taskWrite = (body: unknown, filters: string) =>
-    update("tasks", body, filters);
-  const eventWrite = (body: unknown, filters: string) =>
-    update("events", body, filters);
-  const rpc = (name: string, body: unknown) => ({
-    method: "SQL",
+  const taskWrite = (values: unknown, filters: string) =>
+    update("tasks", values, filters);
+  const eventWrite = (values: unknown, filters: string) =>
+    update("events", values, filters);
+  const rpc = (name: string, values: unknown) => ({
     target: expect.stringMatching(
       new RegExp(`^select public\\.${name}\\(`),
     ) as string,
-    body,
+    values,
   });
 
   const scopedTask = `id=eq.${ID}&guild_id=eq.${GUILD}`;
@@ -205,9 +202,9 @@ describe("exact requests", () => {
 
   const cases: [
     string,
-    (db: ReturnType<typeof mockPostgrest>["db"]) => Promise<{ ok: boolean }>,
+    (db: ReturnType<typeof mockDb>["db"]) => Promise<{ ok: boolean }>,
     MockResponse,
-    { method: string; target: string; body: unknown },
+    { target: string; values: unknown },
   ][] = [
     [
       "markOwnTaskDone",
@@ -218,7 +215,7 @@ describe("exact requests", () => {
           assigneeId: ACTOR,
           now: NOW,
         }),
-      { body: [taskRow()] },
+      { rows: [taskRow()] },
       taskWrite(
         { status: "done", completed_at: NOW.toISOString() },
         `${scopedTask}&assignee_id=eq.${ACTOR}&status=eq.open&deleted_at=is.null`,
@@ -228,7 +225,7 @@ describe("exact requests", () => {
       "markTaskDoneAsOfficer",
       (db) =>
         markTaskDoneAsOfficer(db, { guildId: GUILD, taskId: ID, now: NOW }),
-      { body: [taskRow()] },
+      { rows: [taskRow()] },
       taskWrite(
         { status: "done", completed_at: NOW.toISOString() },
         `${scopedTask}&status=eq.open&deleted_at=is.null`,
@@ -246,7 +243,7 @@ describe("exact requests", () => {
           assigneeId: OTHER,
           actorId: ACTOR,
         }),
-      { body: taskRow() },
+      { value: taskRow() },
       rpc("edit_task", {
         p_task_id: ID,
         p_guild_id: GUILD,
@@ -266,7 +263,7 @@ describe("exact requests", () => {
           expectedUpdatedAt: VERSION,
           now: NOW,
         }),
-      { body: [taskRow()] },
+      { rows: [taskRow()] },
       taskWrite(
         { deleted_at: NOW.toISOString() },
         `${scopedTask}&updated_at=eq.${VERSION}&deleted_at=is.null`,
@@ -275,7 +272,7 @@ describe("exact requests", () => {
     [
       "softDeleteTask",
       (db) => softDeleteTask(db, { guildId: GUILD, taskId: ID, now: NOW }),
-      { body: [taskRow()] },
+      { rows: [taskRow()] },
       taskWrite(
         { deleted_at: NOW.toISOString() },
         `${scopedTask}&deleted_at=is.null`,
@@ -292,13 +289,12 @@ describe("exact requests", () => {
           description: "Book the room",
           dueDate: DATE,
         }),
-      { status: 201, body: [taskRow()] },
+      { rows: [taskRow()] },
       {
-        method: "SQL",
         target: expect.stringMatching(
           /^insert into "tasks" .* returning /,
         ) as string,
-        body: {
+        values: {
           event_id: ID,
           guild_id: GUILD,
           assignee_id: OTHER,
@@ -318,13 +314,12 @@ describe("exact requests", () => {
           name: "Social",
           eventDate: DATE,
         }),
-      { status: 201, body: [eventRow()] },
+      { rows: [eventRow()] },
       {
-        method: "SQL",
         target: expect.stringMatching(
           /^insert into "events" .* returning /,
         ) as string,
-        body: {
+        values: {
           guild_id: GUILD,
           channel_id: OTHER,
           name: "Social",
@@ -344,13 +339,12 @@ describe("exact requests", () => {
           eventDate: DATE,
           threadId: ACTOR,
         }),
-      { status: 201, body: [eventRow()] },
+      { rows: [eventRow()] },
       {
-        method: "SQL",
         target: expect.stringMatching(
           /^insert into "events" .* returning /,
         ) as string,
-        body: {
+        values: {
           guild_id: GUILD,
           channel_id: OTHER,
           name: "Social",
@@ -364,13 +358,13 @@ describe("exact requests", () => {
     [
       "claimEventPostAttempt",
       (db) => claimEventPostAttempt(db, { guildId: GUILD, eventId: ID }),
-      { body: true },
+      { value: true },
       rpc("claim_event_post_attempt", { p_event_id: ID, p_guild_id: GUILD }),
     ],
     [
       "releaseEventPostAttempt",
       (db) => releaseEventPostAttempt(db, { guildId: GUILD, eventId: ID }),
-      { body: true },
+      { value: true },
       rpc("release_event_post_attempt", { p_event_id: ID, p_guild_id: GUILD }),
     ],
     [
@@ -382,7 +376,7 @@ describe("exact requests", () => {
           threadId: OTHER,
           overviewMessageId: ACTOR,
         }),
-      { body: [eventRow()] },
+      { rows: [eventRow()] },
       eventWrite(
         {
           thread_id: OTHER,
@@ -396,7 +390,7 @@ describe("exact requests", () => {
       "setEventThread",
       (db) =>
         setEventThread(db, { guildId: GUILD, eventId: ID, threadId: OTHER }),
-      { body: [eventRow()] },
+      { rows: [eventRow()] },
       eventWrite(
         { thread_id: OTHER, thread_status: "active" },
         `${scopedEvent}&thread_status=neq.active`,
@@ -405,7 +399,7 @@ describe("exact requests", () => {
     [
       "markEventThreadMissing",
       (db) => markEventThreadMissing(db, { guildId: GUILD, eventId: ID }),
-      { body: [eventRow()] },
+      { rows: [eventRow()] },
       eventWrite(
         { thread_status: "missing" },
         `${scopedEvent}&thread_status=eq.active`,
@@ -419,19 +413,19 @@ describe("exact requests", () => {
           eventId: ID,
           messageId: OTHER,
         }),
-      { body: [eventRow()] },
+      { rows: [eventRow()] },
       eventWrite({ overview_message_id: OTHER }, scopedEvent),
     ],
     [
       "closeEvent",
       (db) => closeEvent(db, { guildId: GUILD, eventId: ID }),
-      { body: [eventRow()] },
+      { rows: [eventRow()] },
       eventWrite({ status: "closed" }, `${scopedEvent}&status=eq.active`),
     ],
     [
       "softDeleteEvent",
       (db) => softDeleteEvent(db, { guildId: GUILD, eventId: ID }),
-      { body: 2 },
+      { value: 2 },
       rpc("soft_delete_event", { p_event_id: ID, p_guild_id: GUILD }),
     ],
     [
@@ -448,7 +442,7 @@ describe("exact requests", () => {
           treasuryRoleId: OTHER,
           marketingRoleId: null,
         }),
-      { body: 1 },
+      { value: 1 },
       rpc("apply_role_bindings", {
         p_guild_id: GUILD,
         p_expected_version: 0,
@@ -473,7 +467,7 @@ describe("exact requests", () => {
           removeChannelIds: [],
           timezone: null,
         }),
-      { body: 4 },
+      { value: 4 },
       rpc("apply_config_change", {
         p_guild_id: GUILD,
         p_expected_version: 3,
@@ -487,7 +481,7 @@ describe("exact requests", () => {
     [
       "markChannelUnavailable",
       (db) => markChannelUnavailable(db, { guildId: GUILD, channelId: OTHER }),
-      { body: true },
+      { value: true },
       rpc("mark_channel_unavailable", {
         p_guild_id: GUILD,
         p_channel_id: OTHER,
@@ -496,13 +490,13 @@ describe("exact requests", () => {
     [
       "claimInteraction",
       (db) => claimInteraction(db, { interactionId: OTHER }),
-      { body: true },
+      { value: true },
       rpc("claim_interaction", { p_interaction_id: OTHER }),
     ],
     [
       "claimReminder",
       (db) => claimReminder(db, reminderKey),
-      { body: TOKEN },
+      { value: TOKEN },
       rpc("claim_reminder", {
         p_task_id: ID,
         p_kind: "one_day",
@@ -518,7 +512,7 @@ describe("exact requests", () => {
           ...reminderKey,
           asRead: { assigneeId: OTHER, updatedAt: VERSION },
         }),
-      { body: TOKEN },
+      { value: TOKEN },
       rpc("claim_reminder", {
         p_task_id: ID,
         p_kind: "one_day",
@@ -535,7 +529,7 @@ describe("exact requests", () => {
           { ...reminderKey, asRead: { assigneeId: OTHER, updatedAt: VERSION } },
         ]),
       {
-        body: [
+        value: [
           { claim_token: TOKEN, changed: false },
           { claim_token: null, changed: true },
         ],
@@ -551,7 +545,7 @@ describe("exact requests", () => {
     [
       "recordReminderRefused",
       (db) => recordReminderRefused(db, { ...reminderKey, claimToken: TOKEN }),
-      { body: true },
+      { value: true },
       rpc("record_reminder_refused", {
         p_task_id: ID,
         p_kind: "one_day",
@@ -562,19 +556,19 @@ describe("exact requests", () => {
     [
       "recordThreadRefusal",
       (db) => recordThreadRefusal(db, { guildId: GUILD, eventId: ID }),
-      { body: 2 },
+      { value: 2 },
       rpc("record_thread_refusal", { p_event_id: ID, p_guild_id: GUILD }),
     ],
     [
       "clearThreadRefusals",
       (db) => clearThreadRefusals(db, { guildId: GUILD, eventId: ID }),
-      { body: true },
+      { value: true },
       rpc("clear_thread_refusals", { p_event_id: ID, p_guild_id: GUILD }),
     ],
     [
       "reclaimReminder",
       (db) => reclaimReminder(db, { ...reminderKey, claimToken: TOKEN }),
-      { body: null },
+      { value: null },
       rpc("reclaim_reminder", {
         p_task_id: ID,
         p_kind: "one_day",
@@ -592,7 +586,7 @@ describe("exact requests", () => {
           claimToken: TOKEN,
           messageId: OTHER,
         }),
-      { body: true },
+      { value: true },
       rpc("mark_reminder_sent", {
         p_task_id: ID,
         p_kind: "one_day",
@@ -608,7 +602,7 @@ describe("exact requests", () => {
           keys: [{ ...reminderKey, claimToken: TOKEN }],
           messageId: OTHER,
         }),
-      { body: [true] },
+      { value: [true] },
       rpc("mark_reminders_sent", {
         p_task_ids: [ID],
         p_kinds: ["one_day"],
@@ -620,7 +614,7 @@ describe("exact requests", () => {
     [
       "markReminderSkipped",
       (db) => markReminderSkipped(db, { ...reminderKey, claimToken: TOKEN }),
-      { body: false },
+      { value: false },
       rpc("mark_reminder_skipped", {
         p_task_id: ID,
         p_kind: "one_day",
@@ -631,21 +625,20 @@ describe("exact requests", () => {
   ];
 
   it.each(cases)("%s", async (_name, call, response, expected) => {
-    const { db, requests } = mockPostgrest((request) =>
+    const { db, requests } = mockDb((request) =>
       request.target.startsWith("select public.") ? response : asRows(response),
     );
     const result = await call(db);
     expect(result.ok).toBe(true);
     expect(requests).toHaveLength(1);
     expect({
-      method: requests[0]?.method,
       target: requests[0]?.target,
-      body: requests[0]?.body,
+      values: requests[0]?.values,
     }).toEqual(expected);
   });
 
   it("asks for the changed row back on every write, so the count can be checked", async () => {
-    const { db, requests } = mockPostgrest(() => asRows({ body: [taskRow()] }));
+    const { db, requests } = mockDb(() => asRows({ rows: [taskRow()] }));
     await markTaskDoneAsOfficer(db, { guildId: GUILD, taskId: ID, now: NOW });
     expect(requests[0]?.target).toMatch(/ returning "id", "event_id", /);
   });
@@ -672,10 +665,10 @@ describe("exact requests", () => {
 
   it("reads the planner in pages, continuing after the last row of each", async () => {
     let call = 0;
-    const { db, requests } = mockPostgrest(() => {
+    const { db, requests } = mockDb(() => {
       call += 1;
       return {
-        body:
+        rows:
           call === 1
             ? Array.from({ length: 500 }, () => candidate(TOKEN, "2030-01-05"))
             : [candidate(ID, "2030-01-06")],
@@ -686,15 +679,15 @@ describe("exact requests", () => {
     expect(result.ok && result.value.truncated).toBe(false);
     expect(requests).toHaveLength(2);
     // The second page starts after the first page's last due date and ID.
-    expect(requests[1]?.body).toEqual(
+    expect(requests[1]?.values).toEqual(
       expect.arrayContaining(["2030-01-05", TOKEN]),
     );
-    expect(requests[0]?.body).not.toContain(TOKEN);
+    expect(requests[0]?.values).not.toContain(TOKEN);
   });
 
   it("reports the planner as truncated when it stops at the page limit", async () => {
-    const { db, requests } = mockPostgrest(() => ({
-      body: Array.from({ length: 500 }, () => candidate(TOKEN, "2030-01-05")),
+    const { db, requests } = mockDb(() => ({
+      rows: Array.from({ length: 500 }, () => candidate(TOKEN, "2030-01-05")),
     }));
     const result = await listReminderCandidates(db, { lastDueDate: DATE });
     expect(result.ok && result.value.truncated).toBe(true);
@@ -702,8 +695,8 @@ describe("exact requests", () => {
   });
 
   it("stops and reports truncated if a full page ends with no readable position", async () => {
-    const { db, requests } = mockPostgrest(() => ({
-      body: Array.from({ length: 500 }, () =>
+    const { db, requests } = mockDb(() => ({
+      rows: Array.from({ length: 500 }, () =>
         candidate("not-a-uuid", "2030-01-05"),
       ),
     }));
@@ -718,7 +711,7 @@ describe("reads built with Drizzle", () => {
   const term = "x' OR 1=1 --";
   const reads: [
     string,
-    (db: ReturnType<typeof mockPostgrest>["db"]) => Promise<unknown>,
+    (db: ReturnType<typeof mockDb>["db"]) => Promise<unknown>,
   ][] = [
     ["getTask", (db) => getTask(db, { guildId: GUILD, taskId: ID })],
     ["getEvent", (db) => getEvent(db, { guildId: GUILD, eventId: ID })],
@@ -817,7 +810,7 @@ describe("reads built with Drizzle", () => {
   it.each(reads)(
     "%s sends one select, with every value as a parameter",
     async (_name, read) => {
-      const { db, requests } = mockPostgrest();
+      const { db, requests } = mockDb();
       await read(db);
       expect(requests).toHaveLength(1);
       const [request] = requests;
@@ -826,16 +819,16 @@ describe("reads built with Drizzle", () => {
       for (const value of [GUILD, ACTOR, OTHER, ID, term, DATE]) {
         expect(request?.target).not.toContain(value);
       }
-      expect(request?.body).not.toEqual([]);
+      expect(request?.values).not.toEqual([]);
     },
   );
 
   it("scopes a read by key to the guild and to live rows", async () => {
-    const { db, requests } = mockPostgrest();
+    const { db, requests } = mockDb();
     await getTask(db, { guildId: GUILD, taskId: ID });
     expect(requests[0]?.target).toContain('"tasks"."guild_id" = $');
     expect(requests[0]?.target).toContain('"tasks"."deleted_at" is null');
-    expect(requests[0]?.body).toEqual([ID, GUILD, 1]);
+    expect(requests[0]?.values).toEqual([ID, GUILD, 1]);
   });
 });
 
@@ -843,7 +836,7 @@ describe("autocomplete search", () => {
   const searches: [
     string,
     (
-      db: ReturnType<typeof mockPostgrest>["db"],
+      db: ReturnType<typeof mockDb>["db"],
       term: string,
     ) => Promise<{ ok: boolean }>,
     string,
@@ -893,7 +886,7 @@ describe("autocomplete search", () => {
       ["a quote and a comment", "x' OR 1=1 --", "%x' OR 1=1 --%"],
       ["a statement", "'; DELETE FROM tasks; --", "%'; DELETE FROM tasks; --%"],
     ])("sends %s only as a parameter", async (_case, term, pattern) => {
-      const { db, requests } = mockPostgrest();
+      const { db, requests } = mockDb();
       await search(db, term);
       expect(requests).toHaveLength(1);
       const [request] = requests;
@@ -901,14 +894,14 @@ describe("autocomplete search", () => {
       expect(request?.target).toMatch(/ ilike \$[0-9]+/);
       // One character can be part of a column name.
       expect(term.length === 1 || !request?.target.includes(term)).toBe(true);
-      expect(request?.body).toContain(pattern);
-      expect(request?.body).toContain(GUILD);
+      expect(request?.values).toContain(pattern);
+      expect(request?.values).toContain(GUILD);
     });
 
     it.each(["x\u0000y", "\u0000", "x\ud800", "\udc00y"])(
       "refuses %j before any query",
       async (term) => {
-        const { db, requests } = mockPostgrest();
+        const { db, requests } = mockDb();
         const result = await search(db, term);
         expect(result).toEqual({
           ok: false,
@@ -919,21 +912,21 @@ describe("autocomplete search", () => {
     );
 
     it("caps a long term", async () => {
-      const { db, requests } = mockPostgrest();
+      const { db, requests } = mockDb();
       await search(db, "a".repeat(6000));
-      expect(requests[0]?.body).toContain(`%${"a".repeat(100)}%`);
+      expect(requests[0]?.values).toContain(`%${"a".repeat(100)}%`);
     });
   });
 });
 
 describe("refusals before any query", () => {
-  const db = () => mockPostgrest();
+  const db = () => mockDb();
 
   /** Each call with one hostile value in the given position. */
   const idCalls: [
     string,
     (
-      client: ReturnType<typeof mockPostgrest>["db"],
+      client: ReturnType<typeof mockDb>["db"],
       hostile: string,
     ) => Promise<{ ok: boolean }>,
   ][] = [
@@ -1126,7 +1119,7 @@ describe("refusals before any query", () => {
   const textCalls: [
     string,
     (
-      client: ReturnType<typeof mockPostgrest>["db"],
+      client: ReturnType<typeof mockDb>["db"],
       text: string,
     ) => Promise<{ ok: boolean }>,
   ][] = [
@@ -1329,7 +1322,7 @@ describe("refusals before any query", () => {
 
 describe("arguments are named, so extra properties go nowhere", () => {
   it("ignores a hostile p_actor_id on the input object", async () => {
-    const { db, requests } = mockPostgrest(() => ({ body: 2 }));
+    const { db, requests } = mockDb(() => ({ value: 2 }));
     const input = {
       guildId: GUILD,
       actorId: ACTOR,
@@ -1344,13 +1337,12 @@ describe("arguments are named, so extra properties go nowhere", () => {
       p_guild_id: "hostile",
     };
     await applyRoleBindings(db, input);
-    expect(JSON.stringify(requests[0]?.body)).not.toContain("hostile");
+    expect(JSON.stringify(requests[0]?.values)).not.toContain("hostile");
   });
 
   it("ignores extra columns on a new task", async () => {
-    const { db, requests } = mockPostgrest(() => ({
-      status: 201,
-      body: [taskRow()],
+    const { db, requests } = mockDb(() => ({
+      rows: [taskRow()],
     }));
     const input = {
       guildId: GUILD,
@@ -1363,16 +1355,16 @@ describe("arguments are named, so extra properties go nowhere", () => {
       status: "hostile",
     };
     await createTask(db, input);
-    expect(JSON.stringify(requests[0]?.body)).not.toContain("hostile");
+    expect(JSON.stringify(requests[0]?.values)).not.toContain("hostile");
   });
 });
 
 describe("row counts on writes", () => {
-  const write = (db: ReturnType<typeof mockPostgrest>["db"]) =>
+  const write = (db: ReturnType<typeof mockDb>["db"]) =>
     markTaskDoneAsOfficer(db, { guildId: GUILD, taskId: ID, now: NOW });
 
   it("treats no changed row as not found", async () => {
-    const { db } = mockPostgrest(() => ({ body: [] }));
+    const { db } = mockDb(() => ({ rows: [] }));
     expect(await write(db)).toEqual({
       ok: false,
       error: { category: "not_found", code: null },
@@ -1380,9 +1372,7 @@ describe("row counts on writes", () => {
   });
 
   it("treats two changed rows as a failure", async () => {
-    const { db } = mockPostgrest(() =>
-      asRows({ body: [taskRow(), taskRow()] }),
-    );
+    const { db } = mockDb(() => asRows({ rows: [taskRow(), taskRow()] }));
     expect(await write(db)).toEqual({
       ok: false,
       error: { category: "unexpected", code: null },
@@ -1390,8 +1380,8 @@ describe("row counts on writes", () => {
   });
 
   it("treats a changed row it cannot read as a failure", async () => {
-    const { db } = mockPostgrest(() =>
-      asRows({ body: [{ ...taskRow(), due_date: "bad" }] }),
+    const { db } = mockDb(() =>
+      asRows({ rows: [{ ...taskRow(), due_date: "bad" }] }),
     );
     expect(await write(db)).toEqual({
       ok: false,
@@ -1400,7 +1390,7 @@ describe("row counts on writes", () => {
   });
 
   it("reports a null from soft_delete_event as not found", async () => {
-    const { db } = mockPostgrest(() => ({ body: null }));
+    const { db } = mockDb(() => ({ value: null }));
     expect(await softDeleteEvent(db, { guildId: GUILD, eventId: ID })).toEqual({
       ok: false,
       error: { category: "not_found", code: null },
@@ -1408,7 +1398,7 @@ describe("row counts on writes", () => {
   });
 
   it("reports an RPC value of the wrong type as a bad row", async () => {
-    const { db } = mockPostgrest(() => ({ body: "yes" }));
+    const { db } = mockDb(() => ({ value: "yes" }));
     expect((await claimInteraction(db, { interactionId: OTHER })).ok).toBe(
       false,
     );
@@ -1426,7 +1416,7 @@ describe("countOpenTasksInChannel", () => {
   ];
 
   it("asks only for open, live tasks of live events in this guild and channel", async () => {
-    const { db, requests } = mockPostgrest(() => ({ body: [row(1), row(2)] }));
+    const { db, requests } = mockDb(() => ({ rows: [row(1), row(2)] }));
 
     expect(
       await countOpenTasksInChannel(db, { guildId: GUILD, channelId: CHANNEL }),
@@ -1444,12 +1434,12 @@ describe("countOpenTasksInChannel", () => {
     ]) {
       expect(request?.target).toContain(filter);
     }
-    expect(request?.body).toEqual([GUILD, "open", CHANNEL, 101]);
+    expect(request?.values).toEqual([GUILD, "open", CHANNEL, 101]);
   });
 
   it("says when it stopped counting", async () => {
-    const { db } = mockPostgrest(() => ({
-      body: Array.from({ length: 101 }, (_, index) => row(index)),
+    const { db } = mockDb(() => ({
+      rows: Array.from({ length: 101 }, (_, index) => row(index)),
     }));
 
     expect(
@@ -1460,7 +1450,7 @@ describe("countOpenTasksInChannel", () => {
   it.each(HOSTILE_STRINGS)(
     "refuses the ID %j with no query",
     async (hostile) => {
-      const { db, requests } = mockPostgrest();
+      const { db, requests } = mockDb();
 
       expect(
         (
@@ -1483,10 +1473,7 @@ describe("countOpenTasksInChannel", () => {
   );
 
   it("passes a failure on with no text", async () => {
-    const { db } = mockPostgrest(() => ({
-      status: 500,
-      body: { code: "XX000", message: "canary" },
-    }));
+    const { db } = mockDb(() => ({ error: "XX000" }));
 
     const result = await countOpenTasksInChannel(db, {
       guildId: GUILD,
@@ -1500,11 +1487,7 @@ describe("countOpenTasksInChannel", () => {
 
 describe("database errors", () => {
   const canary = "canary-text";
-  const failing = (code: string) =>
-    mockPostgrest(() => ({
-      status: 400,
-      body: { code, message: canary, details: canary, hint: canary },
-    }));
+  const failing = (code: string) => mockDb(() => ({ error: code }));
 
   it.each([
     ["CF409", "stale_version"],
@@ -1541,21 +1524,21 @@ describe("job runs", () => {
   };
 
   it("starts a run only through the lock function", async () => {
-    const { db, requests } = mockPostgrest(() => ({ body: ID }));
+    const { db, requests } = mockDb(() => ({ value: ID }));
     const result = await beginJobRun(db, {
       jobName: "reminders",
       staleAfterSeconds: 120,
     });
     expect(result).toEqual({ ok: true, value: ID });
     expect(requests[0]?.target).toMatch(/^select public\.begin_job_run\(/);
-    expect(requests[0]?.body).toEqual({
+    expect(requests[0]?.values).toEqual({
       p_job_name: "reminders",
       p_stale_after_seconds: 120,
     });
   });
 
   it("refuses a job name that is not a known job", async () => {
-    const { db, requests } = mockPostgrest();
+    const { db, requests } = mockDb();
     const result = await beginJobRun(db, {
       jobName: "x,y" as JobName,
       staleAfterSeconds: 120,
@@ -1565,20 +1548,20 @@ describe("job runs", () => {
   });
 
   it("stores a list of event IDs next to the counts", async () => {
-    const { db, requests } = mockPostgrest(() => ({ body: [run] }));
+    const { db, requests } = mockDb(() => ({ value: [run] }));
     await finishJobRun(db, {
       id: ID,
       now: NOW,
       results: { threads_held: 1, held_event_ids: [TOKEN] },
       error: null,
     });
-    expect(requests[0]?.body).toMatchObject({
+    expect(requests[0]?.values).toMatchObject({
       p_results: { threads_held: 1, held_event_ids: [TOKEN] },
     });
   });
 
   it("stores only a category and code as the error", async () => {
-    const { db, requests } = mockPostgrest(() => ({ body: [run] }));
+    const { db, requests } = mockDb(() => ({ value: [run] }));
     await finishJobRun(db, {
       id: ID,
       now: NOW,
@@ -1586,7 +1569,7 @@ describe("job runs", () => {
       error: { category: "constraint", code: "23514" },
     });
     expect(requests[0]?.target).toMatch(/^select public\.finish_job_run\(/);
-    expect(requests[0]?.body).toEqual({
+    expect(requests[0]?.values).toEqual({
       p_id: ID,
       p_finished_at: NOW.toISOString(),
       p_results: { sent: 3 },
@@ -1595,13 +1578,13 @@ describe("job runs", () => {
   });
 
   it("sends no error for a run that succeeded", async () => {
-    const { db, requests } = mockPostgrest(() => ({ body: [run] }));
+    const { db, requests } = mockDb(() => ({ value: [run] }));
     await finishJobRun(db, { id: ID, now: NOW, results: {}, error: null });
-    expect(requests[0]?.body).toMatchObject({ p_error: null });
+    expect(requests[0]?.values).toMatchObject({ p_error: null });
   });
 
   it("fails as not_found when the function finished nothing", async () => {
-    const { db } = mockPostgrest(() => ({ body: [] }));
+    const { db } = mockDb(() => ({ value: [] }));
     expect(
       await finishJobRun(db, { id: ID, now: NOW, results: {}, error: null }),
     ).toMatchObject({ ok: false, error: { category: "not_found" } });
@@ -1616,7 +1599,7 @@ describe("job runs", () => {
     [{ held_event_ids: Array.from({ length: 26 }, () => ID) }],
     [{ held_event_ids: "words" as unknown as string[] }],
   ])("refuses the results %j", async (results) => {
-    const { db, requests } = mockPostgrest();
+    const { db, requests } = mockDb();
     const result = await finishJobRun(db, {
       id: ID,
       now: NOW,
@@ -1632,10 +1615,7 @@ describe("editTask and the officer's limit", () => {
   const key = { guildId: GUILD, taskId: ID, expectedUpdatedAt: VERSION };
 
   it("reports the officer limit, which the database checks in the same call", async () => {
-    const { db } = mockPostgrest(() => ({
-      status: 400,
-      body: { code: "CF430", message: "row text" },
-    }));
+    const { db } = mockDb(() => ({ error: "CF430" }));
 
     expect(await editText(db, key, {})).toEqual({
       ok: false,
@@ -1644,7 +1624,7 @@ describe("editTask and the officer's limit", () => {
   });
 
   it("reports a task no longer at the version read as not found", async () => {
-    const { db } = mockPostgrest(() => ({ body: null }));
+    const { db } = mockDb(() => ({ value: null }));
     expect(await editText(db, key, {})).toEqual({
       ok: false,
       error: { category: "not_found", code: null },
@@ -1655,7 +1635,7 @@ describe("editTask and the officer's limit", () => {
     ["a bad actor", { actorId: "x" }],
     ["a bad person", { assigneeId: "x" }],
   ])("sends nothing for %s", async (_name, fields) => {
-    const { db, requests } = mockPostgrest();
+    const { db, requests } = mockDb();
 
     expect(
       (
@@ -1677,7 +1657,7 @@ describe("searching by the start of an ID", () => {
   it.each(["", "ABC", "abc123456", "g", "a,b", "a b", "a%"])(
     "sends nothing for %j",
     async (prefix) => {
-      const { db, requests } = mockPostgrest();
+      const { db, requests } = mockDb();
 
       expect(
         (await searchOpenTasksByIdPrefix(db, { guildId: GUILD, prefix })).ok,
@@ -1700,8 +1680,8 @@ describe("reminder batches", () => {
     ["too many answers", [true, true]],
     ["an answer that is not a boolean", ["true"]],
     ["no list", { ok: true }],
-  ])("reads %s as a bad row", async (_label, body) => {
-    const { db } = mockPostgrest(() => ({ body }));
+  ])("reads %s as a bad row", async (_label, value) => {
+    const { db } = mockDb(() => ({ value }));
 
     const marked = await markRemindersSent(db, {
       keys: [{ ...key, claimToken: TOKEN_ID }],
@@ -1719,7 +1699,7 @@ describe("reminder batches", () => {
     ["no changed flag", { claim_token: TOKEN_ID }],
     ["no object", TOKEN_ID],
   ])("reads a claim with %s as a bad row", async (_label, answer) => {
-    const { db } = mockPostgrest(() => ({ body: [answer] }));
+    const { db } = mockDb(() => ({ value: [answer] }));
 
     const claimed = await claimReminders(db, [key]);
 
@@ -1730,10 +1710,7 @@ describe("reminder batches", () => {
   });
 
   it("fails every item when the call fails", async () => {
-    const { db } = mockPostgrest(() => ({
-      status: 500,
-      body: { code: "XX000", message: "canary" },
-    }));
+    const { db } = mockDb(() => ({ error: "XX000" }));
 
     const claimed = await claimReminders(db, [key, key]);
 
@@ -1741,7 +1718,7 @@ describe("reminder batches", () => {
   });
 
   it("makes no call when no item is valid, and refuses each", async () => {
-    const { db, requests } = mockPostgrest();
+    const { db, requests } = mockDb();
 
     const marked = await markRemindersSent(db, {
       keys: [{ ...key, claimToken: TOKEN_ID }],
@@ -1756,7 +1733,7 @@ describe("reminder batches", () => {
   });
 
   it("refuses more than one batch can hold, with no call", async () => {
-    const { db, requests } = mockPostgrest();
+    const { db, requests } = mockDb();
 
     const claimed = await claimReminders(
       db,

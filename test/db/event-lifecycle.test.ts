@@ -30,7 +30,7 @@ import {
   OFFICER,
   PLAIN_MEMBER,
 } from "../support/interactions.ts";
-import { HOSTILE_STRINGS, testSnowflake } from "../support/mock-postgrest.ts";
+import { HOSTILE_STRINGS, testSnowflake } from "../support/mock-db.ts";
 
 const world = eventWorld();
 

@@ -4,7 +4,7 @@ import {
   GUILD_ID,
   managedRow,
 } from "../../test/support/interactions.ts";
-import { testSnowflake } from "../../test/support/mock-postgrest.ts";
+import { testSnowflake } from "../../test/support/mock-db.ts";
 import {
   getDb,
   getInteractionDb,
@@ -62,7 +62,7 @@ describe("managedChannelCheck", () => {
   it("throws when the database cannot answer, so it is not read as unmanaged", async () => {
     const { db } = fakeDb({
       channels: [managedRow(CHANNEL)],
-      failing: { path: "managed_channels", status: 503 },
+      failing: { path: "managed_channels" },
     });
 
     await expect(
@@ -73,7 +73,7 @@ describe("managedChannelCheck", () => {
   it("refuses the send as a failed check when the database cannot answer", async () => {
     const { db } = fakeDb({
       channels: [managedRow(CHANNEL)],
-      failing: { path: "managed_channels", status: 503 },
+      failing: { path: "managed_channels" },
     });
     const fetchSpy = vi
       .spyOn(globalThis, "fetch")

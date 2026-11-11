@@ -26,11 +26,7 @@ import {
 } from "../../src/discord/verify.ts";
 import type { Router, RouterDependencies } from "../../src/handlers/router.ts";
 import type { DbClient } from "../../src/db/client.ts";
-import {
-  mockPostgrest,
-  testSnowflake,
-  type RecordedRequest,
-} from "./mock-postgrest.ts";
+import { mockDb, testSnowflake, type RecordedRequest } from "./mock-db.ts";
 import {
   asSelected,
   comparisons,
@@ -293,13 +289,14 @@ export interface DbState {
   /** Event rows, for what reads them by channel or ID. */
   events?: Record<string, unknown>[];
   /**
-   * Fails a request whose path holds this text, with this status and code. A statement
-   * built with Drizzle has the path `select <table>` or `call <function>`.
+   * Fails a statement whose path holds this text, with this Postgres error code, or
+   * XX000 if none is given. A statement built with Drizzle has the path
+   * `select <table>` or `call <function>`.
    */
-  failing?: { path: string; status: number; code?: string };
+  failing?: { path: string; code?: string };
 }
 
-const STALE = { status: 400, body: { code: "CF409", message: "row text" } };
+const STALE = { error: "CF409" };
 
 /** An in-memory stand-in with the version rules of the real database functions. */
 export function fakeDb(fields: Partial<DbState> = {}): {
@@ -333,7 +330,7 @@ export function fakeDb(fields: Partial<DbState> = {}): {
       marketing_role_id: args.p_marketing_role_id as string | null,
       version: current + 1,
     });
-    return { body: current + 1 };
+    return { value: current + 1 };
   }
 
   function saveDraft(args: Record<string, unknown>) {
@@ -353,7 +350,7 @@ export function fakeDb(fields: Partial<DbState> = {}): {
       ...state.drafts.filter((draft) => draft.guild_id !== row.guild_id),
       row,
     ];
-    return { body: true };
+    return { value: true };
   }
 
   function configChange(args: Record<string, unknown>) {
@@ -368,7 +365,7 @@ export function fakeDb(fields: Partial<DbState> = {}): {
         (channel) => channel.channel_id === id && channel.status !== "removed",
       );
       if (row === undefined) {
-        return { status: 400, body: { code: "22023", message: "row text" } };
+        return { error: "22023" };
       }
       row.status = "removed";
     }
@@ -384,7 +381,7 @@ export function fakeDb(fields: Partial<DbState> = {}): {
       state.config.reminders_enabled = args.p_reminders_enabled;
     }
     state.config.version += 1;
-    return { body: state.config.version };
+    return { value: state.config.version };
   }
 
   /** Rows that pass every `column = $n` and `created_at > $n` the statement holds. */
@@ -416,7 +413,7 @@ export function fakeDb(fields: Partial<DbState> = {}): {
   function read(call: SqlCall) {
     const [, table] = sqlTarget(call.sql).split(" ");
     const answer = (rows: readonly object[]) => ({
-      body: asSelected(
+      rows: asSelected(
         call.sql,
         matching(call, rows as readonly Record<string, unknown>[]),
       ),
@@ -436,40 +433,34 @@ export function fakeDb(fields: Partial<DbState> = {}): {
         const channel = comparisons(call).get("channel_id =");
         const count = state.openTasks.get(String(channel)) ?? 0;
         return {
-          body: Array.from({ length: count }, (_, index) => [
+          rows: Array.from({ length: count }, (_, index) => [
             `00000000-0000-4000-8000-${String(index).padStart(12, "0")}`,
           ]),
         };
       }
       default:
-        return { status: 500, body: { message: "unexpected test request" } };
+        return { error: "XX000" };
     }
   }
 
-  const { db, requests } = mockPostgrest((request) => {
+  const { db, requests } = mockDb((request) => {
     const path = sqlTarget(request.target);
     if (state.failing !== undefined && path.includes(state.failing.path)) {
-      return {
-        status: state.failing.status,
-        body: {
-          code: state.failing.code ?? "XX000",
-          message: "canary row text",
-        },
-      };
+      return { error: state.failing.code ?? "XX000" };
     }
     const fn = path.startsWith("call ") ? path.slice("call ".length) : null;
     if (fn === null) {
       return read({
         sql: request.target,
-        params: request.body as unknown[],
+        params: request.values as unknown[],
       });
     }
-    const args = (request.body ?? {}) as Record<string, unknown>;
+    const args = (request.values ?? {}) as Record<string, unknown>;
     if (fn === "claim_interaction") {
       const id = args.p_interaction_id as string;
       const first = !state.claimed.has(id);
       state.claimed.add(id);
-      return { body: first };
+      return { value: first };
     }
     if (fn === "apply_role_bindings") {
       return roleBindings(args);
@@ -480,7 +471,7 @@ export function fakeDb(fields: Partial<DbState> = {}): {
     if (fn === "apply_config_change") {
       return configChange(args);
     }
-    return { status: 500, body: { message: "unexpected test request" } };
+    return { error: "XX000" };
   });
 
   return {
@@ -490,7 +481,7 @@ export function fakeDb(fields: Partial<DbState> = {}): {
     rpcBodies: (name) =>
       requests
         .filter((request) => sqlTarget(request.target) === `call ${name}`)
-        .map((request) => request.body as Record<string, unknown>),
+        .map((request) => request.values as Record<string, unknown>),
   };
 }
 

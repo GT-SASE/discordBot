@@ -19,7 +19,7 @@ import {
   GUILD_ID,
   run,
 } from "../support/interactions.ts";
-import { mockPostgrest, testSnowflake } from "../support/mock-postgrest.ts";
+import { mockDb, testSnowflake } from "../support/mock-db.ts";
 import { asSelected, sqlTarget } from "../support/sql-client.ts";
 import { insertEvent, withoutQuotas } from "./fixtures.ts";
 import { queryAs } from "./harness.ts";
@@ -823,11 +823,10 @@ describe("marking tasks done and reading them, on the real schema", () => {
 
     describe("what a keystroke costs", () => {
       function countingWorld(typed: unknown, member: Record<string, unknown>) {
-        const { db: mock, requests } = mockPostgrest((request) =>
-          request.method === "SQL" &&
+        const { db: mock, requests } = mockDb((request) =>
           sqlTarget(request.target) === "select guild_config"
-            ? { body: asSelected(request.target, [{ ...configRow() }]) }
-            : { body: [] },
+            ? { rows: asSelected(request.target, [{ ...configRow() }]) }
+            : { rows: [] },
         );
         const discordCalls: string[] = [];
         const refuse = new Proxy(
@@ -858,10 +857,9 @@ describe("marking tasks done and reading them, on the real schema", () => {
 
         await ran;
 
-        expect(requests.map((request) => request.method)).toEqual([
-          "SQL",
-          "SQL",
-        ]);
+        expect(
+          requests.map((request) => sqlTarget(request.target).split(" ")[0]),
+        ).toEqual(["select", "select"]);
         expect(discordCalls).toEqual([]);
       });
 
@@ -870,11 +868,9 @@ describe("marking tasks done and reading them, on the real schema", () => {
 
         await ran;
 
-        expect(requests.map((request) => request.method)).toEqual([
-          "SQL",
-          "SQL",
-          "SQL",
-        ]);
+        expect(
+          requests.map((request) => sqlTarget(request.target).split(" ")[0]),
+        ).toEqual(["select", "select", "select"]);
       });
 
       it.each([

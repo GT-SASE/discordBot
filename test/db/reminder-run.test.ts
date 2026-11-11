@@ -39,14 +39,12 @@ import {
   type RunResult,
 } from "../../src/reminders/run.ts";
 import { messageBody } from "../support/json.ts";
-import { TEST_ORIGIN, TEST_SECRET_KEY } from "../support/mock-postgrest.ts";
 import {
   finishEventSteps,
   insertGuild,
   type GuildFixture,
 } from "./fixtures.ts";
 import { createMigratedDb, fakeId, present, queryAs } from "./harness.ts";
-import { postgrestShim } from "./postgrest-shim.ts";
 
 const planHook = vi.hoisted(() => ({ invalidTaskIds: [] as string[] }));
 
@@ -282,13 +280,7 @@ async function nextDay(): Promise<void> {
 
 beforeAll(async () => {
   database = await createMigratedDb();
-  const shim = postgrestShim(database);
-  db = createDbClient({
-    url: TEST_ORIGIN,
-    secretKey: TEST_SECRET_KEY,
-    fetch: shim,
-    sql: pgliteSql(database, (call) => sqlGate(call)),
-  });
+  db = createDbClient(pgliteSql(database, (call) => sqlGate(call)));
 });
 
 afterAll(() => database.close());

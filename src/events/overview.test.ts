@@ -13,10 +13,10 @@ import {
   INVISIBLE_TEXT,
 } from "../../test/support/hostile-text.ts";
 import {
-  mockPostgrest,
+  mockDb,
   testSnowflake,
   type RecordedRequest,
-} from "../../test/support/mock-postgrest.ts";
+} from "../../test/support/mock-db.ts";
 import { asSelected, sqlTarget } from "../../test/support/sql-client.ts";
 import { DiscordClientError, DiscordErrorCode } from "../discord/client.ts";
 import type { DiscordClient, DiscordFailure } from "../discord/client.ts";
@@ -332,16 +332,15 @@ describe("refreshOverview", () => {
   let dbFails: string | undefined;
 
   function context() {
-    const mock = mockPostgrest((request) => {
-      const target =
-        request.method === "SQL" ? sqlTarget(request.target) : request.target;
+    const mock = mockDb((request) => {
+      const target = sqlTarget(request.target);
       if (dbFails !== undefined && target.includes(dbFails)) {
-        return { status: 500, body: { message: "canary row text" } };
+        return { error: "XX000" };
       }
       if (target === "update events") {
-        const written = request.body as Record<string, unknown>;
+        const written = request.values as Record<string, unknown>;
         return {
-          body: asSelected(
+          rows: asSelected(
             request.target.replace(/^.* returning /, "select "),
             [{ ...eventRow(), ...written }],
           ),
@@ -349,13 +348,13 @@ describe("refreshOverview", () => {
       }
       if (target === "select events") {
         return {
-          body: asSelected(
+          rows: asSelected(
             request.target,
             row === null ? [] : [row as unknown as Record<string, unknown>],
           ),
         };
       }
-      return { body: [] };
+      return { rows: [] };
     });
     requests = mock.requests;
     const discord = {
@@ -443,7 +442,7 @@ describe("refreshOverview", () => {
     });
     expect(
       requests.find((request) => sqlTarget(request.target) === "update events")
-        ?.body,
+        ?.values,
     ).toEqual({ overview_message_id: OVERVIEW });
   });
 
@@ -578,7 +577,7 @@ describe("refreshOverview", () => {
 
     expect(
       requests.find((request) => sqlTarget(request.target) === "update events")
-        ?.body,
+        ?.values,
     ).toEqual({ thread_status: "missing" });
   });
 

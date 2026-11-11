@@ -27,7 +27,7 @@ import {
   type FakeDiscordData,
   type SetupOption,
 } from "../../test/support/interactions.ts";
-import { testSnowflake } from "../../test/support/mock-postgrest.ts";
+import { testSnowflake } from "../../test/support/mock-db.ts";
 import { setupDraftFingerprint, type SetupRoles } from "../db/guild-config.ts";
 import type { GuildRole } from "../discord/client.ts";
 import { REFUSED } from "../lib/permissions.ts";
@@ -319,7 +319,7 @@ describe("/setup", () => {
 
   it("says try again, with no button, when the draft can't be saved", async () => {
     const { dependencies, edits, state } = world();
-    state.failing = { path: "save_setup_draft", status: 503 };
+    state.failing = { path: "save_setup_draft" };
 
     await run(ROUTER, setupPayload(), dependencies);
 
@@ -765,7 +765,7 @@ describe("Confirm", () => {
     it("says try again, with no database text, when the draft can't be read", async () => {
       const w = world();
       const customId = await showSetup(w);
-      w.state.failing = { path: "setup_drafts", status: 503 };
+      w.state.failing = { path: "setup_drafts" };
 
       await run(ROUTER, componentPayload(customId), w.dependencies);
 
@@ -801,11 +801,7 @@ describe("Confirm", () => {
   it("refuses with the same refresh message when the database says stale", async () => {
     const w = world({ config: configRow({ version: 3 }) });
     const customId = await showSetup(w);
-    w.state.failing = {
-      path: "apply_role_bindings",
-      status: 400,
-      code: "CF409",
-    };
+    w.state.failing = { path: "apply_role_bindings", code: "CF409" };
 
     await run(ROUTER, componentPayload(customId), w.dependencies);
 
@@ -952,7 +948,7 @@ describe("Confirm", () => {
   it("says try again, with no database text, when the save fails", async () => {
     const w = world();
     const customId = await showSetup(w);
-    w.state.failing = { path: "apply_role_bindings", status: 503 };
+    w.state.failing = { path: "apply_role_bindings" };
 
     await run(ROUTER, componentPayload(customId), w.dependencies);
 

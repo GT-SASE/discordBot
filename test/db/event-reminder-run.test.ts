@@ -35,14 +35,12 @@ import {
   type RunResult,
 } from "../../src/reminders/run.ts";
 import { messageBody } from "../support/json.ts";
-import { TEST_ORIGIN, TEST_SECRET_KEY } from "../support/mock-postgrest.ts";
 import {
   finishEventSteps,
   insertGuild,
   type WorkflowGuildFixture,
 } from "./fixtures.ts";
 import { createMigratedDb, fakeId, present, queryAs } from "./harness.ts";
-import { postgrestShim } from "./postgrest-shim.ts";
 
 const API = "https://discord.com/api/v10";
 const TOKEN = ["unit", "test", "token"].join("-");
@@ -271,13 +269,7 @@ async function claimAgo(
 
 beforeAll(async () => {
   database = await createMigratedDb();
-  const shim = postgrestShim(database);
-  db = createDbClient({
-    url: TEST_ORIGIN,
-    secretKey: TEST_SECRET_KEY,
-    fetch: shim,
-    sql: pgliteSql(database),
-  });
+  db = createDbClient(pgliteSql(database));
 });
 
 afterAll(() => database.close());

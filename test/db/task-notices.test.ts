@@ -21,7 +21,7 @@ import {
   GUILD_ID,
   run,
 } from "../support/interactions.ts";
-import { testSnowflake } from "../support/mock-postgrest.ts";
+import { testSnowflake } from "../support/mock-db.ts";
 import { insertEvent } from "./fixtures.ts";
 import { queryAs } from "./harness.ts";
 import {

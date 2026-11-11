@@ -18,7 +18,7 @@ import {
   run,
   verify,
 } from "../../test/support/interactions.ts";
-import { testSnowflake } from "../../test/support/mock-postgrest.ts";
+import { testSnowflake } from "../../test/support/mock-db.ts";
 import { DiscordClientError } from "../discord/client.ts";
 import { plain, safe } from "../discord/safe-text.ts";
 import { COMMAND_POLICY, REFUSED, type Action } from "../lib/permissions.ts";
@@ -1015,7 +1015,7 @@ describe("claims", () => {
 
   it("does not run if the claim fails, and says so privately", async () => {
     const { dependencies, edits, state } = setup();
-    state.failing = { path: "claim_interaction", status: 503 };
+    state.failing = { path: "claim_interaction" };
 
     await run(
       router,
@@ -1199,7 +1199,7 @@ describe("failures", () => {
 
   it("says only try again when the first read fails", async () => {
     const { dependencies, state } = setup();
-    state.failing = { path: "guild_config", status: 503 };
+    state.failing = { path: "guild_config" };
 
     const { reply, deferred } = await run(
       router,
@@ -1483,7 +1483,7 @@ describe("autocomplete", () => {
 
   it("offers nothing when the config cannot be read", async () => {
     const { dependencies, state } = setup();
-    state.failing = { path: "guild_config", status: 503 };
+    state.failing = { path: "guild_config" };
 
     const { reply } = await run(
       router,

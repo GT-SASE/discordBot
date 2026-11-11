@@ -18,7 +18,6 @@ import { pgliteSql } from "../support/sql-client.ts";
 import { createDbClient, type DbClient } from "../../src/db/client.ts";
 import { createDiscordClient } from "../../src/discord/client.ts";
 import { managedChannelCheck, runReminders } from "../../src/reminders/run.ts";
-import { TEST_ORIGIN, TEST_SECRET_KEY } from "../support/mock-postgrest.ts";
 import {
   finishEventSteps,
   insertEvent,
@@ -26,7 +25,6 @@ import {
   type GuildFixture,
 } from "./fixtures.ts";
 import { createMigratedDb, fakeId, queryAs } from "./harness.ts";
-import { postgrestShim } from "./postgrest-shim.ts";
 
 const CANARY = "canary-from-a-crashed-run";
 const TOKEN = ["unit", "test", "token"].join("-");
@@ -89,12 +87,7 @@ function clockThatThrowsOnSecondRead(): () => Date {
 
 beforeAll(async () => {
   database = await createMigratedDb();
-  db = createDbClient({
-    url: TEST_ORIGIN,
-    secretKey: TEST_SECRET_KEY,
-    fetch: postgrestShim(database),
-    sql: pgliteSql(database),
-  });
+  db = createDbClient(pgliteSql(database));
   guild = await insertGuild(database);
   await database.query(
     `UPDATE public.guild_config SET timezone = 'UTC' WHERE guild_id = $1`,

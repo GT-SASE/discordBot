@@ -5,7 +5,7 @@
  */
 
 import { jsonObject } from "./json.ts";
-import { testSnowflake } from "./mock-postgrest.ts";
+import { testSnowflake } from "./mock-db.ts";
 
 const THREAD_TYPE = 11;
 const DISCORD_EPOCH_MS = 1420070400000;

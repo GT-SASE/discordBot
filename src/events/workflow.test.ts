@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { hasLiveSyntax } from "../../test/support/hostile-text.ts";
-import { testSnowflake } from "../../test/support/mock-postgrest.ts";
+import { testSnowflake } from "../../test/support/mock-db.ts";
 import { channelMessage } from "../discord/outbound.ts";
 import { safeTextValue } from "../discord/safe-text.ts";
 import { handoffMessage } from "./workflow.ts";

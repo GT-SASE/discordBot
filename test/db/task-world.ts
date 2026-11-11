@@ -32,7 +32,7 @@ import {
   member,
   OFFICER_ROLE,
 } from "../support/interactions.ts";
-import { testSnowflake } from "../support/mock-postgrest.ts";
+import { testSnowflake } from "../support/mock-db.ts";
 import { openBackend, type Backend } from "./backend.ts";
 import { insertEvent, insertGuild, type GuildFixture } from "./fixtures.ts";
 import { queryAs } from "./harness.ts";
@@ -237,8 +237,8 @@ export function useTaskWorld(): TaskWorld {
       // A change of text, date or person goes through this one function.
       edit: /^select public\.edit_task\(/,
     }[write];
-    const db = world.backend.dbWith(async (sent, text) => {
-      if (!staged && sent === "SQL" && statement.test(text)) {
+    const db = world.backend.dbWith(async (text) => {
+      if (!staged && statement.test(text)) {
         staged = true;
         // PGlite's clock can repeat within a millisecond, and real timestamps do not.
         await new Promise((resolve) => setTimeout(resolve, 5));

@@ -723,12 +723,7 @@ describe("work done after the reply", () => {
       );
     });
     vi.stubGlobal("fetch", send);
-    vi.stubEnv("SUPABASE_URL", "https://project.example.test");
     vi.stubEnv("DATABASE_URL", testDatabaseUrl());
-    vi.stubEnv(
-      "SUPABASE_SECRET_KEY",
-      ["sb", "secret", "x".repeat(24)].join("_"),
-    );
     vi.stubEnv("DISCORD_BOT_TOKEN", "unit-test-bot-token");
   });
 

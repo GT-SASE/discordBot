@@ -22,7 +22,7 @@ import {
   member,
   OFFICER_ROLE,
 } from "../support/interactions.ts";
-import { testSnowflake } from "../support/mock-postgrest.ts";
+import { testSnowflake } from "../support/mock-db.ts";
 import { queryAs } from "./harness.ts";
 
 const world = eventWorld();

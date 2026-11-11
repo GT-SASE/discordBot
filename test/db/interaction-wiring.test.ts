@@ -29,18 +29,13 @@ import {
   member,
   OFFICER_ROLE,
 } from "../support/interactions.ts";
-import {
-  TEST_ORIGIN,
-  TEST_SECRET_KEY,
-  testSnowflake,
-} from "../support/mock-postgrest.ts";
+import { testSnowflake } from "../support/mock-db.ts";
 import {
   createMigratedDb,
   fakeId,
   MIGRATION_OWNER,
   queryAs,
 } from "./harness.ts";
-import { postgrestShim } from "./postgrest-shim.ts";
 import { testDatabaseUrl } from "../support/sql-client.ts";
 
 const pending = vi.hoisted(() => ({ work: [] as Promise<unknown>[] }));
@@ -185,17 +180,9 @@ describe("the client built by liveDependencies", () => {
     vi.stubEnv("DISCORD_APP_ID", APP_ID);
     vi.stubEnv("ALLOWED_GUILD_IDS", GUILD_ID);
     vi.stubEnv("DISCORD_BOT_TOKEN", ["test", "bot", "token"].join("-"));
-    vi.stubEnv("SUPABASE_URL", TEST_ORIGIN);
-    vi.stubEnv("SUPABASE_SECRET_KEY", TEST_SECRET_KEY);
     vi.stubEnv("DATABASE_URL", testDatabaseUrl());
-    const shim = postgrestShim(database);
-    vi.stubGlobal("fetch", ((input, init) =>
-      (typeof input === "string" || input instanceof URL
-        ? String(input)
-        : input.url
-      ).startsWith(TEST_ORIGIN)
-        ? shim(input, init)
-        : discord.fetch(input, init)) satisfies typeof fetch);
+    // Only Discord is reached over HTTP. The database is the mocked pool above.
+    vi.stubGlobal("fetch", discord.fetch satisfies typeof fetch);
     // The router logs a failed send's type, which is what the second test causes.
     vi.spyOn(console, "error").mockImplementation(() => undefined);
   });

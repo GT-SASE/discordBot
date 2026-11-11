@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { testSnowflake } from "../../test/support/mock-postgrest.ts";
+import { testSnowflake } from "../../test/support/mock-db.ts";
 import { channelMessage } from "../discord/outbound.ts";
 import { safe, safeTextValue } from "../discord/safe-text.ts";
 import type {
