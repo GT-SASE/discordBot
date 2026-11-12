@@ -162,7 +162,7 @@ git switch -q main
 expect_fail "commit message on a branch that is not checked out" 'RuleID: +supabase-secret-key' "${value}"
 
 echo "--- denied paths"
-for path in members.csv tasks.csv.gz dump.sql sub/.env .pgpass backup/dump.psql; do
+for path in members.csv tasks.csv.gz dump.sql sub/.env .pgpass backup/dump.psql db/migrations/old/x.sql; do
   new_repo
   mkdir -p "$(dirname "${path}")"
   commit_file "${path}" "harmless"
@@ -191,8 +191,10 @@ expect_fail "denied path reachable only from a tag" 'denied path'
 new_repo
 mkdir -p supabase/migrations
 commit_file supabase/migrations/001_init.sql "select 1;"
+mkdir -p db/migrations
+commit_file db/migrations/0001_baseline.sql "select 1;"
 commit_file .env.example "DISCORD_APP_ID="
-expect_pass "a migration and the env template"
+expect_pass "migrations and the env template"
 
 new_repo; person_email="$(printf 'a.person%smail' '@').org"
 # The message leaves the address out, so that only the path scan can find it.

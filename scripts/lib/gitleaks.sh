@@ -84,8 +84,10 @@ is_denied_path() {
 
   case "${base}" in
     *.sql)
-      # Only a migration directly inside supabase/migrations/ is allowed.
+      # Only a migration directly inside supabase/migrations/ or db/migrations/ is
+      # allowed. The second is where the migrations move with Neon.
       [[ "${lower}" == "supabase/migrations/${base}" ]] && return 1
+      [[ "${lower}" == "db/migrations/${base}" ]] && return 1
       return 0
       ;;
     .env* | *.env | env.local | .gitleaksignore | *.sql.* | *.psql | *.pgsql | \
