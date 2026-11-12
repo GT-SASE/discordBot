@@ -37,6 +37,10 @@ regex = '''postgres(?:ql)?://[^:@/\s]+:([^@/\s]{4,})@'''
 secretGroup = 1
 keywords = ["postgres"]
 
+[[rules.allowlists]]
+description = "A placeholder in angle brackets, such as <password>, in the docs"
+regexes = ['''^<[a-z][a-z-]*>$''']
+
 # A libpq password file line: host:port:database:user:password. The host's
 # character set, the numeric or wildcard port and the literal database and user
 # keep ordinary colon-separated text and template strings from matching.

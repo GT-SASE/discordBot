@@ -119,6 +119,8 @@ expect_detected "postgres-connection-password" \
   "$(printf 'postgres://app:%s%sdb.host/main' "$(random_hex 12)" "${at}")" "postgres"
 expect_detected "postgres-connection-password" \
   "$(printf 'postgresql://app:%s%sdb.host/main' "$(random_hex 12)" "${at}")" "postgresql"
+expect_clean "postgres placeholder password" \
+  "$(printf 'postgresql://app:<password>%sdb.host/main' "${at}")"
 
 expect_detected "discord-snowflake" "guild = 1$(printf '%017d' 42)" "18 digits"
 expect_clean "16 digit number" "value = 1$(printf '%015d' 42)"
