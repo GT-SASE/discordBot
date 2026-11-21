@@ -4,7 +4,7 @@
   "private": true,
   "description": "Discord bot that tracks events, tasks and deadlines for a student organisation's events team.",
   "license": "UNLICENSED",
-  "packageManager": "bun@1.4.4",
+  "packageManager": "bun@1.4.5",
   "scripts": {
     "check": "turbo run typecheck typecheck:tsc lint format:check test test:db --continue --concurrency=1",
     "gitleaks:install": "bash scripts/install-gitleaks.sh",
@@ -23,7 +23,7 @@
   "devDependencies": {
     "@electric-sql/pglite": "0.5.16",
     "@eslint/js": "10.0.1",
-    "@types/bun": "1.4.4",
+    "@types/bun": "1.4.5",
     "@types/node": "24.19.2",
     "@types/pg": "8.23.1",
     "dbmate": "2.38.0",

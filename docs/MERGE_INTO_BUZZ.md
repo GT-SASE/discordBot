@@ -54,4 +54,4 @@ Do these on a branch in buzz, then open a pull request. Steps 1 to 3 were tried 
 - `.gitignore`, `.gitattributes` and `.vercelignore` apply to their own directory.
 - `hooks:install` sets the hook path from wherever it runs, so in buzz it points at `sites/discord-bot/.githooks`. The pre-push hook then scans every commit pushed to buzz with the bot's gitleaks rules.
 
-buzz's root `lint`, `format:check`, `typecheck` and `typecheck:tsc` pass with the bot in place, not installed, and step 3 applied. buzz runs Bun 1.4.3 and the bot pins 1.4.4. Each installs with its own version, and both deploy on Vercel's `1.4.x` runtime.
+buzz's root `lint`, `format:check`, `typecheck` and `typecheck:tsc` pass with the bot in place, not installed, and step 3 applied. buzz and the bot both run Bun 1.4.5. Each installs with its own version, and both deploy on Vercel's `1.4.x` runtime.
